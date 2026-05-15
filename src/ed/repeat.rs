@@ -3,6 +3,7 @@ use crate::action::Action;
 use crate::llm::LlmPreset;
 use crate::CommandResult;
 use crate::Editor;
+use crate::ed::build::BuildExt;
 
 /// Types of actions that can be repeated with dot command
 #[derive(Clone, Debug, PartialEq)]
@@ -16,6 +17,9 @@ pub enum RepeatableAction {
     },
     RipgrepNextResult,
     RipgrepPrevResult,
+    QuickfixNext,
+    QuickfixPrev,
+
     /// Delete line
     DeleteLine,
     DeleteAroundFunction,
@@ -114,13 +118,13 @@ impl RepeatExt for Editor {
                 }
             }
             RepeatableAction::JoinLines { .. } => Action::JoinLines,
-            RepeatableAction::RipgrepNextResult => {
+            RepeatableAction::RipgrepNextResult | RepeatableAction::QuickfixNext => {
                 self.current_count = original_count;
-                return self.ripgrep_next_result();
+                return self.quickfix_next();
             }
-            RepeatableAction::RipgrepPrevResult => {
+            RepeatableAction::RipgrepPrevResult | RepeatableAction::QuickfixPrev => {
                 self.current_count = original_count;
-                return self.ripgrep_prev_result();
+                return self.quickfix_prev();
             }
             RepeatableAction::LlmQuickAction { preset } => {
                 self.current_count = original_count;

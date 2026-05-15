@@ -37,7 +37,7 @@ use ropey::Rope;
 use std::path::{Path, PathBuf};
 
 /// Sentinel value meaning "show all commits" (used when user passes `0`).
-const COUNT_ALL: usize = 50;
+const COUNT_ALL: usize = 999;
 
 /// Default number of commits when no count is specified.
 const COUNT_DEFAULT: usize = 5;

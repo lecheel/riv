@@ -1367,10 +1367,10 @@ impl Editor {
             }
         }
 
-        // ── Buffer list popup navigation ── BUIFFER
+        // ── Buffer list popup navigation ── BUFFER
         if let Some(popup) = &mut self.buffer_list_popup {
             match key {
-                Key::Escape => {
+                Key::Escape | Key::Ctrl('c') => {
                     self.buffer_list_popup = None;
                     self.overlay.buffer_list = None;
                     self.dirty.mark_all();
@@ -1406,15 +1406,9 @@ impl Editor {
                         self.restore_cursor_position();
 
                         // ── Clamp cursor to valid range ──
-                        // When switching FROM a special buffer (RG, Build, Git,
-                        // LLM) the cursor line can be far past the target
-                        // buffer's line count.
                         self.clamp_cursor_to_buffer(&buffer_id);
 
                         // ── Explicitly rebuild viewport ──
-                        // Special buffers may have scroll_line values far past
-                        // a normal file's content.  ensure_cursor_visible alone
-                        // does not always recover.
                         {
                             let (cursor_line, line_count, edit_height) = {
                                 let window = self.windows.active_window().unwrap();
@@ -1458,7 +1452,20 @@ impl Editor {
                     self.dirty.cursor = true;
                     return CommandResult::NoOp;
                 }
+                Key::Backspace => {
+                    popup.filter_pop();
+                    self.dirty.buffer_list = true;
+                    self.dirty.cursor = true;
+                    return CommandResult::NoOp;
+                }
+                Key::Char(c) => {
+                    popup.filter_push(c);
+                    self.dirty.buffer_list = true;
+                    self.dirty.cursor = true;
+                    return CommandResult::NoOp;
+                }
                 _ => {
+                    // Other special keys dismiss the popup
                     let old_rect = self.overlay.buffer_list;
                     self.buffer_list_popup = None;
                     self.overlay.buffer_list = None;
@@ -1604,13 +1611,13 @@ impl Editor {
                     self.dirty.cursor = true;
                     return CommandResult::NoOp;
                 }
-                Key::Up | Key::Char('k') | Key::PageUp => {
+                Key::Up | Key::PageUp => {
                     popup.move_up();
                     self.dirty.mru = true;
                     self.dirty.cursor = true;
                     return CommandResult::NoOp;
                 }
-                Key::Down | Key::Char('j') | Key::PageDown => {
+                Key::Down | Key::PageDown => {
                     popup.move_down();
                     self.dirty.mru = true;
                     self.dirty.cursor = true;
@@ -1661,29 +1668,67 @@ impl Editor {
                     return CommandResult::NoOp;
                 }
                 Key::Delete => {
-                    if let Some(entry) = popup.entries.get(popup.selected).cloned() {
-                        // Remove from the persistent MRU manager
-                        self.mru.remove(&entry.path);
+                    // Remove selected entry from persistent MRU and popup list
+                    if let Some(&real_idx) = popup.filtered.get(popup.selected) {
+                        if let Some(entry) = popup.entries.get(real_idx).cloned() {
+                            self.mru.remove(&entry.path);
+                            popup.entries.remove(real_idx); // Only remove once!
 
-                        // Remove from the popup's local list
-                        popup.entries.remove(popup.selected);
+                            // Rebuild filtered indices after removal
+                            let query = popup.filter.to_lowercase();
+                            popup.filtered.clear();
+                            for (i, entry) in popup.entries.iter().enumerate() {
+                                let file_name = entry
+                                    .path
+                                    .file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                let dir_str = entry
+                                    .path
+                                    .parent()
+                                    .and_then(|p| p.to_str())
+                                    .unwrap_or("")
+                                    .to_string();
 
-                        if popup.entries.is_empty() {
-                            // No more entries — close the popup
-                            let old_rect = self.overlay.mru;
-                            self.mru_popup = None;
-                            self.overlay.mru = None;
-                            if let Some(rect) = old_rect {
-                                self.dirty.mark_popup_closed(rect);
+                                if query.is_empty()
+                                    || file_name.to_lowercase().contains(&query)
+                                    || dir_str.to_lowercase().contains(&query)
+                                {
+                                    popup.filtered.push(i);
+                                }
                             }
-                        } else {
-                            // Clamp selection to valid range
-                            if popup.selected >= popup.entries.len() {
-                                popup.selected = popup.entries.len() - 1;
+
+                            // Adjust selected index if necessary
+                            if popup.selected >= popup.filtered.len() && !popup.filtered.is_empty()
+                            {
+                                popup.selected = popup.filtered.len() - 1;
                             }
-                            popup.clamp_scroll();
+                            // clamp_scroll takes 0 arguments - it uses visible_rows() from the trait
+                            <MruPopup as Scrollable>::clamp_scroll(popup);
+
+                            if popup.entries.is_empty() {
+                                let old_rect = self.overlay.mru;
+                                self.mru_popup = None;
+                                self.overlay.mru = None;
+                                if let Some(rect) = old_rect {
+                                    self.dirty.mark_popup_closed(rect);
+                                }
+                            }
                         }
                     }
+                    self.dirty.mru = true;
+                    self.dirty.cursor = true;
+                    return CommandResult::NoOp;
+                }
+                Key::Backspace => {
+                    popup.filter_pop();
+                    self.dirty.mru = true;
+                    self.dirty.cursor = true;
+                    return CommandResult::NoOp;
+                }
+                Key::Char(c) => {
+                    popup.filter_push(c);
                     self.dirty.mru = true;
                     self.dirty.cursor = true;
                     return CommandResult::NoOp;

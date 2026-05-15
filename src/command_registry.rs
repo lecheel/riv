@@ -705,29 +705,15 @@ fn clist_handler(e: &mut Editor, _args: &str) -> CommandResult {
         e.run_build()
     }
 }
+
 /// :cn — next quickfix result (works for both ripgrep and build)
 fn cn_handler(e: &mut Editor, _args: &str) -> CommandResult {
-    if e.quickfix_results.is_empty() {
-        return CommandResult::Message("No quickfix results".into());
-    }
-    if e.quickfix_index < e.quickfix_results.len() - 1 {
-        e.quickfix_index += 1;
-    } else {
-        e.quickfix_index = 0; // wrap around
-    }
-    e.quickfix_goto()
+    e.quickfix_next()
 }
+
 /// :cp — previous quickfix result (works for both ripgrep and build)
 fn cp_handler(e: &mut Editor, _args: &str) -> CommandResult {
-    if e.quickfix_results.is_empty() {
-        return CommandResult::Message("No quickfix results".into());
-    }
-    if e.quickfix_index > 0 {
-        e.quickfix_index -= 1;
-    } else {
-        e.quickfix_index = e.quickfix_results.len() - 1; // wrap around
-    }
-    e.quickfix_goto()
+    e.quickfix_prev()
 }
 
 fn keymap_handler(e: &mut Editor, args: &str) -> CommandResult {

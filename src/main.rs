@@ -70,6 +70,10 @@ struct Cli {
     #[arg(value_name = "FILE")]
     files: Vec<PathBuf>,
 
+    /// Initial line number to position the cursor at (1-based +N).
+    #[arg(short = 'L', long = "line", value_name = "NUM")]
+    line: Option<usize>,
+
     /// Enable verbose logging (info level)
     #[arg(short, long, default_value_t = false)]
     verbose: bool,
@@ -79,8 +83,29 @@ struct Cli {
     healthy: bool,
 }
 
+/// Preprocess raw CLI arguments: convert Vim‑style `+N` tokens into
+/// `--line=N` so that `clap` can parse them uniformly.
+fn preprocess_plus_line_args() -> Vec<String> {
+    let raw_args: Vec<String> = std::env::args().collect();
+    raw_args
+        .into_iter()
+        .map(|arg| {
+            // Only translate +N where N is purely numeric (1-based line number).
+            // Leave +/pattern for future implementation.
+            if let Some(n) = arg.strip_prefix('+') {
+                if n.parse::<usize>().is_ok() && !n.starts_with('/') {
+                    return format!("--line={}", n);
+                }
+            }
+            arg
+        })
+        .collect()
+}
+
 fn main() {
-    let cli = Cli::parse();
+    // ── Convert +N → --line=N before clap sees the args ──
+    let args = preprocess_plus_line_args();
+    let cli = Cli::parse_from(args);
 
     // Initialize logger with appropriate level
     let log_level = if cli.verbose { "info" } else { "warn" };
@@ -124,6 +149,26 @@ fn main() {
                 editor.restore_cursor_position();
                 editor.ensure_cursor_visible_all();
             }
+        }
+    }
+
+    // ── Apply +N / --line: position cursor at the requested line ──
+    // This intentionally overrides the restored position from position_map
+    // because the user explicitly asked for a specific line on the CLI.
+    if let Some(requested_line) = cli.line {
+        if requested_line > 0 {
+            if let Some(window) = editor.windows.active_window_mut() {
+                let buffer_id = window.buffer_id;
+                // Convert 1-based (user-facing) to 0-based (internal)
+                let target_line = requested_line.saturating_sub(1);
+                if let Some(buffer) = editor.buffers.get(&buffer_id) {
+                    let max_line = buffer.line_count().saturating_sub(1);
+                    window.cursor.position.line = target_line.min(max_line);
+                    window.cursor.position.col = 0;
+                    window.cursor.desired_col = None;
+                }
+            }
+            editor.ensure_cursor_visible_all();
         }
     }
 

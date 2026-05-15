@@ -4,6 +4,8 @@
 
 use crate::buffer::{BufferId, BufferKind};
 use crate::ed::file_ops::FileOpsExt;
+use crate::ed::repeat::RepeatExt;
+use crate::ed::RepeatableAction;
 use crate::editor::{CommandResult, Editor};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -58,6 +60,9 @@ pub trait BuildExt {
 
     /// Jump to the previous build error in the quickfix list.
     fn build_prev_error(&mut self) -> CommandResult;
+
+    fn quickfix_next(&mut self) -> CommandResult;
+    fn quickfix_prev(&mut self) -> CommandResult;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -214,6 +219,32 @@ impl BuildExt for Editor {
         CommandResult::ViewChanged
     }
 
+    fn quickfix_next(&mut self) -> CommandResult {
+        self.record_action(RepeatableAction::QuickfixNext, 1);
+        if self.quickfix_results.is_empty() {
+            return CommandResult::Message("No quickfix results".into());
+        }
+        if self.quickfix_index < self.quickfix_results.len() - 1 {
+            self.quickfix_index += 1;
+        } else {
+            self.quickfix_index = 0;
+        }
+        self.quickfix_goto()
+    }
+
+    fn quickfix_prev(&mut self) -> CommandResult {
+        self.record_action(RepeatableAction::QuickfixPrev, 1);
+        if self.quickfix_results.is_empty() {
+            return CommandResult::Message("No quickfix results".into());
+        }
+        if self.quickfix_index > 0 {
+            self.quickfix_index -= 1;
+        } else {
+            self.quickfix_index = self.quickfix_results.len() - 1;
+        }
+        self.quickfix_goto()
+    }
+
     fn build_next_error(&mut self) -> CommandResult {
         if self.quickfix_results.is_empty() {
             return CommandResult::Message("No build errors".into());
@@ -361,6 +392,7 @@ impl Editor {
 
         None
     }
+
     /// Jump to the current quickfix result (shared by build & ripgrep).
     pub fn quickfix_goto(&mut self) -> CommandResult {
         let result = match self.quickfix_results.get(self.quickfix_index) {

@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use crate::buffer::{Buffer, BufferId, BufferKind};
 use crate::config::Config;
+use crate::ed::build::BuildExt;
 use crate::ed::file_ops::FileOpsExt;
 use crate::editor::{CommandResult, Editor, Mode};
 use crate::ripgrep;
@@ -415,8 +416,15 @@ impl Editor {
     }
 
     // ── Ripgrep result navigation ─────────────────────────
-
     pub(crate) fn ripgrep_next_result(&mut self) -> CommandResult {
+        self.quickfix_next()
+    }
+
+    pub(crate) fn ripgrep_prev_result(&mut self) -> CommandResult {
+        self.quickfix_prev()
+    }
+
+    pub(crate) fn ripgrep_next_result_old(&mut self) -> CommandResult {
         if self.quickfix_results.is_empty() {
             self.set_infobar_message("No ripgrep results. Run :rg first.".to_string());
             self.dirty.mark_all();
@@ -450,7 +458,7 @@ impl Editor {
         }
     }
 
-    pub(crate) fn ripgrep_prev_result(&mut self) -> CommandResult {
+    pub(crate) fn ripgrep_prev_result_old(&mut self) -> CommandResult {
         if self.quickfix_results.is_empty() {
             self.set_infobar_message("No ripgrep results. Run :rg first.".to_string());
             self.dirty.mark_all();
