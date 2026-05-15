@@ -1228,6 +1228,7 @@ pub fn parse_action_str(s: &str) -> Option<Action> {
         Quit | "q",
         ForceQuit | "q!",
         ShowHelp,
+        RunBuild,
         ToggleLineNumbers | "set nu",
         ToggleWhitespace,
         ClearMessages,

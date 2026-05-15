@@ -873,6 +873,58 @@ impl EditingExt for Editor {
             _ => self.yank_line(), // fallback
         }
     }
+    fn paste_before(&mut self) {
+        // ── Named register routing (e.g. "aP, "%P) ──
+        if let Some(reg) = self.pending_register.take() {
+            if let Some(content) = self.resolve_register(reg) {
+                self.yank_register = content;
+            } else {
+                self.set_infobar_message(format!("Register '{}' is empty", reg));
+                return;
+            }
+        }
+
+        if self.yank_register.is_empty() {
+            return;
+        }
+
+        // ── Visual mode: same as paste_after (replace selection) ──
+        // In Vim, both p and P replace the visual selection.
+        if matches!(
+            self.mode,
+            Mode::Visual | Mode::VisualLine | Mode::VisualBlock
+        ) {
+            // pending_register was already consumed above, yank_register is set.
+            // Delegate to paste_after which now handles visual mode.
+            self.paste_after();
+            return;
+        }
+
+        // ── Normal mode ──
+        let linewise = self.yank_register.ends_with('\n');
+        if let Some(window) = self.windows.active_window_mut() {
+            let buffer_id = window.buffer_id;
+            let pos = window.cursor.position;
+            if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
+                let insert_pos = if linewise {
+                    CursorPosition::new(pos.line, 0)
+                } else {
+                    pos
+                };
+                let _new_pos = buffer.insert_at(insert_pos, &self.yank_register);
+                if linewise {
+                    // ★ FIX: cursor on the first pasted line (which is at pos.line
+                    // since we inserted above the current line)
+                    window.cursor.position = CursorPosition::new(pos.line, 0);
+                } else {
+                    window.cursor.position = _new_pos;
+                }
+                window.cursor.desired_col = None;
+                buffer.dirty = true;
+                self.invalidate_git_gutter();
+            }
+        }
+    }
     fn paste_after(&mut self) {
         // ── Named register routing (e.g. "ap, "%p) ──
         if let Some(reg) = self.pending_register.take() {
@@ -887,6 +939,45 @@ impl EditingExt for Editor {
         if self.yank_register.is_empty() {
             return;
         }
+
+        // ── Visual mode: replace selection with register contents ──
+        if matches!(
+            self.mode,
+            Mode::Visual | Mode::VisualLine | Mode::VisualBlock
+        ) {
+            let paste_text = self.yank_register.clone();
+
+            match self.mode {
+                Mode::Visual => self.delete_visual_selection(),
+                Mode::VisualLine => self.delete_visual_line_selection(),
+                Mode::VisualBlock => self.delete_block_selection(),
+                _ => {}
+            }
+
+            let (buffer_id, pos) = match self.windows.active_window() {
+                Some(w) => (w.buffer_id, w.cursor.position),
+                None => return,
+            };
+
+            if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
+                let new_pos = buffer.insert_at(pos, &paste_text);
+                if let Some(window) = self.windows.active_window_mut() {
+                    // ★ For linewise paste text, land on the first pasted line
+                    if paste_text.ends_with('\n') {
+                        window.cursor.position = pos;
+                    } else {
+                        window.cursor.position = new_pos;
+                    }
+                }
+                buffer.dirty = true;
+                self.invalidate_git_gutter();
+            }
+
+            self.clamp_cursor_to_buffer(&buffer_id);
+            return;
+        }
+
+        // ── Normal mode ──
         let linewise = self.yank_register.ends_with('\n');
 
         let (buffer_id, pos) = match self.windows.active_window() {
@@ -905,9 +996,11 @@ impl EditingExt for Editor {
             if next_line < line_count {
                 let insert_pos = CursorPosition::new(next_line, 0);
                 if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
-                    let new_pos = buffer.insert_at(insert_pos, &self.yank_register);
+                    let _new_pos = buffer.insert_at(insert_pos, &self.yank_register);
                     if let Some(window) = self.windows.active_window_mut() {
-                        window.cursor.position = new_pos;
+                        // ★ FIX: cursor on the first pasted line, not after it
+                        window.cursor.position = CursorPosition::new(next_line, 0);
+                        window.cursor.desired_col = None;
                     }
                     buffer.dirty = true;
                     self.invalidate_git_gutter();
@@ -920,22 +1013,35 @@ impl EditingExt for Editor {
                     let text = format!("\n{}", self.yank_register.trim_end_matches('\n'));
                     let _new_pos = buffer.insert_at(insert_pos, &text);
                     if let Some(window) = self.windows.active_window_mut() {
+                        // ★ This was already correct — explicitly sets pasted line
                         window.cursor.position = CursorPosition::new(last_line + 1, 0);
+                        window.cursor.desired_col = None;
                     }
                     buffer.dirty = true;
                     self.invalidate_git_gutter();
                 }
             }
         } else {
-            let insert_pos = self
-                .buffers
-                .get(&buffer_id)
-                .map(|b| CursorPosition::new(pos.line, b.line_len(pos.line)))
-                .unwrap_or(pos);
+            // Characterwise paste after cursor character
+            let insert_col = {
+                let buffer = match self.buffers.get(&buffer_id) {
+                    Some(b) => b,
+                    None => return,
+                };
+                let line_len = buffer.line_len(pos.line);
+                if line_len > 0 && pos.col < line_len {
+                    pos.col + 1
+                } else {
+                    pos.col
+                }
+            };
+
+            let insert_pos = CursorPosition::new(pos.line, insert_col);
             if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
                 let new_pos = buffer.insert_at(insert_pos, &self.yank_register);
                 if let Some(window) = self.windows.active_window_mut() {
                     window.cursor.position = new_pos;
+                    window.cursor.desired_col = None;
                 }
                 buffer.dirty = true;
                 self.invalidate_git_gutter();
@@ -943,37 +1049,6 @@ impl EditingExt for Editor {
         }
 
         self.clamp_cursor_to_buffer(&buffer_id);
-    }
-    fn paste_before(&mut self) {
-        // ── Named register routing (e.g. "aP, "%P) ──
-        if let Some(reg) = self.pending_register.take() {
-            if let Some(content) = self.resolve_register(reg) {
-                self.yank_register = content;
-            } else {
-                self.set_infobar_message(format!("Register '{}' is empty", reg));
-                return;
-            }
-        }
-
-        if self.yank_register.is_empty() {
-            return;
-        }
-        let linewise = self.yank_register.ends_with('\n');
-        if let Some(window) = self.windows.active_window_mut() {
-            let buffer_id = window.buffer_id;
-            let pos = window.cursor.position;
-            if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
-                let insert_pos = if linewise {
-                    CursorPosition::new(pos.line, 0)
-                } else {
-                    pos
-                };
-                let new_pos = buffer.insert_at(insert_pos, &self.yank_register);
-                window.cursor.position = new_pos;
-                buffer.dirty = true;
-                self.invalidate_git_gutter();
-            }
-        }
     }
     fn yank_to_clipboard(&mut self) -> CommandResult {
         if let Some(window) = self.windows.active_window() {
@@ -1202,7 +1277,9 @@ impl EditingExt for Editor {
         let (prefix, _suffix) = match comment_chars(&language) {
             Some(p) => p,
             None => {
-                self.set_infobar_message("No comment syntax defined for this file type".to_string());
+                self.set_infobar_message(
+                    "No comment syntax defined for this file type".to_string(),
+                );
                 return CommandResult::NoOp;
             }
         };

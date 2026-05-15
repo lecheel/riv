@@ -1171,8 +1171,16 @@ impl Editor {
             }
         }
 
+        // ── Popups take precedence over special buffer key bindings ──
+        let popup_active = self.buffer_list_popup.is_some()
+            || self.mru_popup.is_some()
+            || self.file_picker.is_some()
+            || self.function_list_popup.is_some()
+            || self.keymap_popup.is_some()
+            || self.help_popup.is_some();
+
         // ── Ripgrep buffer special keys ── RG
-        if self.mode == Mode::Normal {
+        if self.mode == Mode::Normal && !popup_active {
             if let Some(window) = self.windows.active_window() {
                 if let Some(buffer) = self.buffers.get(&window.buffer_id) {
                     if buffer.kind == BufferKind::Ripgrep {
@@ -1198,7 +1206,7 @@ impl Editor {
         }
 
         // ── Git status buffer special keys ── GIT STATUS
-        if self.mode == Mode::Normal {
+        if self.mode == Mode::Normal && !popup_active {
             if let Some(window) = self.windows.active_window() {
                 if let Some(buffer) = self.buffers.get(&window.buffer_id) {
                     if buffer.kind == BufferKind::GitStatus {
@@ -1230,7 +1238,7 @@ impl Editor {
         }
 
         // ── Git diff buffer special keys ── GIT DIFF
-        if self.mode == Mode::Normal {
+        if self.mode == Mode::Normal && !popup_active {
             if let Some(window) = self.windows.active_window() {
                 if let Some(buffer) = self.buffers.get(&window.buffer_id) {
                     if buffer.kind == BufferKind::GitDiff {
@@ -1262,7 +1270,7 @@ impl Editor {
         }
 
         // ── Build buffer special keys ── BUILD
-        if self.mode == Mode::Normal {
+        if self.mode == Mode::Normal && !popup_active {
             if let Some(window) = self.windows.active_window() {
                 if let Some(buffer) = self.buffers.get(&window.buffer_id) {
                     if buffer.kind == BufferKind::Build {
@@ -1271,13 +1279,50 @@ impl Editor {
                                 self.dirty.mark_all();
                                 return self.build_goto_error();
                             }
+                            Key::Char('y') => {
+                                // Copy all build errors/warnings to the system clipboard
+                                if self.build_diagnostics.is_empty() {
+                                    return CommandResult::Message(
+                                        "No errors/warnings to yank".to_string(),
+                                    );
+                                }
+
+                                let mut yank_text = String::new();
+                                for diag in &self.build_diagnostics {
+                                    let severity_str = match diag.severity {
+                                        crate::ed::build::BuildSeverity::Error => "error",
+                                        crate::ed::build::BuildSeverity::Warning => "warning",
+                                        crate::ed::build::BuildSeverity::Note => "note",
+                                    };
+                                    yank_text.push_str(&format!(
+                                        "{}:{}:{}: {}: {}\n",
+                                        diag.file_path.display(),
+                                        diag.line_number,
+                                        diag.column,
+                                        severity_str,
+                                        diag.message
+                                    ));
+                                }
+
+                                self.yank_register = yank_text.clone();
+
+                                return match crate::clipboard::set_text(&yank_text) {
+                                    Ok(()) => CommandResult::Message(format!(
+                                        "Yanked {} diagnostic(s) to system clipboard",
+                                        self.build_diagnostics.len()
+                                    )),
+                                    Err(e) => {
+                                        CommandResult::Error(format!("Clipboard error: {}", e))
+                                    }
+                                };
+                            }
                             Key::Char('n') => {
                                 return self.build_next_error();
                             }
                             Key::Char('N') => {
                                 return self.build_prev_error();
                             }
-                            Key::Char('q') | Key::Char('Q') | Key::Escape => {
+                            Key::Char('q') | Key::Char('Q') => {
                                 return self.build_close();
                             }
                             _ => {
@@ -1291,7 +1336,7 @@ impl Editor {
         }
 
         // ── Git log buffer special keys ── GIT LOG
-        if self.mode == Mode::Normal {
+        if self.mode == Mode::Normal && !popup_active {
             if let Some(window) = self.windows.active_window() {
                 if let Some(buffer) = self.buffers.get(&window.buffer_id) {
                     if buffer.kind == BufferKind::GitLog {
@@ -1359,7 +1404,40 @@ impl Editor {
                             window.set_buffer(buffer_id);
                         }
                         self.restore_cursor_position();
-                        self.ensure_cursor_visible_all();
+
+                        // ── Clamp cursor to valid range ──
+                        // When switching FROM a special buffer (RG, Build, Git,
+                        // LLM) the cursor line can be far past the target
+                        // buffer's line count.
+                        self.clamp_cursor_to_buffer(&buffer_id);
+
+                        // ── Explicitly rebuild viewport ──
+                        // Special buffers may have scroll_line values far past
+                        // a normal file's content.  ensure_cursor_visible alone
+                        // does not always recover.
+                        {
+                            let (cursor_line, line_count, edit_height) = {
+                                let window = self.windows.active_window().unwrap();
+                                let buffer = self.buffers.get(&buffer_id).unwrap();
+                                (
+                                    window.cursor.position.line,
+                                    buffer.line_count(),
+                                    window.height.saturating_sub(1) as usize,
+                                )
+                            };
+
+                            if let Some(window) = self.windows.active_window_mut() {
+                                let half = edit_height / 2;
+                                let ideal_scroll = cursor_line.saturating_sub(half);
+
+                                if line_count > edit_height {
+                                    let max_scroll = line_count.saturating_sub(edit_height);
+                                    window.viewport.scroll_line = ideal_scroll.min(max_scroll);
+                                } else {
+                                    window.viewport.scroll_line = 0;
+                                }
+                            }
+                        }
 
                         let buf_name = self
                             .buffers
@@ -3113,6 +3191,7 @@ impl Editor {
                 self.set_status(format!("{} — not yet implemented", action.label()));
                 CommandResult::NoOp
             }
+            Action::RunBuild => self.run_build(),
             Action::RipgrepUnderCursor => self.ripgrep_under_cursor(),
             Action::RipgrepInput => {
                 self.command_prompt.clear();

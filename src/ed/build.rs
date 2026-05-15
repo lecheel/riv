@@ -337,19 +337,20 @@ impl Editor {
     }
 
     /// Try to parse a location from a build output line.
-    /// Supports both `path:line:col: error:` (short format) and `--> path:line:col` (human format).
+    /// Supports both `path:line:col: error: msg` (short format) and
+    /// `--> path:line:col` (human format).
     pub fn parse_location_from_line(&self, line: &str) -> Option<BuildDiagnostic> {
         let trimmed = line.trim();
 
-        // 1. Try short format: `path:line:col: severity: message`
-        let severity_idx = [": error: ", ": warning: ", ": note: "]
-            .iter()
-            .filter_map(|s| trimmed.find(s).map(|i| (i, s.len())))
-            .min_by_key(|(i, _)| *i);
-
-        if let Some((idx, _len)) = severity_idx {
+        // 1. Try short format: `path:line:col: severity[: code]: message`
+        if let Some((idx, len, severity)) = find_severity_marker(trimmed) {
             let location_str = trimmed[..idx].trim();
-            return parse_path_line_col(location_str);
+            let message = trimmed[idx + len..].trim().to_string();
+            return parse_path_line_col(location_str).map(|mut diag| {
+                diag.severity = severity;
+                diag.message = message;
+                diag
+            });
         }
 
         // 2. Try human format: `  --> path:line:col`
@@ -495,6 +496,55 @@ impl Editor {
 // ── Parsing ──────────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════
 
+/// Find a severity marker in a cargo output line.
+///
+/// Handles both standard and code-annotated formats:
+/// - `: error: `           → standard
+/// - `: error[E0046]: `    → with diagnostic code
+/// - `: warning: `         → standard
+/// - `: warning[unused]: ` → with diagnostic code
+///
+/// Returns `(position, marker_length, severity)` where:
+/// - `position` is the byte index of the colon preceding the severity word
+/// - `marker_length` includes the severity word, optional `[code]`, and trailing `: `
+/// - `severity` indicates the diagnostic level
+///
+/// If multiple severity markers appear in the line, the leftmost one is returned
+/// (which corresponds to the actual diagnostic location, not a mention in the message).
+fn find_severity_marker(line: &str) -> Option<(usize, usize, BuildSeverity)> {
+    let mut best: Option<(usize, usize, BuildSeverity)> = None;
+
+    for (label, severity) in [
+        ("error", BuildSeverity::Error),
+        ("warning", BuildSeverity::Warning),
+        ("note", BuildSeverity::Note),
+    ] {
+        let marker = format!(": {}", label);
+        if let Some(pos) = line.find(&marker) {
+            let after = pos + marker.len();
+            let rest = line.get(after..).unwrap_or("");
+
+            let marker_len = if rest.starts_with(": ") {
+                // Standard format: `: error: `
+                Some(marker.len() + 2) // +2 for ": "
+            } else if rest.starts_with('[') {
+                // With diagnostic code: `: error[E0046]: `
+                rest.find("]: ").map(|be| marker.len() + be + 3) // +3 for "]: "
+            } else {
+                None
+            };
+
+            if let Some(len) = marker_len {
+                if best.as_ref().map_or(true, |(bp, _, _)| pos < *bp) {
+                    best = Some((pos, len, severity));
+                }
+            }
+        }
+    }
+
+    best
+}
+
 /// Parse `"src/main.rs:10:5"` → `BuildDiagnostic`.
 fn parse_path_line_col(s: &str) -> Option<BuildDiagnostic> {
     // Trim trailing whitespace or punctuation
@@ -528,13 +578,8 @@ fn parse_cargo_output(output: &str, project_root: &Path) -> Vec<BuildDiagnostic>
     for line in output.lines() {
         let trimmed = line.trim();
 
-        // ── Try parsing short format: `path:line:col: severity: message` ──
-        let severity_idx = [": error: ", ": warning: ", ": note: "]
-            .iter()
-            .filter_map(|s| trimmed.find(s).map(|i| (i, s.len())))
-            .min_by_key(|(i, _)| *i);
-
-        if let Some((idx, len)) = severity_idx {
+        // ── Try parsing short format: `path:line:col: severity[: code]: message` ──
+        if let Some((idx, len, severity)) = find_severity_marker(trimmed) {
             let location_str = trimmed[..idx].trim();
             let message = trimmed[idx + len..].trim();
 
@@ -543,16 +588,7 @@ fn parse_cargo_output(output: &str, project_root: &Path) -> Vec<BuildDiagnostic>
                     diag.file_path = project_root.join(&diag.file_path);
                 }
                 diag.message = message.to_string();
-
-                let severity_str = &trimmed[idx..idx + len];
-                diag.severity = if severity_str.contains("error") {
-                    BuildSeverity::Error
-                } else if severity_str.contains("warning") {
-                    BuildSeverity::Warning
-                } else {
-                    BuildSeverity::Note
-                };
-
+                diag.severity = severity;
                 diagnostics.push(diag);
                 continue;
             }
@@ -575,24 +611,6 @@ fn parse_cargo_output(output: &str, project_root: &Path) -> Vec<BuildDiagnostic>
     }
 
     diagnostics
-}
-/// Parse a location string with surrounding context (severity + message).
-fn parse_location_with_context(
-    s: &str,
-    severity: BuildSeverity,
-    message: &str,
-    project_root: &Path,
-) -> Option<BuildDiagnostic> {
-    let mut diag = parse_path_line_col(s)?;
-
-    // Make path absolute
-    if diag.file_path.is_relative() {
-        diag.file_path = project_root.join(&diag.file_path);
-    }
-
-    diag.severity = severity;
-    diag.message = message.to_string();
-    Some(diag)
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -624,6 +642,11 @@ fn format_build_buffer(raw_output: &str, diagnostics: &[BuildDiagnostic]) -> Str
             buf.push('\n');
         }
     }
+
+    // ── Keybindings hint ──
+    buf.push('\n');
+    buf.push_str(&format!("  {}\n", "─".repeat(40)));
+    buf.push_str("  Keybindings: [Enter] open file  [y] copy to clipboard  [q] close\n");
 
     buf
 }

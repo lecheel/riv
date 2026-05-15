@@ -270,6 +270,7 @@ pub enum Action {
     ToggleWhitespace,
     ClearMessages,
     RepeatLastAction,
+    RunBuild,
     None,
 }
 
@@ -482,6 +483,7 @@ impl Action {
             | Self::ToggleWhitespace
             | Self::ClearMessages
             | Self::RepeatLastAction
+            | Self::RunBuild
             | Self::None => ActionCategory::Misc,
         }
     }
