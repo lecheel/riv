@@ -230,6 +230,7 @@ impl GitStatusExt for Editor {
             content.push_str("── Keybindings ──\n");
             content.push_str("  s       Toggle stage/unstage\n");
             content.push_str("  a       stage file\n");
+            content.push_str("  c       Commit (generate message via LLM)\n");
             content.push_str("  Enter   Open file\n");
             content.push_str("  r       Refresh\n");
             content.push_str("  q       Close\n");

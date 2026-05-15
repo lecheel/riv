@@ -504,115 +504,45 @@ pub fn collect_file_paths(trigger: &str, base_dir: Option<&Path>) -> Vec<Complet
         return Vec::new();
     }
 
-    // Determine the base directory for resolving relative paths
     let base = if trigger.starts_with('/') {
         Path::new("/")
     } else {
         base_dir.and_then(|p| p.parent()).unwrap_or(Path::new("."))
     };
 
-    // Parse the trigger into directory part and filename prefix
-    let trigger_path = Path::new(trigger);
-    let parent = trigger_path.parent();
-    let prefix = trigger_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
+    let dir_slash = trigger.ends_with('/');
 
-    let (full_dir, parent_str) = match parent {
-        Some(p) if !p.as_os_str().is_empty() => (base.join(p), p.to_string_lossy().to_string()),
-        _ => (base.to_path_buf(), String::new()),
-    };
-
-    let prefix_lower = prefix.to_lowercase();
-    let mut items = Vec::new();
-
-    // List directory entries
-    let entries = match std::fs::read_dir(&full_dir) {
-        Ok(e) => e,
-        Err(_) => return items,
-    };
-
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let name_str = match name.to_str() {
-            Some(s) => s.to_string(),
-            None => continue,
-        };
-
-        // Skip hidden files unless trigger explicitly starts with '.'
-        if name_str.starts_with('.') && !trigger.starts_with('.') {
-            continue;
-        }
-
-        // Filter by prefix (if any)
-        if !prefix_lower.is_empty() && !name_str.to_lowercase().starts_with(&prefix_lower) {
-            continue;
-        }
-
-        let metadata = match entry.metadata() {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-
-        let is_dir = metadata.is_dir();
-        let kind = if is_dir {
-            CompletionKind::Folder
+    let (full_dir, parent_str, file_prefix) = if dir_slash {
+        let dir_path = base.join(trigger.trim_end_matches('/'));
+        let parent = if trigger == "/" {
+            "/".to_string()
         } else {
-            CompletionKind::File
+            trigger.trim_end_matches('/').to_string()
         };
+        (dir_path, parent, "")
+    } else {
+        let trigger_path = Path::new(trigger);
+        let parent = trigger_path.parent();
+        let prefix = trigger_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
 
-        // Build display name (with trailing slash for directories)
-        let display_name = if is_dir {
-            format!("{}/", name_str)
-        } else {
-            name_str.clone()
-        };
-
-        // Build the full text to insert
-        let insert_text = if parent_str.is_empty() {
-            display_name
-        } else {
-            format!("{}/{}", parent_str, display_name)
-        };
-
-        // Score: prefix match bonus, file paths get a slight boost
-        let score = compute_score(&name_str, &prefix_lower) + 15.0;
-
-        // Build detail string
-        let detail = if is_dir {
-            Some("dir".to_string())
-        } else {
-            let len = metadata.len();
-            if len < 1024 {
-                Some(format!("{} B", len))
-            } else if len < 1024 * 1024 {
-                Some(format!("{}.1 KB", len as f64 / 1024.0))
-            } else {
-                Some(format!("{}.1 MB", len as f64 / (1024.0 * 1024.0)))
+        match parent {
+            Some(p) if !p.as_os_str().is_empty() => {
+                (base.join(p), p.to_string_lossy().to_string(), prefix)
             }
-        };
+            _ => (base.to_path_buf(), String::new(), prefix),
+        }
+    };
 
-        items.push(CompletionEntry {
-            text: insert_text,
-            detail,
-            documentation: None,
-            kind,
-            source: CompletionSource::FilePath,
-            score,
-        });
-    }
-
-    // Sort directories first, then alphabetically
-    items.sort_by(|a, b| {
-        let a_dir = a.kind == CompletionKind::Folder;
-        let b_dir = b.kind == CompletionKind::Folder;
-        b_dir.cmp(&a_dir).then_with(|| a.text.cmp(&b.text))
-    });
-
-    items
+    list_dir_completion_entries(
+        &full_dir,
+        &file_prefix,
+        &parent_str,
+        !trigger.starts_with('.'),
+    )
 }
-
 /// Collect words from the buffer that start with the given prefix.
 fn collect_buffer_words(buffer: &Buffer, prefix: &str) -> Vec<CompletionEntry> {
     let mut words: HashSet<String> = HashSet::new();
@@ -687,4 +617,173 @@ pub fn compute_score(text: &str, trigger: &str) -> f64 {
     // Score based on how much of the trigger is covered relative to text length.
     let coverage = trigger.len() as f64 / text.len().max(1) as f64;
     coverage * 50.0
+}
+
+// ── Add after the existing `collect_file_paths` function ──────────
+
+/// List directory entries matching a file prefix, returning completion items.
+///
+/// * `dir`          – directory to scan
+/// * `file_prefix`  – filter: only entries whose name starts with this (case-insensitive)
+/// * `path_prefix`  – string to prepend to each entry's `text` (e.g. `"src"`)
+/// * `skip_hidden`  – skip dotfiles unless `file_prefix` itself starts with a dot
+fn list_dir_completion_entries(
+    dir: &Path,
+    file_prefix: &str,
+    path_prefix: &str,
+    skip_hidden: bool,
+) -> Vec<CompletionEntry> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+
+    let prefix_lower = file_prefix.to_lowercase();
+    let mut items = Vec::new();
+
+    for entry in entries.flatten() {
+        let name = match entry.file_name().to_str() {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+
+        // Skip hidden files unless the prefix explicitly starts with '.'
+        if skip_hidden && name.starts_with('.') && !file_prefix.starts_with('.') {
+            continue;
+        }
+
+        // Filter by prefix
+        if !prefix_lower.is_empty() && !name.to_lowercase().starts_with(&prefix_lower) {
+            continue;
+        }
+
+        let metadata = match entry.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+
+        let is_dir = metadata.is_dir();
+        let kind = if is_dir {
+            CompletionKind::Folder
+        } else {
+            CompletionKind::File
+        };
+
+        let display_name = if is_dir {
+            format!("{}/", name)
+        } else {
+            name.clone()
+        };
+
+        // Build the full text to insert, joining path_prefix / display_name
+        let insert_text = if path_prefix.is_empty() {
+            display_name
+        } else if path_prefix.ends_with('/') {
+            // Root-like prefix ("/") — don't double the slash
+            format!("{}{}", path_prefix, display_name)
+        } else {
+            format!("{}/{}", path_prefix, display_name)
+        };
+
+        let score = compute_score(&name, &prefix_lower) + 15.0;
+
+        let detail = if is_dir {
+            Some("dir".to_string())
+        } else {
+            let len = metadata.len();
+            if len < 1024 {
+                Some(format!("{} B", len))
+            } else if len < 1024 * 1024 {
+                Some(format!("{:.1} KB", len as f64 / 1024.0))
+            } else {
+                Some(format!("{:.1} MB", len as f64 / (1024.0 * 1024.0)))
+            }
+        };
+
+        items.push(CompletionEntry {
+            text: insert_text,
+            detail,
+            documentation: None,
+            kind,
+            source: CompletionSource::FilePath,
+            score,
+        });
+
+        // Early cutoff to avoid collecting too many items
+        if items.len() >= 200 {
+            break;
+        }
+    }
+
+    // Sort directories first, then alphabetically
+    items.sort_by(|a, b| {
+        let a_dir = a.kind == CompletionKind::Folder;
+        let b_dir = b.kind == CompletionKind::Folder;
+        b_dir.cmp(&a_dir).then_with(|| a.text.cmp(&b.text))
+    });
+
+    items
+}
+
+/// Collect file/directory completions for command-line arguments (e.g. `:e`).
+///
+/// Unlike [`collect_file_paths`], this works with **any** prefix — not just
+/// path-like triggers (`./`, `/`, `../`). When the prefix is not a path, it
+/// lists files in the base directory that match the prefix.
+///
+/// `base_dir` should be the *current buffer's file path* (its parent will be
+/// used as the directory to search).
+pub fn collect_file_completions_for_arg(
+    prefix: &str,
+    base_dir: Option<&Path>,
+) -> Vec<CompletionEntry> {
+    let base = if prefix.starts_with('/') {
+        Path::new("/").to_path_buf()
+    } else {
+        base_dir
+            .and_then(|p| p.parent())
+            .unwrap_or(Path::new("."))
+            .to_path_buf()
+    };
+
+    if is_path_trigger(prefix) {
+        // Path-like prefix — determine directory and file-name parts.
+        let dir_slash = prefix.ends_with('/');
+
+        let (full_dir, parent_str, file_prefix) = if dir_slash {
+            // "src/" → list contents of src/ with empty file prefix
+            let dir_path = base.join(prefix.trim_end_matches('/'));
+            let parent = if prefix == "/" {
+                "/".to_string()
+            } else {
+                prefix.trim_end_matches('/').to_string()
+            };
+            (dir_path, parent, "")
+        } else {
+            // "src/ma" → list contents of src/ matching "ma"
+            let trigger_path = Path::new(prefix);
+            let parent = trigger_path.parent();
+            let file_prefix = trigger_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+
+            match parent {
+                Some(p) if !p.as_os_str().is_empty() => {
+                    (base.join(p), p.to_string_lossy().to_string(), file_prefix)
+                }
+                _ => (base.to_path_buf(), String::new(), file_prefix),
+            }
+        };
+
+        list_dir_completion_entries(
+            &full_dir,
+            file_prefix,
+            &parent_str,
+            !prefix.starts_with('.'),
+        )
+    } else {
+        // Non-path prefix — list files in base directory matching the prefix
+        list_dir_completion_entries(&base, prefix, "", !prefix.starts_with('.'))
+    }
 }

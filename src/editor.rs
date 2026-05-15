@@ -27,6 +27,7 @@ use tokio::sync::mpsc;
 // Import the block insert state from visual module (only definition)
 use crate::codeium::CodeiumManager;
 use crate::ed::build::BuildExt;
+use crate::ed::git_commit::GitCommitExt;
 use crate::ed::visual::BlockInsertState;
 use crate::ed::GhostTextExt;
 use crate::ed::GotoDefExt;
@@ -337,6 +338,11 @@ pub struct Editor {
     pub git_log_count: usize,
     /// Git log grep pattern (persisted for refresh).
     pub git_log_grep: String,
+    /// Buffer ID of the active GitCommit buffer (for LLM response routing).
+    pub git_commit_buffer_id: Option<BufferId>,
+    /// Timestamp when the git commit LLM request started (for animation).
+    pub git_commit_start_time: Option<std::time::Instant>,
+
     // ==================== LSP Integration ====================
     /// LSP message sender (editor → async LSP task).
     pub lsp_tx: mpsc::UnboundedSender<crate::lsp::LspMessage>,
@@ -663,7 +669,9 @@ impl Editor {
             git_gutter_dirty_since: None,
             git_gutter_debounce_ms: 500,
             git_log_count: 0,
+            git_commit_buffer_id: None,
             git_log_grep: String::new(),
+            git_commit_start_time: None,
 
             // LSP Integration
             lsp_tx,
@@ -1219,6 +1227,9 @@ impl Editor {
                                 self.dirty.mark_all();
                                 return self.git_status_add_file();
                             }
+                            Key::Char('c') | Key::Char('C') => {
+                                return self.git_commit_generate();
+                            }
                             Key::Enter => {
                                 self.dirty.mark_all();
                                 return self.git_status_goto_file();
@@ -1335,6 +1346,25 @@ impl Editor {
             }
         }
 
+        // Add after the GitLog key-interception block, before popup handling:
+        // ── Git commit buffer special keys ── GIT COMMIT
+        if self.mode == Mode::Normal && !popup_active {
+            if let Some(window) = self.windows.active_window() {
+                if let Some(buffer) = self.buffers.get(&window.buffer_id) {
+                    if buffer.kind == BufferKind::GitCommit {
+                        match key {
+                            Key::Char('w') => {
+                                return self.handle_commit_write();
+                            }
+                            Key::Char('q') | Key::Char('Q') => {
+                                return self.git_commit_close();
+                            }
+                            _ => {} // Fall through to normal editing keybinds
+                        }
+                    }
+                }
+            }
+        }
         // ── Git log buffer special keys ── GIT LOG
         if self.mode == Mode::Normal && !popup_active {
             if let Some(window) = self.windows.active_window() {
@@ -2520,19 +2550,24 @@ impl Editor {
                 CommandResult::ViewChanged
             }
             Action::LlmQuickCheckEnglish => {
-                // Grab text: visual selection → fallback to current line
-                let text = if matches!(
+                let was_visual = matches!(
                     self.mode,
                     Mode::Visual | Mode::VisualLine | Mode::VisualBlock
-                ) {
+                );
+
+                let text = if was_visual {
                     self.get_selection_text().unwrap_or_default()
                 } else {
                     self.current_line_content()
                 };
 
-                // Clear visual selection if active
+                // Clear visual selection if active AND return to Normal mode
                 if let Some(w) = self.windows.active_window_mut() {
                     w.selection_anchor = None;
+                }
+                if was_visual {
+                    self.mode = Mode::Normal;
+                    self.dirty.status_powerline = true;
                 }
 
                 if text.trim().is_empty() {
@@ -2550,7 +2585,13 @@ impl Editor {
                 self.dirty.status_infobar = true;
 
                 // Send directly — do NOT enter LlmPrompt mode
-                return self.llm_send_from_prompt(text);
+                let result = self.llm_send_from_prompt(text);
+
+                if was_visual {
+                    CommandResult::ModeChanged(Mode::Normal)
+                } else {
+                    result
+                }
             }
             Action::LlmQuickPrompt => {
                 let context = if matches!(
@@ -3223,6 +3264,7 @@ impl Editor {
             Action::GitNextHunk => self.git_next_hunk(),
             Action::GitPrevHunk => self.git_prev_hunk(),
             Action::GitRevertHunk => self.git_revert_hunk(),
+            Action::GitCommit => self.git_commit_generate(),
             Action::GitGutterToggle => {
                 self.git_gutter_enabled = !self.git_gutter_enabled;
                 if !self.git_gutter_enabled {
@@ -3377,6 +3419,7 @@ impl Editor {
         self.update_which_key_debounce();
         self.poll_llm_responses();
         self.tick_build();
+        self.tick_git_commit();
 
         // ── Ghost text: log current state before polling ──
         if !self.ghost_text.is_pending() {
@@ -3623,19 +3666,25 @@ impl Editor {
     /// infobar (and register matching the preset). Does NOT enter LlmPrompt
     /// mode — the user stays in their current mode and sees the result inline.
     pub fn llm_quick_action(&mut self, preset: LlmPreset, status_msg: &str) -> CommandResult {
-        // Grab text: visual selection → fallback to current line
-        let text = if matches!(
+        let was_visual = matches!(
             self.mode,
             Mode::Visual | Mode::VisualLine | Mode::VisualBlock
-        ) {
+        );
+
+        // Grab text: visual selection → fallback to current line
+        let text = if was_visual {
             self.get_selection_text().unwrap_or_default()
         } else {
             self.current_line_content()
         };
 
-        // Clear visual selection
+        // Clear visual selection AND return to Normal mode
         if let Some(w) = self.windows.active_window_mut() {
             w.selection_anchor = None;
+        }
+        if was_visual {
+            self.mode = Mode::Normal;
+            self.dirty.status_powerline = true; // Update mode indicator
         }
 
         if text.trim().is_empty() {
@@ -3663,7 +3712,14 @@ impl Editor {
         self.set_status(format!("{}…", status_msg));
         self.dirty.status_infobar = true;
 
-        self.spawn_llm_request(messages)
+        self.spawn_llm_request(messages);
+
+        // Return ModeChanged if we were in Visual, so the event loop updates properly
+        if was_visual {
+            CommandResult::ModeChanged(Mode::Normal)
+        } else {
+            CommandResult::ViewChanged
+        }
     }
     pub fn show_register_popup(&mut self) {
         self.register_popup_title = "Registers".to_string();
@@ -3671,18 +3727,27 @@ impl Editor {
         let mut lines = Vec::new();
 
         if !self.yank_register.is_empty() {
-            let preview = self.yank_register.lines().next().unwrap_or("");
-            let truncated = if preview.chars().count() > 100 {
-                let char_count = preview.chars().take(100).collect::<String>();
-                format!("{}…", char_count)
-            } else {
-                preview.to_string()
-            };
-            let safe_preview = truncated
-                .replace('\n', "\\n")
+            let is_multiline = self.yank_register.contains('\n');
+            let first_line = self
+                .yank_register
+                .lines()
+                .next()
+                .unwrap_or("")
                 .replace('\r', "\\r")
                 .replace('\t', "\\t");
-            lines.push(format!("\"\"   {}", safe_preview));
+
+            let max_len = if is_multiline { 89 } else { 97 };
+            let mut preview = if first_line.chars().count() > max_len {
+                format!("{}…", first_line.chars().take(max_len).collect::<String>())
+            } else {
+                first_line
+            };
+
+            if is_multiline {
+                preview.push_str(" (...)");
+            }
+
+            lines.push(format!("\"\"   {}", preview));
         }
 
         if let Some(buffer) = self.current_buffer() {
@@ -3693,7 +3758,7 @@ impl Editor {
             };
 
             let truncated = if path_str.chars().count() > 100 {
-                let char_count = path_str.chars().take(100).collect::<String>();
+                let char_count = path_str.chars().take(97).collect::<String>();
                 format!("{}…", char_count)
             } else {
                 path_str
@@ -3704,18 +3769,26 @@ impl Editor {
         for c in 'a'..='z' {
             if let Some(content) = self.get_named_register(c) {
                 if !content.is_empty() {
-                    let preview = content.lines().next().unwrap_or("");
-                    let truncated = if preview.chars().count() > 100 {
-                        let char_count = preview.chars().take(100).collect::<String>();
-                        format!("{}…", char_count)
-                    } else {
-                        preview.to_string()
-                    };
-                    let safe_preview = truncated
-                        .replace('\n', "\\n")
+                    let is_multiline = content.contains('\n');
+                    let first_line = content
+                        .lines()
+                        .next()
+                        .unwrap_or("")
                         .replace('\r', "\\r")
                         .replace('\t', "\\t");
-                    lines.push(format!("\"{}   {}", c, safe_preview));
+
+                    let max_len = if is_multiline { 89 } else { 97 };
+                    let mut preview = if first_line.chars().count() > max_len {
+                        format!("{}…", first_line.chars().take(max_len).collect::<String>())
+                    } else {
+                        first_line
+                    };
+
+                    if is_multiline {
+                        preview.push_str(" (...)");
+                    }
+
+                    lines.push(format!("\"{}   {}", c, preview));
                 }
             }
         }
@@ -3728,7 +3801,6 @@ impl Editor {
         }
         self.dirty.mark_all();
     }
-
     // ── Substitute confirmation ─────────────────────────────────────
 
     /// Start interactive substitute confirmation mode.

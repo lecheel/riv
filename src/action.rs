@@ -215,6 +215,7 @@ pub enum Action {
     GitPrevHunk,
     GitRevertHunk,
     GitGutterToggle,
+    GitCommit,
 
     // ── Completion ─────────────────────────────────────────
     TriggerCompletion,
@@ -411,6 +412,7 @@ impl Action {
             | Self::GitNextHunk
             | Self::GitPrevHunk
             | Self::GitRevertHunk
+            | Self::GitCommit
             | Self::GitGutterToggle => ActionCategory::Git,
 
             // Completion

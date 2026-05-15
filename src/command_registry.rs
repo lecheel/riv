@@ -285,6 +285,11 @@ fn ghunk_revert_handler(e: &mut Editor, _args: &str) -> CommandResult {
     e.git_revert_hunk()
 }
 
+fn gc_handler(e: &mut Editor, _args: &str) -> CommandResult {
+    use crate::ed::git_commit::GitCommitExt;
+    e.git_commit_generate()
+}
+
 fn gstatus_handler(e: &mut Editor, args: &str) -> CommandResult {
     e.git_status_open(args.trim())
 }
@@ -1146,6 +1151,14 @@ pub fn build_command_registry() -> CommandRegistry {
     reg.alias("keymaps", "keymap");
     reg.alias("bindings", "keymap");
     reg.alias("showkeys", "keymap");
+
+    reg.register_handler(
+        "gc",
+        gc_handler,
+        "Generate git commit message from staged changes via LLM",
+    );
+    reg.alias("gitcommit", "gc");
+    reg.alias("GitCommit", "gc");
 
     reg.register_handler(
         "Gstatus",

@@ -368,12 +368,112 @@ impl CompletionExt for Editor {
     }
 
     fn trigger_command_completion(&mut self) {
-        let input = self.command_prompt.text().trim();
+        let raw = self.command_prompt.text();
+        let input = raw.trim_start();
         if input.is_empty() {
             self.command_completion.cancel();
             return;
         }
 
+        // ── Strip range prefix (visual selection '<,'>, %, etc.) ──
+        let (range_prefix, after_range) = strip_range_prefix(input);
+
+        // ── File-argument command detection ──────────────────────────
+        //
+        // Commands that take a file path as their first argument.
+        // When the user has typed e.g. `:e ./src/m`, we switch from
+        // command-name completion to file-path completion.
+        const FILE_ARG_COMMANDS: &[&str] = &[
+            "e", "edit", "open", "sp", "split", "vs", "vsplit", "find", "tabe", "tabedit",
+        ];
+
+        if let Some(space_pos) = after_range.find(|c: char| c.is_whitespace()) {
+            let cmd_name = &after_range[..space_pos];
+
+            // Check both the raw name and any registry alias
+            let is_file_cmd = FILE_ARG_COMMANDS.contains(&cmd_name)
+                || self
+                    .command_registry
+                    .resolve(cmd_name)
+                    .map(|canonical| FILE_ARG_COMMANDS.contains(&canonical))
+                    .unwrap_or(false);
+
+            if is_file_cmd {
+                let arg = after_range[space_pos..].trim_start();
+
+                // Build the full command prefix: range + command + space
+                // e.g. "'<,'>e " or "e "
+                let cmd_prefix = format!("{}{} ", range_prefix, cmd_name);
+
+                let base_dir = self.current_buffer().and_then(|b| b.file_path.as_deref());
+
+                let mut items: Vec<crate::completion::CompletionEntry> =
+                    crate::completion::collect_file_completions_for_arg(
+                        if arg.is_empty() { "" } else { arg },
+                        base_dir,
+                    )
+                    .into_iter()
+                    .map(|entry| crate::completion::CompletionEntry {
+                        text: format!("{}{}", cmd_prefix, entry.text),
+                        ..entry
+                    })
+                    .collect();
+
+                // Fallback: command-name completions matching the typed command prefix
+                // (useful when the user hasn't typed a space yet, e.g. "<,'>ed")
+                let cmd_lower = cmd_name.to_lowercase();
+                let cmd_items: Vec<crate::completion::CompletionEntry> = self
+                    .command_registry
+                    .all_names()
+                    .iter()
+                    .filter(|(display_name, _)| display_name.to_lowercase().starts_with(&cmd_lower))
+                    .map(|(display_name, canonical)| {
+                        let desc = self
+                            .command_registry
+                            .get(canonical)
+                            .map(|e| e.description.clone())
+                            .unwrap_or_default();
+                        let score = crate::completion::compute_score(display_name, &cmd_lower);
+                        crate::completion::CompletionEntry {
+                            text: format!("{}{}", range_prefix, display_name),
+                            detail: Some(desc),
+                            documentation: None,
+                            kind: crate::completion::CompletionKind::Keyword,
+                            source: crate::completion::CompletionSource::BufferWords,
+                            score,
+                        }
+                    })
+                    .collect();
+
+                items.extend(cmd_items);
+
+                items.sort_by(|a, b| {
+                    b.score
+                        .partial_cmp(&a.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| a.text.cmp(&b.text))
+                });
+                items.truncate(self.command_completion.max_items);
+
+                if items.is_empty() {
+                    self.command_completion.cancel();
+                    return;
+                }
+
+                self.command_completion.active = true;
+                self.command_completion.items = items;
+                self.command_completion.selected_index = 0;
+                self.command_completion.context = Some(crate::completion::CompletionContext {
+                    trigger: input.to_string(),
+                    position: CursorPosition::zero(),
+                    line_text: self.command_prompt.buffer.clone(),
+                    is_path: true,
+                });
+                return;
+            }
+        }
+
+        // ── Regular command name completion (unchanged) ──────────────
         let input_lower = input.to_lowercase();
 
         let mut items: Vec<crate::completion::CompletionEntry> = self
@@ -421,4 +521,20 @@ impl CompletionExt for Editor {
             is_path: false,
         });
     }
+}
+
+/// Strip a Vim-style range prefix from a command string.
+/// Returns `(range_prefix_str, remaining_command)`.
+/// Handles `'<,'>`, `'>,'<`, and `%` ranges.
+fn strip_range_prefix(input: &str) -> (&str, &str) {
+    if let Some(rest) = input.strip_prefix("'<,'>") {
+        return ("'<,'>", rest.trim_start());
+    }
+    if let Some(rest) = input.strip_prefix("'>,'<") {
+        return ("'>,'<", rest.trim_start());
+    }
+    if let Some(rest) = input.strip_prefix('%') {
+        return ("%", rest.trim_start());
+    }
+    ("", input)
 }

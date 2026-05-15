@@ -1,6 +1,7 @@
 //! LLM extension trait for Editor.
 
 use crate::buffer::{BufferId, BufferKind};
+use crate::ed::git_commit::GitCommitExt;
 use crate::editor::{CommandResult, Editor, Mode};
 use crate::llm::{LlmPreset, LlmRole};
 use crate::llm_client::{Cancelled, LlmClient};
@@ -246,12 +247,22 @@ impl LlmExt for Editor {
         }
         CommandResult::Message("Sending to LLM...".to_string())
     }
-
     fn poll_llm_responses(&mut self) {
         while let Ok(result) = self.llm_response_rx.try_recv() {
             match result {
                 Ok(response) => {
                     self.llm_task_handle = None;
+
+                    // ── GitCommit path (highest priority) ──
+                    if self.git_commit_buffer_id.is_some() {
+                        if self.llm_buffer.state().is_active() {
+                            self.llm_buffer.finish_streaming();
+                        }
+                        self.llm_single_shot = false;
+                        self.llm_infobar_response = false;
+                        self.git_commit_on_llm_response(&response);
+                        return;
+                    }
 
                     // ── Single-shot path: popup display ──
                     if self.llm_infobar_response || self.llm_single_shot {
@@ -327,6 +338,17 @@ impl LlmExt for Editor {
                 Err(err) => {
                     self.llm_task_handle = None;
 
+                    // ── GitCommit path (highest priority) ──
+                    if self.git_commit_buffer_id.is_some() {
+                        if self.llm_buffer.state().is_active() {
+                            self.llm_buffer.set_idle();
+                        }
+                        self.llm_single_shot = false;
+                        self.llm_infobar_response = false;
+                        self.git_commit_on_llm_error(&err);
+                        return;
+                    }
+
                     // ── Single-shot infobar error path ──
                     if self.llm_infobar_response || self.llm_single_shot {
                         self.llm_infobar_response = false;
@@ -364,7 +386,6 @@ impl LlmExt for Editor {
             }
         }
     }
-
     // ═══════════════════════════════════════════════════════════════════
     // Session Persistence
     // ═══════════════════════════════════════════════════════════════════

@@ -56,6 +56,7 @@ pub enum Language {
     GitLog,
     GitDiff,
     Build,
+    GitCommit,
 }
 
 impl Language {
@@ -78,7 +79,8 @@ impl Language {
             Language::TypeScript => "typescript",
             Language::Python => "python",
             Language::GitLog => "gitlog",
-            Language::GitDiff => "gitlog",
+            Language::GitDiff => "gitdiff",
+            Language::GitCommit => "gitcommit",
             Language::Build => "build",
             Language::PlainText => "plain",
         }
@@ -95,6 +97,7 @@ impl Language {
             Language::GitLog => "plain",
             Language::Build => "plain",
             Language::GitDiff => "plain",
+            Language::GitCommit => "plain",
         }
     }
 }
@@ -165,6 +168,7 @@ pub enum BufferKind {
     GitStatus,
     GitLog,
     Build,
+    GitCommit,
 }
 
 impl BufferKind {
@@ -180,6 +184,7 @@ impl BufferKind {
             BufferKind::Ripgrep
                 | BufferKind::Build
                 | BufferKind::GitDiff
+                | BufferKind::GitCommit
                 | BufferKind::GitLog
                 | BufferKind::Llm
         )

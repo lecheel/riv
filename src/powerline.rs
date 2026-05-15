@@ -573,6 +573,7 @@ pub fn draw_tab_line(f: &mut Frame, editor: &Editor, area: Rect) {
             BufferKind::GitDiff => "*git-diff*".to_string(),
             BufferKind::GitStatus => "*git-st*".to_string(),
             BufferKind::GitLog => "*git-log*".to_string(),
+            BufferKind::GitCommit => "*git-commit*".to_string(),
             BufferKind::Build => "*build*".to_string(),
             BufferKind::Llm => "*LLM*".to_string(),  
             BufferKind::LlmInput => "*LLM prompt*".to_string(),  
