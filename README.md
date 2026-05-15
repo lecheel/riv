@@ -19,7 +19,7 @@ Git integration, and LLM assistance while maintaining a lightweight terminal int
 cargo build --release
 ./target/release/riv [file]
 ```
-
+![image](./riv01.png)
 ## Architecture
 
 | Component | Description |
