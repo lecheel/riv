@@ -1,0 +1,196 @@
+use crate::buffer::Language;
+use crate::rounded_box::truncate_to_width;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr; // Add this dependency
+
+// ── Helper: word character check ───────────────────────────────────
+/// Check if a tree-sitter node kind is a string or comment
+/// (braces inside these should not affect indentation).
+pub fn is_string_or_comment_node(kind: &str) -> bool {
+    matches!(
+        kind,
+        "string_literal" | "raw_string_literal" | "char_literal"  // Rust
+        | "line_comment" | "block_comment" | "doc_comment"
+        | "string" | "template_string" | "regex" | "regex_pattern" // JS/TS/Python
+        | "fstring" | "fstring_start" | "fstring_end"
+        | "string_start" | "string_end" | "string_content"
+        | "comment" | "comment_content"
+    )
+}
+
+/// Check if a grapheme cluster is a word character.
+/// Uses Unicode character properties for better accuracy.
+pub fn is_word_char(g: &str) -> bool {
+    if g.is_empty() {
+        return false;
+    }
+
+    // For multi-character graphemes (like flags, emoji sequences),
+    // treat the entire grapheme as a single unit
+    let chars: Vec<char> = g.chars().collect();
+
+    // Handle common word character cases
+    match chars.len() {
+        1 => {
+            let c = chars[0];
+            c.is_alphanumeric() || c == '_' || c == '-' // Add hyphen for hyphenated words
+        }
+        _ => {
+            // For graphemes like "ﬁ" (ligature) or emoji, check if first char is alphanumeric
+            // But generally treat complex graphemes as non-word characters
+            chars[0].is_alphanumeric()
+        }
+    }
+}
+
+/// Render help entries into display lines, grouped by category.
+/// Now properly handles Unicode width for alignment.
+pub fn render_help_entries(entries: &[crate::keybind::HelpEntry], max_width: u16) -> Vec<String> {
+    use crate::action::ActionCategory;
+
+    let mut lines = Vec::new();
+    let max_width_usize = max_width as usize;
+
+    // First pass: find the max display width of keys in each category
+    let mut categories: Vec<(ActionCategory, Vec<&crate::keybind::HelpEntry>)> = Vec::new();
+    for entry in entries {
+        if categories.last().map(|(c, _)| *c) != Some(entry.category) {
+            categories.push((entry.category, Vec::new()));
+        }
+        categories.last_mut().unwrap().1.push(entry);
+    }
+
+    for (category, cat_entries) in &categories {
+        // Category header
+        let header = format!("── {} ──", category.header());
+        lines.push(truncate_to_width(&header, max_width_usize).to_string());
+        lines.push(String::new());
+
+        // Find max key display width using Unicode width
+        let max_keys_width = cat_entries
+            .iter()
+            .map(|e| UnicodeWidthStr::width(e.keys.as_str()))
+            .max()
+            .unwrap_or(0)
+            .min(30); // cap at 30 columns
+
+        for entry in cat_entries {
+            let key_width = UnicodeWidthStr::width(entry.keys.as_str());
+            let padding_needed = max_keys_width.saturating_sub(key_width);
+            let padding = " ".repeat(padding_needed);
+
+            // Build the line with proper spacing
+            let line = format!("  {}{}  {}", entry.keys, padding, entry.description);
+
+            // Truncate using display width, not character count
+            let truncated = truncate_to_width(&line, max_width_usize);
+            lines.push(truncated.to_string());
+        }
+
+        lines.push(String::new());
+    }
+
+    // Remove trailing blank line
+    while lines.last().map(|l| l.is_empty()).unwrap_or(false) {
+        lines.pop();
+    }
+
+    lines
+}
+
+/// Helper function (outside the trait impl, at bottom of file)
+pub fn comment_chars(language: &Option<Language>) -> Option<(&'static str, &'static str)> {
+    match language {
+        Some(Language::Rust) | Some(Language::JavaScript) | Some(Language::TypeScript) => {
+            Some(("// ", ""))
+        }
+        Some(Language::Python) => Some(("# ", "")),
+        Some(Language::PlainText) | None => None,
+        _ => Some(("// ", "")), // fallback
+    }
+}
+
+/// Extract the leading whitespace (indentation) from a line of text.
+/// Maintains grapheme cluster boundaries.
+pub fn get_line_indent(text: &str) -> String {
+    let mut indent = String::new();
+    for g in text.graphemes(true) {
+        // Check both spaces and tabs, but also other Unicode whitespace?
+        if g == " "
+            || g == "\t"
+            || (g.chars().next().map(|c| c.is_whitespace()).unwrap_or(false)
+                && g != "\n"
+                && g != "\r")
+        {
+            indent.push_str(g);
+        } else {
+            break;
+        }
+    }
+    indent
+}
+
+/// Sanitize a string for single-line display in the status/cmd bar.
+/// Now uses Unicode display width consistently for all measurements.
+pub fn sanitize_single_line(s: &str, max_chars: usize, max_width: usize) -> String {
+    if s.is_empty() {
+        return String::new();
+    }
+
+    let mut result = String::with_capacity(s.len().min(max_chars * 3));
+    let mut char_count = 0;
+    let mut grapheme_count = 0;
+
+    // Process by grapheme clusters for better Unicode handling
+    for g in s.graphemes(true) {
+        if grapheme_count >= max_chars {
+            result.push('…');
+            break;
+        }
+
+        // Replace newlines with spaces
+        if g == "\n" || g == "\r" {
+            result.push(' ');
+        } else {
+            result.push_str(g);
+        }
+
+        grapheme_count += 1;
+        char_count += g.chars().count();
+    }
+
+    // Finally, ensure it fits within display width
+    truncate_to_width(&result, max_width).to_string()
+}
+
+/// Alternative: More aggressive version that uses display width for all measurements
+/// Useful for status bars where visual width is most important.
+pub fn sanitize_single_line_by_width(s: &str, max_display_width: usize) -> String {
+    if s.is_empty() {
+        return String::new();
+    }
+
+    let mut result = String::new();
+    let mut current_width = 0;
+
+    for g in s.graphemes(true) {
+        let g_width = UnicodeWidthStr::width(g);
+
+        // Check if adding this grapheme would exceed max width
+        if current_width + g_width > max_display_width.saturating_sub(1) {
+            result.push('…');
+            break;
+        }
+
+        // Replace newlines with spaces
+        if g == "\n" || g == "\r" {
+            result.push(' ');
+            current_width += 1;
+        } else {
+            result.push_str(g);
+            current_width += g_width;
+        }
+    }
+
+    result
+}

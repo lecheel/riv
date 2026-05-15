@@ -1,0 +1,84 @@
+[package]
+name = "riv-core"
+version = "0.9.1"
+edition = "2021"
+license = "MIT"
+description = "A high-performance, modal text editor core written in Rust"
+rust-version = "1.75.0"
+
+[dependencies]
+# Terminal
+crossterm = "0.28"
+ratatui = "0.29"
+futures-util = "0.3"
+paste = "1"
+which = "6"
+
+# Text storage
+ropey = "1.6"
+unicode-segmentation = "1.12"
+unicode-width = "0.2"
+
+# Tree-sitter
+tree-sitter = "0.24"
+tree-sitter-highlight = "0.24"
+tree-sitter-rust = "0.23"
+tree-sitter-javascript = "0.23"
+tree-sitter-typescript = "0.23"
+tree-sitter-python = "0.23"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json", "blocking"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Filesystem
+dirs = "6"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Concurrency
+parking_lot = "0.12"
+
+# Misc
+uuid = { version = "1", features = ["v4"] }
+
+# Clipboard
+arboard = "3"
+tempfile = "3"
+atty = "0.2"
+regex = "1.12.3"
+clap = { version = "4.4", features = ["derive"] }
+
+[lints.rust]
+unused_variables = "allow"
+# unused_imports = "allow"
+dead_code = "allow"
+unused_macros = "allow"
+unused_assignments = "allow"
+# unreachable_patterns = "allow"
+unexpected_cfgs = "allow"
+
+
+[[bin]]
+name = "riv"
+path = "src/main.rs"
+
+[features]
+default = []
+debug_log = []
+
+[profile.release]
+# lto = true
+# codegen-units = 1
+# strip = true

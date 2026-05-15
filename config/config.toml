@@ -1,0 +1,112 @@
+# =============================================================================
+# riv-core example configuration
+# =============================================================================
+# Location: ~/.config/riv/config.toml
+# Copy this file to that path and edit to taste.
+# Any field omitted will fall back to its default value.
+# =============================================================================
+# ── Editor theme ────────────────────────────────────────────────────────────
+# Available: "dark", "light", "solarized-dark", "solarized-light",
+#            "dracula", "gruvbox-dark", "nord"
+theme = "Dark"
+
+# ── Appearance ─────────────────────────────────────────────────────────────
+# Show line numbers in the gutter.
+line_numbers = true
+relative_line_numbers = true
+
+# Render whitespace characters (tabs, trailing spaces).
+show_whitespace = false
+
+# Soft-wrap long lines to fit the window width.
+word_wrap = false
+
+# ── Tabs & indentation ─────────────────────────────────────────────────────
+# Number of spaces per tab stop.
+tab_width = 4
+
+# Use hard tab characters instead of spaces.
+use_tabs = false
+
+# ── Scrolling ──────────────────────────────────────────────────────────────
+# Minimum lines to keep visible above/below the cursor when scrolling.
+scroll_offset = 5
+
+# ── Search ─────────────────────────────────────────────────────────────────
+# Case-sensitive search (/ and ?).
+case_sensitive_search = true
+
+# Highlight matches as you type.
+incremental_search = true
+
+# ── Undo / history ─────────────────────────────────────────────────────────
+# Maximum number of undo levels retained per buffer.
+undo_levels = 1000
+
+# ── Auto-save ──────────────────────────────────────────────────────────────
+# Interval in seconds between automatic saves (0 = disabled).
+auto_save = 0
+format_on_save = false
+
+# ── Status bar ─────────────────────────────────────────────────────────────
+# Style preset: "mode-filename-modified", "powerline", "compact"
+statusbar_style = "powerline"
+
+# ── Features ───────────────────────────────────────────────────────────────
+# Enable Language Server Protocol integration.
+enable_lsp = true
+
+# Enable git integration (branch, diff, gutter).
+enable_git = true
+
+# Enable auto-completion popup.
+enable_completion = true
+
+# Minimum characters typed before completion triggers.
+completion_trigger_len = 3
+leader = ","
+[keybindings.normal]
+"<leader>pp" = "clipboard_replace_buffer"
+"<leader>pv" = "paste_from_clipboard"
+"<leader>gr" = "git_revert_hunk"
+"<leader>ge" = "llm_quick_check_english"
+"<alt-q>" = "force_quit"
+"<alt-b>" = "list_buffers"
+"<alt-d>" = "delete_line"
+"<alt-e>" = "find_file"
+"<alt-w>" = "save_fmt"
+"<alt-x>" = "delete_buffer"
+"<alt-->" = "prev_buffer"
+"<alt-=>" = "next_buffer"
+"<ctrl-b>" = "open_mru"
+"l" = "git_next_hunk"
+"L" = "git_prev_hunk"
+"<Tab>" = "next_window"
+"<f1>" = "git_status"
+"<f8>" = "function_list"
+"<f9>" = "git_log"
+"<f10>" = "llm_quick_translate_chinese"
+"<f2>" = "toggle_comment_and_move_down"
+"<f11>" = "ripgrep_last"
+
+[keybindings.insert]
+"<ctrl-b>" = "open_mru"
+"<alt-b>" = "list_buffers"
+"<alt-d>" = "delete_line"
+"<alt-e>" = "find_file"
+"<alt-w>" = "save_fmt"
+"<alt-x>" = "delete_buffer"
+"<alt-q>" = "force_quit"
+
+[keybindings.visual]
+"+" = "yank_to_clipboard"
+"<f11>" = "llm_quick_translate_chinese"
+[llm]
+enabled = true
+temperature = 0.7
+max_tokens = 4096
+timeout_secs = 120
+streaming = true
+
+[llm.backend]
+LlamaCpp = { endpoint = "http://localhost:11838", model = "gemma4" }
