@@ -55,6 +55,7 @@ pub enum Language {
     PlainText,
     GitLog,
     GitDiff,
+    Build,
 }
 
 impl Language {
@@ -78,6 +79,7 @@ impl Language {
             Language::Python => "python",
             Language::GitLog => "gitlog",
             Language::GitDiff => "gitlog",
+            Language::Build => "build",
             Language::PlainText => "plain",
         }
     }
@@ -91,6 +93,7 @@ impl Language {
             Language::Python => "python",
             Language::PlainText => "plain",
             Language::GitLog => "plain",
+            Language::Build => "plain",
             Language::GitDiff => "plain",
         }
     }
@@ -161,6 +164,7 @@ pub enum BufferKind {
     LlmInput,
     GitStatus,
     GitLog,
+    Build,
 }
 
 impl BufferKind {
@@ -173,7 +177,11 @@ impl BufferKind {
     pub fn is_readonly(&self) -> bool {
         matches!(
             self,
-            BufferKind::Ripgrep | BufferKind::GitDiff | BufferKind::GitLog | BufferKind::Llm
+            BufferKind::Ripgrep
+                | BufferKind::Build
+                | BufferKind::GitDiff
+                | BufferKind::GitLog
+                | BufferKind::Llm
         )
     }
 
@@ -181,7 +189,11 @@ impl BufferKind {
     pub fn is_ephemeral(&self) -> bool {
         matches!(
             self,
-            BufferKind::Ripgrep | BufferKind::GitDiff | BufferKind::GitLog | BufferKind::Llm
+            BufferKind::Ripgrep
+                | BufferKind::GitDiff
+                | BufferKind::GitLog
+                | BufferKind::Llm
+                | BufferKind::Build
         )
     }
 }

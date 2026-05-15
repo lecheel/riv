@@ -1,5 +1,6 @@
 // src/ed/mod.rs
 mod buffer_ops;
+pub mod build;
 mod codeium;
 mod command;
 mod completion;

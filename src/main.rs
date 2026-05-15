@@ -85,8 +85,9 @@ fn main() {
     // Initialize logger with appropriate level
     let log_level = if cli.verbose { "info" } else { "warn" };
     env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or(format!("riv={}", log_level))
-    ).init();
+        env_logger::Env::default().default_filter_or(format!("riv={}", log_level)),
+    )
+    .init();
 
     // Run health check if requested
     if cli.healthy {

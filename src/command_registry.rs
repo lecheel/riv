@@ -5,6 +5,7 @@ use crate::command::CommandRegistry;
 use crate::popup::FilePicker;
 use crate::window::SplitDirection;
 
+use crate::ed::build::BuildExt;
 use crate::ed::git_diff::GitDiffExt;
 use crate::ed::git_status::GitStatusExt;
 use crate::ed::BufferOpsExt;
@@ -682,14 +683,51 @@ fn rg_close_handler(e: &mut Editor, _args: &str) -> CommandResult {
     e.ripgrep_close_buffer()
 }
 
-/// :cn — next ripgrep result
-fn cn_handler(e: &mut Editor, _args: &str) -> CommandResult {
-    e.process_action(Action::RipgrepNextResult)
-}
+/// `:copen` / `:clist` — Open the build output buffer (reuses existing if present).
+fn clist_handler(e: &mut Editor, _args: &str) -> CommandResult {
+    use crate::buffer::BufferKind;
 
-/// :cp — previous ripgrep result
+    // Extract the ID first, dropping the immutable borrow before any mutation
+    let existing_build_id = e
+        .buffers
+        .iter()
+        .find(|b| b.kind == BufferKind::Build)
+        .map(|b| b.id);
+
+    if let Some(id) = existing_build_id {
+        if let Some(w) = e.windows.active_window_mut() {
+            w.set_buffer(id);
+        }
+        e.dirty.mark_all();
+        CommandResult::ViewChanged
+    } else {
+        // No build buffer exists yet — run a fresh build
+        e.run_build()
+    }
+}
+/// :cn — next quickfix result (works for both ripgrep and build)
+fn cn_handler(e: &mut Editor, _args: &str) -> CommandResult {
+    if e.quickfix_results.is_empty() {
+        return CommandResult::Message("No quickfix results".into());
+    }
+    if e.quickfix_index < e.quickfix_results.len() - 1 {
+        e.quickfix_index += 1;
+    } else {
+        e.quickfix_index = 0; // wrap around
+    }
+    e.quickfix_goto()
+}
+/// :cp — previous quickfix result (works for both ripgrep and build)
 fn cp_handler(e: &mut Editor, _args: &str) -> CommandResult {
-    e.process_action(Action::RipgrepPrevResult)
+    if e.quickfix_results.is_empty() {
+        return CommandResult::Message("No quickfix results".into());
+    }
+    if e.quickfix_index > 0 {
+        e.quickfix_index -= 1;
+    } else {
+        e.quickfix_index = e.quickfix_results.len() - 1; // wrap around
+    }
+    e.quickfix_goto()
 }
 
 fn keymap_handler(e: &mut Editor, args: &str) -> CommandResult {
@@ -802,6 +840,20 @@ fn functions_handler(
 ) -> crate::editor::CommandResult {
     editor.show_function_list()
 }
+
+/// `:build` — Run `cargo build --release` and show errors in a build buffer.
+fn build_handler(e: &mut Editor, _args: &str) -> CommandResult {
+    e.run_build()
+}
+
+/// `:make` — Alias for `:build` (Vim muscle memory).
+fn make_handler(e: &mut Editor, args: &str) -> CommandResult {
+    // If args provided, they could be make/cargo flags in the future.
+    // For now, just delegate to build.
+    let _ = args;
+    e.run_build()
+}
+
 // ---------------------- Builder function --------------------------
 
 pub fn build_command_registry() -> CommandRegistry {
@@ -1177,6 +1229,25 @@ pub fn build_command_registry() -> CommandRegistry {
 
     reg.register_handler("reg", reg_handler, "Show contents of all registers");
     reg.alias("registers", "reg");
+
+    // ── Build ──────────────────────────────────────────────────────
+    reg.register_handler(
+        "build",
+        build_handler,
+        "Run cargo build --release and show errors in a buffer",
+    );
+    reg.alias("Build", "build");
+    reg.alias("cargo", "build");
+    reg.alias("Cargo", "build");
+
+    reg.register_handler(
+        "clist",
+        clist_handler,
+        "Open build output buffer (or run :build if none exists)",
+    );
+    reg.alias("copen", "clist");
+    reg.alias("Clist", "clist");
+    reg.alias("Copen", "clist");
 
     // Formatting
     reg.register_handler("fmt", fmt_handler, "Format buffer with external formatter");

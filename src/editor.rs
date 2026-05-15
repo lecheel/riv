@@ -26,6 +26,7 @@ use crate::window::WindowManager;
 use tokio::sync::mpsc;
 // Import the block insert state from visual module (only definition)
 use crate::codeium::CodeiumManager;
+use crate::ed::build::BuildExt;
 use crate::ed::visual::BlockInsertState;
 use crate::ed::GhostTextExt;
 use crate::ed::GotoDefExt;
@@ -464,6 +465,20 @@ pub struct Editor {
     /// Most-recently-used file manager.
     pub mru: MruManager,
 
+    // ==================== Build ====================
+    /// Parsed diagnostics from the last `:build` run.
+    pub build_diagnostics: Vec<crate::ed::build::BuildDiagnostic>,
+    /// Channel sender for background build thread.
+    pub build_response_tx: std::sync::mpsc::Sender<crate::ed::build::BuildResult>,
+    /// Channel receiver polled in tick() for completed build results.
+    pub build_response_rx: std::sync::mpsc::Receiver<crate::ed::build::BuildResult>,
+    /// Whether a build is currently in progress.
+    pub build_in_progress: bool,
+    /// Timestamp when the current build started.
+    pub build_start_time: Option<std::time::Instant>,
+    /// Current frame index for the build spinner animation.
+    pub build_spinner_idx: usize,
+
     // === visual selectrion ===
     /// Last visual selection range (start_line, end_line), 0-based, inclusive.
     /// Persists after leaving visual mode — used by :'<,'> and :% commands.
@@ -576,6 +591,7 @@ impl Editor {
         let mut search_prompt = MiniInputPrompt::new();
         search_prompt.history = history_data.search.clone();
         search_prompt.history_index = search_history_len;
+        let (build_tx, build_rx) = std::sync::mpsc::channel();
 
         Editor {
             // Core Components
@@ -725,7 +741,12 @@ impl Editor {
             fmt_info_popup_title: "Format Info".to_string(),
 
             visual_selection_range: None,
-
+            build_diagnostics: Vec::new(),
+            build_response_tx: build_tx,
+            build_response_rx: build_rx,
+            build_in_progress: false,
+            build_start_time: None,
+            build_spinner_idx: 0,
             // MRU
             mru: {
                 let mut m = MruManager::new(
@@ -1234,6 +1255,35 @@ impl Editor {
                                 return self.git_diff_close();
                             }
                             _ => {} // fall through to normal navigation keybinds
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── Build buffer special keys ── BUILD
+        if self.mode == Mode::Normal {
+            if let Some(window) = self.windows.active_window() {
+                if let Some(buffer) = self.buffers.get(&window.buffer_id) {
+                    if buffer.kind == BufferKind::Build {
+                        match key {
+                            Key::Enter => {
+                                self.dirty.mark_all();
+                                return self.build_goto_error();
+                            }
+                            Key::Char('n') => {
+                                return self.build_next_error();
+                            }
+                            Key::Char('N') => {
+                                return self.build_prev_error();
+                            }
+                            Key::Char('q') | Key::Char('Q') | Key::Escape => {
+                                return self.build_close();
+                            }
+                            _ => {
+                                // Fall through to normal navigation keybinds
+                                // (j, k, Ctrl-u/d, G, gg, etc.)
+                            }
                         }
                     }
                 }
@@ -3202,6 +3252,7 @@ impl Editor {
         self.tick_git();
         self.update_which_key_debounce();
         self.poll_llm_responses();
+        self.tick_build();
 
         // ── Ghost text: log current state before polling ──
         if !self.ghost_text.is_pending() {
