@@ -114,8 +114,6 @@ This editor is optimized for my daily development workflow. Some operations diff
 | `:bn` / `:bp` | Next / previous buffer |
 | `:bd` | Delete buffer |
 | `:sp` / `:vs` | Horizontal / vertical split |
-| `:term` | Open terminal |
-| `:!<cmd>` | Run shell command |
 | `:reg` | Show registers |
 | `:help` | Show help |
 | `:set nu` / `:set nonu` | Toggle line numbers |
@@ -130,7 +128,6 @@ This editor is optimized for my daily development workflow. Some operations diff
 | Save and format | `:x` |
 | Open file | `:e` or `Ctrl-p` (picker) |
 | New file | `:new` or `Ctrl-w n` |
-| Find file | `Ctrl-p` |
 | MRU | `:mru` |
 | Buffer list | `:ls` |
 | Next/prev buffer | `:bn` / `:bp` |
@@ -151,9 +148,6 @@ This editor is optimized for my daily development workflow. Some operations diff
 | Key | Action |
 |-----|--------|
 | `gd` | Go to definition |
-| `K` | Hover info |
-| `Ctrl-space` | Trigger completion |
-| `Alt-/` | Codeium AI completion |
 
 ### AI & LLM Features
 
@@ -183,12 +177,14 @@ This editor is optimized for my daily development workflow. Some operations diff
 | `ghr` | Revert hunk |
 | `ghg` | Toggle git gutter |
 | `:Git` | Git status buffer |
-| `:Git diff` | Git diff viewer |
-| `:Git log` | Git log explorer |
+| `:Glog` | Git log explorer |
+| `:GStatus` | Git log explorer |
+| `:GCommit` | Git commit |
 
 **In Git status buffer:**
 - `s` – Stage file
 - `a` – Add file
+- `c` – Commit
 - `Enter` – Open file
 - `r` – Refresh
 - `q` – Close
@@ -216,7 +212,6 @@ This editor is optimized for my daily development workflow. Some operations diff
 
 | Key | Action |
 |-----|--------|
-| `Ctrl-space` | Trigger completion |
 | `Tab` / `Shift-Tab` | Next / previous completion |
 | `Enter` | Confirm completion |
 | `Ctrl-e` | Cancel completion |
