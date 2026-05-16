@@ -20,6 +20,10 @@ use crate::ed::WindowExt;
 use crate::editor::{CommandResult, Editor, Mode};
 
 // ---------------------- Handler functions -------------------------
+fn shortcuts_handler(e: &mut Editor, _args: &str) -> CommandResult {
+    use crate::ed::ShortcutsExt;
+    e.show_shortcuts()
+}
 
 // ── LLM handlers ───────────────────────────────────────────────────
 
@@ -1247,6 +1251,13 @@ pub fn build_command_registry() -> CommandRegistry {
     reg.alias("bookmark", "bm");
     reg.alias("marks", "bm");
     reg.alias("Bookmarks", "bm");
+
+    reg.register_handler(
+        "shortcuts",
+        shortcuts_handler,
+        "Show keybindings for current mode in a float popup",
+    );
+    reg.alias("sc", "shortcuts");
 
     reg.register_handler(
         "clist",

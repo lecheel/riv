@@ -194,3 +194,48 @@ pub fn sanitize_single_line_by_width(s: &str, max_display_width: usize) -> Strin
 
     result
 }
+
+/// Parse a shortcut key string (e.g. "gx" or "f") into a sequence of Keys.
+/// Currently only supports simple character sequences (no modifiers like Ctrl).
+pub fn parse_shortcut_keys(s: &str) -> Option<Vec<crate::terminal::Key>> {
+    if s.is_empty() {
+        return None;
+    }
+    let keys: Vec<crate::terminal::Key> = s
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .map(crate::terminal::Key::Char)
+        .collect();
+    if keys.is_empty() {
+        None
+    } else {
+        Some(keys)
+    }
+}
+
+/// Format a sequence of keys for display (e.g. [Char('g'), Char('x')] -> "gx").
+pub fn format_shortcut_keys(keys: &[crate::terminal::Key]) -> String {
+    keys.iter()
+        .map(|k| match k {
+            crate::terminal::Key::Char(c) => c.to_string(),
+            _ => format!("{:?}", k),
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+/// Convert a grapheme-based column to a char offset within a line.
+pub fn grapheme_col_to_char_offset(rope: &ropey::Rope, line: usize, grapheme_col: usize) -> usize {
+    // Convert the RopeSlice to a String so we can use the graphemes() method
+    let line_text = rope.line(line).to_string();
+    let mut offset = 0;
+    let mut g_count = 0;
+    for g in line_text.graphemes(true) {
+        if g_count >= grapheme_col {
+            break;
+        }
+        offset += g.chars().count(); // char count, not byte count
+        g_count += 1;
+    }
+    offset
+}

@@ -264,6 +264,7 @@ pub enum Action {
     RegisterPrefix,
     FunctionList,
 
+    ShowShortcuts,
     Quit,
     ForceQuit,
     ShowHelp,
@@ -485,6 +486,7 @@ impl Action {
             | Self::ToggleWhitespace
             | Self::ClearMessages
             | Self::RepeatLastAction
+            | Self::ShowShortcuts
             | Self::RunBuild
             | Self::None => ActionCategory::Misc,
         }

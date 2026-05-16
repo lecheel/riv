@@ -914,19 +914,19 @@ fn render_status(
 // -----------------------------------------------------------------------------
 // Popup renderers using rounded_box
 // -----------------------------------------------------------------------------
-
 fn render_float_popup(
-    _editor: &Editor,
+    editor: &Editor,
     stdout: &mut std::io::Stdout,
     popup: &FloatPopup,
     term_width: u16,
     term_height: u16,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let status_height = 3;
-    let _edit_height = term_height.saturating_sub(status_height);
 
     let pw = popup.width.min(term_width.saturating_sub(4));
-    let max_rows = popup.max_height.min(term_height.saturating_sub(5));
+    let max_rows = popup
+        .max_height
+        .min(term_height.saturating_sub(status_height).saturating_sub(2));
     let display_lines: Vec<&str> = popup
         .lines
         .iter()
@@ -936,7 +936,12 @@ fn render_float_popup(
     let content_rows = display_lines.len();
     let total_height = (content_rows + 2) as u16;
 
-    let (x, y) = centered_in_edit(pw, total_height, term_width, term_height, status_height);
+    // ── Bottom-right: grow upward from status bar, 1-col margin on right ──
+    let x = term_width.saturating_sub(pw).saturating_sub(1);
+    let y = term_height
+        .saturating_sub(status_height)
+        .saturating_sub(total_height);
+
     clear_rect(stdout, x, y, pw, total_height, catppuccin::MANTLE)?;
 
     let border_style = BoxStyle::default()
@@ -946,13 +951,48 @@ fn render_float_popup(
 
     draw_border(stdout, x, y, pw, total_height, &border_style)?;
 
+    // ── Render each line with shortcut hints if in shortcut mode ──
+
     for (i, line) in display_lines.iter().enumerate() {
         let row_y = y + 1 + i as u16;
+
         let row_style = RowStyle::normal()
             .with_border(catppuccin::SURFACE2)
-            .with_bg(catppuccin::MANTLE)
-            .with_text(catppuccin::TEXT);
-        draw_row_text(stdout, x, row_y, pw, line, &row_style)?;
+            .with_bg(catppuccin::MANTLE);
+
+        if editor.shortcut_active {
+            // Line format from shortcuts.rs: "  {key:<width$}  {description}"
+            let trimmed = line.trim_start();
+            let (key_str, display_text) = match trimmed.split_once(|c: char| c.is_whitespace()) {
+                Some((k, rest)) => (k, rest.trim_start()),
+                None => (trimmed, ""),
+            };
+
+            let mut segments = vec![Segment::new("[", catppuccin::TEXT)];
+
+            // Highlight the already-typed prefix vs remaining keys
+            let pending_str = crate::misc::format_shortcut_keys(&editor.shortcut_pending_keys);
+
+            if !pending_str.is_empty() && key_str.starts_with(&pending_str) {
+                // Highlight the typed part (e.g. "g")
+                segments.push(Segment::new(&pending_str, catppuccin::PEACH));
+                // Dim the remaining part (e.g. ",x")
+                let remaining = &key_str[pending_str.len()..];
+                if !remaining.is_empty() {
+                    segments.push(Segment::new(remaining, catppuccin::OVERLAY0));
+                }
+            } else {
+                // No pending prefix, show the full key sequence in green
+                segments.push(Segment::new(key_str, catppuccin::GREEN));
+            }
+
+            segments.push(Segment::new("] ", catppuccin::TEXT));
+            segments.push(Segment::new(display_text, catppuccin::TEXT));
+
+            draw_row(stdout, x, row_y, pw, &segments, &row_style)?;
+        } else {
+            draw_row_text(stdout, x, row_y, pw, line, &row_style)?;
+        }
     }
 
     Ok(())

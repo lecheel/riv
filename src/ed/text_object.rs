@@ -41,7 +41,6 @@ use crate::ed::MovementExt;
 use crate::editor::{Editor, Mode};
 use crate::popup::FunctionEntry;
 use crate::CommandResult;
-use log::debug;
 
 // ── Kinds & operators ───────────────────────────────────────────────
 
@@ -605,7 +604,6 @@ impl Editor {
         let window = match self.windows.active_window() {
             Some(w) => w,
             None => {
-                debug!("[fn_name] no active window");
                 self.current_function_name = None;
                 self.fn_name_cache_key = None;
                 return;
@@ -620,29 +618,16 @@ impl Editor {
             return;
         }
 
-        debug!(
-            "[fn_name] recomputing: needs_update={}, old_key={:?}, new_key={:?}",
-            self.fn_name_needs_update, self.fn_name_cache_key, cache_key
-        );
-
         self.fn_name_needs_update = false;
         self.fn_name_cache_key = Some(cache_key);
 
         // Skip special buffer types and buffers without language support
         if let Some(buffer) = self.buffers.get(&buffer_id) {
-            debug!(
-                "[fn_name] buffer kind={:?}, language={:?}, has_file={:?}",
-                buffer.kind,
-                buffer.language,
-                buffer.file_path.as_ref().map(|p| p.display().to_string()),
-            );
             if buffer.kind != BufferKind::Normal || buffer.language.is_none() {
-                debug!("[fn_name] skipping: non-Normal buffer or no language");
                 self.current_function_name = None;
                 return;
             }
         } else {
-            debug!("[fn_name] buffer not found for id={:?}", buffer_id);
             self.current_function_name = None;
             return;
         }
@@ -651,29 +636,18 @@ impl Editor {
         if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
             let had_tree_before = buffer.tree().is_some();
             if buffer.tree().is_none() {
-                debug!("[fn_name] initializing tree-sitter");
                 buffer.init_tree_sitter();
             } else {
                 buffer.reparse_tree();
             }
             let has_tree_after = buffer.tree().is_some();
-            debug!(
-                "[fn_name] tree-sitter: had_tree={}, has_tree_now={}",
-                had_tree_before, has_tree_after
-            );
         }
 
         // Compute the function name
         let new_name = self.compute_current_function_name();
 
-        debug!("[fn_name] computed={:?}", new_name);
-
         // Only mark powerline dirty if name actually changed
         if self.current_function_name != new_name {
-            debug!(
-                "[fn_name] changed: old={:?}, new={:?}",
-                self.current_function_name, new_name
-            );
             self.current_function_name = new_name;
             self.dirty.status_powerline = true;
         }
@@ -695,46 +669,21 @@ impl Editor {
         let tree = match buffer.tree() {
             Some(t) => t,
             None => {
-                debug!("[fn_name] compute: no tree for buffer {:?}", buffer_id);
                 return None;
             }
         };
         let root = tree.root_node();
 
-        debug!(
-            "[fn_name] compute: cursor=({}, {}), root_kind={}, root_bytes=({},{})",
-            cursor_pos.line,
-            cursor_pos.col,
-            root.kind(),
-            root.start_byte(),
-            root.end_byte()
-        );
-
         let byte_off = match cursor_pos_to_byte(buffer, cursor_pos) {
             Some(b) => b,
             None => {
-                debug!(
-                    "[fn_name] compute: cursor_pos_to_byte returned None for ({}, {})",
-                    cursor_pos.line, cursor_pos.col
-                );
                 return None;
             }
         };
 
-        debug!("[fn_name] compute: byte_off={}", byte_off);
-
         let mut node = match root.descendant_for_byte_range(byte_off, byte_off) {
-            Some(n) => {
-                debug!(
-                    "[fn_name] compute: descendant kind={}, bytes=({},{})",
-                    n.kind(),
-                    n.start_byte(),
-                    n.end_byte()
-                );
-                n
-            }
+            Some(n) => n,
             None => {
-                debug!("[fn_name] compute: no descendant at byte {}", byte_off);
                 return None;
             }
         };
@@ -742,16 +691,9 @@ impl Editor {
         let mut depth = 0;
         loop {
             let is_fn = FUNCTION_KINDS.contains(&node.kind());
-            debug!(
-                "[fn_name] compute: walk depth={} kind={} is_function={}",
-                depth,
-                node.kind(),
-                is_fn
-            );
 
             if is_fn {
                 let name = extract_node_name(buffer, &node);
-                debug!("[fn_name] compute: found function, name={:?}", name);
                 return Some(name);
             }
             match node.parent() {
@@ -760,7 +702,6 @@ impl Editor {
                     node = p;
                 }
                 None => {
-                    debug!("[fn_name] compute: reached root without finding function");
                     return None;
                 }
             }

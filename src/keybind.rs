@@ -1231,6 +1231,7 @@ pub fn parse_action_str(s: &str) -> Option<Action> {
         RunBuild,
         ToggleLineNumbers | "set nu",
         ToggleWhitespace,
+        ShowShortcuts,
         ClearMessages,
         RegisterPrefix | "\"",
         RepeatLastAction | "."

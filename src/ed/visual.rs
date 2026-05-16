@@ -11,6 +11,7 @@ use crate::buffer::CursorPosition;
 use crate::ed::editing::EditingExt;
 use crate::ed::GitExt;
 use crate::editor::{Editor, Mode};
+use crate::misc::grapheme_col_to_char_offset;
 use crate::CommandResult;
 
 /// State for a visual-block insert/append operation.
@@ -266,49 +267,71 @@ impl VisualExt for Editor {
             Some(r) => r,
             None => return,
         };
-
         let buffer_id = match self.windows.active_window() {
             Some(w) => w.buffer_id,
             None => return,
         };
 
-        // Collect deleted text for yank register (optional future use).
-        let mut deleted_parts: Vec<String> = Vec::new();
-
         self.ensure_undo_group();
 
-        // Delete from bottom to top to preserve line indices.
-        for line in (top..=bot).rev() {
-            if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
-                let line_text = buffer.line_text(line).unwrap_or_default();
+        // Phase 1: Collect char ranges and yank text (immutable borrow)
+        let (ranges, yanked_parts) = {
+            let buffer = match self.buffers.get(&buffer_id) {
+                Some(b) => b,
+                None => {
+                    self.close_undo_group();
+                    return;
+                }
+            };
+
+            let mut ranges = Vec::new(); // (start_char, end_char) per line
+            let mut yanked_parts = Vec::new();
+
+            for line in top..=bot {
+                let line_text = buffer.rope.line(line).to_string();
                 let graphemes: Vec<_> = line_text.trim_end_matches('\n').graphemes(true).collect();
                 let end_col = (right + 1).min(graphemes.len());
                 let del_count = end_col.saturating_sub(left);
 
-                if left < graphemes.len() && left < end_col && del_count > 0 {
-                    let deleted: String = graphemes[left..end_col].join("");
-                    deleted_parts.push(deleted);
-                    buffer.delete_at(CursorPosition::new(line, left), del_count);
-                } else if left <= graphemes.len() {
-                    // Line is shorter than the selection — nothing to delete.
-                    deleted_parts.push(String::new());
+                if left < graphemes.len() && del_count > 0 {
+                    let line_start = buffer.rope.try_line_to_char(line).unwrap_or(0);
+                    let col_start = line_start
+                        + crate::misc::grapheme_col_to_char_offset(&buffer.rope, line, left);
+                    let col_end = line_start
+                        + crate::misc::grapheme_col_to_char_offset(&buffer.rope, line, end_col);
+
+                    ranges.push((col_start, col_end));
+                    yanked_parts.push(graphemes[left..end_col].join(""));
+                } else {
+                    ranges.push((0, 0)); // nothing to delete on this line
+                    yanked_parts.push(String::new());
                 }
             }
+            (ranges, yanked_parts)
+        };
+
+        // Phase 2: Apply deletions bottom-to-top (mutable borrow)
+        if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
+            for i in (top..=bot).rev() {
+                let (start_char, end_char) = ranges[i - top];
+                if start_char < end_char {
+                    buffer.rope.remove(start_char..end_char);
+                }
+            }
+            buffer.dirty = true;
+            buffer.reparse_tree();
         }
 
         self.close_undo_group();
         self.invalidate_git_gutter();
 
-        // Store deleted text in yank register (join with newlines) & sync clipboard
-        self.set_yank_register(deleted_parts.join("\n"));
+        self.set_yank_register(yanked_parts.join("\n"));
 
-        // Position cursor at top-left of the deleted region.
         if let Some(window) = self.windows.active_window_mut() {
             window.cursor.position = CursorPosition::new(top, left);
             window.cursor.desired_col = None;
             window.selection_anchor = None;
         }
-
         self.enter_mode(Mode::Normal);
         self.dirty.mark_all();
     }
@@ -367,31 +390,62 @@ impl VisualExt for Editor {
         };
         let buffer_id = window.buffer_id;
 
-        // ── Yank the lines before deleting ──
-        if let Some(buffer) = self.buffers.get(&buffer_id) {
-            let mut parts = Vec::new();
-            for line in top..=bot {
-                if let Some(text) = buffer.line_text(line) {
-                    parts.push(text.trim_end_matches('\n').to_string());
-                }
+        self.ensure_undo_group();
+
+        let mut yanked_text = String::new();
+        let mut delete_range = None;
+
+        // Phase 1: Collect yank text and char range
+        if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
+            let line_count = buffer.rope.len_lines();
+            let top_line = top.min(line_count.saturating_sub(1));
+            let bot_line = bot.min(line_count.saturating_sub(1));
+
+            // Start: beginning of top line
+            let start_char = buffer.rope.try_line_to_char(top_line).unwrap_or(0);
+            // End: beginning of line AFTER bot line (includes the newline of bot line)
+            let end_char = if bot_line + 1 < line_count {
+                buffer
+                    .rope
+                    .try_line_to_char(bot_line + 1)
+                    .unwrap_or(buffer.rope.len_chars())
+            } else {
+                buffer.rope.len_chars()
+            };
+
+            if start_char < end_char {
+                let raw = buffer.rope.slice(start_char..end_char).to_string();
+                yanked_text = raw.trim_end_matches('\n').to_string();
+                delete_range = Some((start_char, end_char));
             }
-            self.set_yank_register(parts.join("\n"));
+        } // mutable borrow of buffer ends here
+
+        // Phase 2: Set register and perform deletion (safe to borrow self again)
+        if !yanked_text.is_empty() {
+            self.set_yank_register(yanked_text);
         }
 
-        // Delete lines bottom‑to‑top.
-        self.ensure_undo_group();
-        for line in (top..=bot).rev() {
-            if let Some(w) = self.windows.active_window() {
-                if let Some(buffer) = self.buffers.get_mut(&w.buffer_id) {
-                    buffer.delete_line(line);
-                }
+        if let Some((start_char, end_char)) = delete_range {
+            if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
+                buffer.rope.remove(start_char..end_char);
+                buffer.dirty = true;
+                buffer.reparse_tree();
             }
         }
-        self.close_undo_group();
+
         self.invalidate_git_gutter();
+        self.close_undo_group();
 
         if let Some(w) = self.windows.active_window_mut() {
-            w.cursor.position = CursorPosition::new(top, 0);
+            let clamped_line = if let Some(buffer) = self.buffers.get(&buffer_id) {
+                w.cursor
+                    .position
+                    .line
+                    .min(buffer.line_count().saturating_sub(1))
+            } else {
+                top
+            };
+            w.cursor.position = CursorPosition::new(clamped_line, 0);
             w.cursor.desired_col = None;
             w.selection_anchor = None;
         }
@@ -453,89 +507,43 @@ impl VisualExt for Editor {
 
         let buffer_id = window.buffer_id;
 
-        // ── Collect text to yank BEFORE any mutation ──
-        let yanked_text = if start.line == end.line {
-            if let Some(buffer) = self.buffers.get(&buffer_id) {
-                let text = buffer.line_text(start.line).unwrap_or_default();
-                let g: Vec<_> = text.trim_end_matches('\n').graphemes(true).collect();
-                let count = end.col.saturating_sub(start.col);
-                if count > 0 {
-                    g[start.col..(start.col + count).min(g.len())].join("")
-                } else {
-                    String::new()
-                }
-            } else {
-                String::new()
-            }
-        } else {
-            let mut parts = Vec::new();
-            if let Some(buffer) = self.buffers.get(&buffer_id) {
-                // First line: from start.col to end
-                let first_text = buffer.line_text(start.line).unwrap_or_default();
-                let g: Vec<_> = first_text.trim_end_matches('\n').graphemes(true).collect();
-                let start_idx = start.col.min(g.len());
-                parts.push(g[start_idx..].join(""));
+        // Ensure undo group wraps the direct rope mutation
+        self.ensure_undo_group();
 
-                // Middle lines: full content
-                for line in (start.line + 1)..end.line {
-                    if let Some(t) = buffer.line_text(line) {
-                        parts.push(t.trim_end_matches('\n').to_string());
-                    }
-                }
+        let mut yanked_text = String::new();
 
-                // Last line: from 0 to end.col
-                if let Some(t) = buffer.line_text(end.line) {
-                    let g: Vec<_> = t.trim_end_matches('\n').graphemes(true).collect();
-                    parts.push(g[..end.col.min(g.len())].join(""));
-                }
-            }
-            parts.join("\n")
-        };
+        if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
+            let line_count = buffer.rope.len_lines();
+            let start_line = start.line.min(line_count.saturating_sub(1));
+            let end_line = end.line.min(line_count.saturating_sub(1));
 
-        // ── Perform the deletion ──
-        if start.line == end.line {
-            if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
-                let count = end.col.saturating_sub(start.col);
-                if count > 0 {
-                    buffer.delete_at(start, count);
-                    self.invalidate_git_gutter();
-                }
-            }
-        } else {
-            self.ensure_undo_group();
+            let start_char = buffer.rope.try_line_to_char(start_line).unwrap_or(0)
+                + grapheme_col_to_char_offset(&buffer.rope, start_line, start.col);
+            let end_char = buffer.rope.try_line_to_char(end_line).unwrap_or(0)
+                + grapheme_col_to_char_offset(&buffer.rope, end_line, end.col);
 
-            // Delete partial end line (col 0..end.col)
-            if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
-                let end_col = end.col.min(buffer.line_len(end.line));
-                if end_col > 0 {
-                    buffer.delete_at(CursorPosition::new(end.line, 0), end_col);
-                }
+            if start_char >= end_char {
+                self.close_undo_group();
+                return;
             }
 
-            // Delete full intermediate lines (bottom-up to preserve indices)
-            for line in ((start.line + 1)..end.line).rev() {
-                if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
-                    buffer.delete_line(line);
-                }
-            }
+            // Yank (single rope slice)
+            yanked_text = buffer.rope.slice(start_char..end_char).to_string();
 
-            // Delete partial start line (from start.col to end-of-line)
-            if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
-                let line_len = buffer.line_len(start.line);
-                let count = line_len.saturating_sub(start.col);
-                if count > 0 {
-                    buffer.delete_at(start, count);
-                }
-            }
-
-            self.close_undo_group();
-            self.invalidate_git_gutter();
+            // Delete (direct rope remove - undo is tracked by ensure/close_undo_group)
+            buffer.rope.remove(start_char..end_char);
+            buffer.dirty = true;
+            buffer.reparse_tree();
         }
 
-        // ── Yank the deleted text ──
+        self.invalidate_git_gutter();
+
+        // Now safe to mutate self after releasing the buffer borrow
         if !yanked_text.is_empty() {
             self.set_yank_register(yanked_text);
         }
+
+        self.close_undo_group();
 
         if let Some(w) = self.windows.active_window_mut() {
             w.cursor.position = start;

@@ -707,31 +707,40 @@ impl LlmExt for Editor {
             Mode::Visual | Mode::VisualLine | Mode::VisualBlock
         );
 
-        // Grab text: visual selection → fallback to current line
-        let text = if was_visual {
-            self.get_selection_text().unwrap_or_default()
-        } else {
-            self.current_line_content()
-        };
+        // ── 1. Grab text: stashed → live visual → current line ──
+        let text = self
+            .shortcut_visual_context
+            .take()
+            .or_else(|| {
+                if was_visual {
+                    self.get_selection_text()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| self.current_line_content());
 
-        // Clear visual selection AND return to Normal mode
+        // ── 2. Clean up visual state once ──
         if let Some(w) = self.windows.active_window_mut() {
             w.selection_anchor = None;
         }
         if was_visual {
             self.mode = Mode::Normal;
-            self.dirty.status_powerline = true; // Update mode indicator
+            self.dirty.status_powerline = true;
         }
 
         if text.trim().is_empty() {
             self.set_infobar_message("No text to process".to_string());
-            return CommandResult::ViewChanged;
+            return if was_visual {
+                CommandResult::ModeChanged(Mode::Normal)
+            } else {
+                CommandResult::ViewChanged
+            };
         }
 
-        // Record for dot-repeat
+        // ── 3. Record & spawn LLM request ──
         self.record_action(RepeatableAction::LlmQuickAction { preset }, 1);
 
-        // ── Single-shot: no session, no conversation history ──
         self.llm_single_shot = true;
         self.llm_infobar_response = true;
         self.llm_infobar_accumulator.clear();
@@ -750,14 +759,12 @@ impl LlmExt for Editor {
 
         self.spawn_llm_request(messages);
 
-        // Return ModeChanged if we were in Visual, so the event loop updates properly
         if was_visual {
             CommandResult::ModeChanged(Mode::Normal)
         } else {
             CommandResult::ViewChanged
         }
     }
-
     /// Return the trimmed text of the current line, for register insertion (Ctrl-R Ctrl-L).
     /// When in LlmPrompt mode, prefer a non-special buffer so we pull the
     /// source code line rather than the LLM conversation.

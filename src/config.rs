@@ -272,6 +272,10 @@ pub struct Config {
     pub llm: LlmConfig,
     #[serde(default)]
     pub format_on_save: bool,
+
+    /// Float shortcut menu mappings (key string → action string).
+    #[serde(default)]
+    pub shortcuts: std::collections::HashMap<String, String>,
 }
 
 impl Default for Config {
@@ -301,6 +305,7 @@ impl Default for Config {
             llm: LlmConfig::default(),
             codeium: CodeiumConfig::default(),
             format_on_save: false,
+            shortcuts: std::collections::HashMap::new(),
         }
     }
 }

@@ -37,6 +37,7 @@ use crate::ed::MarksExt;
 use crate::ed::RepeatableAction;
 use crate::ed::ReplaceExt;
 use crate::ed::SearchExt;
+use crate::ed::ShortcutsExt;
 use crate::ed::{
     BufferOpsExt, CommandExt, CompletionExt, EditingExt, FileOpsExt, GitExt, LlmExt, MovementExt,
     RepeatExt, RipgrepExt, VisualExt, WindowExt,
@@ -45,6 +46,8 @@ use crate::ed::{GitDiffExt, GitLogExt, GitStatusExt};
 use crate::ed::{TextObjectExt, TextObjectKind, TextObjectOperator};
 use crate::ghost_text::GhostTextManager;
 use crate::llm::{LlmBuffer, LlmPreset};
+use crate::misc::format_shortcut_keys;
+use crate::misc::parse_shortcut_keys;
 use crate::popup::Scrollable;
 use crate::prompt::MiniInputPrompt;
 use crate::prompt::PromptAction;
@@ -163,7 +166,7 @@ impl FloatPopup {
             .max()
             .unwrap_or(20)
             .max(title.chars().count());
-        let width = (content_width + 4).min(80) as u16;
+        let width = (content_width + 4).max(40).min(120) as u16;
         let max_height = (lines.len() + 3).min(20) as u16;
         Self {
             title,
@@ -474,6 +477,15 @@ pub struct Editor {
     /// Most-recently-used file manager.
     pub mru: MruManager,
 
+    // ==================== Float Shortcuts ====================
+    /// Whether the float shortcut menu is currently active (transient state).
+    pub shortcut_active: bool,
+    /// Parsed key sequences → action map for the float shortcut menu.
+    pub active_shortcuts: Vec<(Vec<crate::terminal::Key>, crate::action::Action)>,
+    /// Keys typed so far in a multi-key shortcut sequence.
+    pub shortcut_pending_keys: Vec<crate::terminal::Key>,
+    pub shortcut_visual_context: Option<String>,
+
     // ==================== Build ====================
     /// Parsed diagnostics from the last `:build` run.
     pub build_diagnostics: Vec<crate::ed::build::BuildDiagnostic>,
@@ -609,6 +621,37 @@ impl Editor {
         search_prompt.history = history_data.search.clone();
         search_prompt.history_index = search_history_len;
         let (build_tx, build_rx) = std::sync::mpsc::channel();
+
+        let active_shortcuts = {
+            let mut list = Vec::new();
+            for (key_str, action_str) in &config.shortcuts {
+                if let Some(keys) = parse_shortcut_keys(key_str) {
+                    if let Some(action) = crate::keybind::parse_action_str(action_str) {
+                        list.push((keys, action));
+                    } else {
+                        log::warn!(
+                            "[config] shortcuts: unknown action '{}' for key '{}'",
+                            action_str,
+                            key_str
+                        );
+                    }
+                } else {
+                    log::warn!(
+                        "[config] shortcuts: invalid key '{}' (use chars like 'f' or sequences like 'gf'; modifiers not supported)",
+                        key_str
+                    );
+                }
+            }
+            list.sort_by(
+                |a: &(Vec<crate::terminal::Key>, crate::action::Action),
+                 b: &(Vec<crate::terminal::Key>, crate::action::Action)| {
+                    a.0.len()
+                        .cmp(&b.0.len())
+                        .then_with(|| format_shortcut_keys(&a.0).cmp(&format_shortcut_keys(&b.0)))
+                },
+            );
+            list
+        };
 
         Editor {
             // Core Components
@@ -781,6 +824,10 @@ impl Editor {
                 m
             },
 
+            shortcut_active: false,
+            active_shortcuts,
+            shortcut_pending_keys: Vec::new(),
+            shortcut_visual_context: None,
             current_function_name: None,
             fn_name_needs_update: true,
             fn_name_cache_key: None,
@@ -916,7 +963,7 @@ impl Editor {
         // This catches ContentChanged from ALL paths: process_key's NoMatch
         // branch (insert-mode typing) AND process_action's editing actions.
         if result == CommandResult::ContentChanged {
-            self.invalidate_git_gutter();
+            self.invalidate_git_gutter(); // MAYBE CAN REMOVED
             self.notify_lsp_change();
         }
 
@@ -977,12 +1024,91 @@ impl Editor {
     fn process_key(&mut self, key: Key) -> CommandResult {
         // ── Float popup interception ──
         if self.float_popup.is_some() {
-            if key == Key::Escape {
+            if key == Key::Escape || key == Key::Ctrl('c') {
                 self.float_popup = None;
                 self.overlay.float = None;
+                self.shortcut_active = false;
+                self.shortcut_pending_keys.clear();
                 self.dirty.mark_all();
                 return CommandResult::NoOp;
             }
+
+            // ── Float Shortcut Transient State ──
+            if self.shortcut_active {
+                // Backspace: undo last pending key
+                if key == Key::Backspace {
+                    if !self.shortcut_pending_keys.is_empty() {
+                        self.shortcut_pending_keys.pop();
+                        self.rebuild_shortcut_popup();
+                        return CommandResult::NoOp;
+                    }
+                    // No pending keys — dismiss
+                    self.float_popup = None;
+                    self.overlay.float = None;
+                    self.shortcut_active = false;
+                    self.dirty.mark_all();
+                    return CommandResult::NoOp;
+                }
+
+                // Build the new prefix by appending this key
+                let mut new_prefix = self.shortcut_pending_keys.clone();
+                new_prefix.push(key);
+                let prefix_len = new_prefix.len();
+
+                // Find all shortcuts that match the new prefix
+                let matching: Vec<usize> = self
+                    .active_shortcuts
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (keys, _))| {
+                        keys.len() >= prefix_len && keys[..prefix_len] == new_prefix[..]
+                    })
+                    .map(|(i, _)| i)
+                    .collect();
+
+                if matching.is_empty() {
+                    // No match — dismiss popup
+                    self.float_popup = None;
+                    self.overlay.float = None;
+                    self.shortcut_active = false;
+                    self.shortcut_pending_keys.clear();
+                    self.dirty.mark_all();
+                    return CommandResult::NoOp;
+                }
+
+                // Commit the new prefix
+                self.shortcut_pending_keys = new_prefix;
+
+                // Check for exact match at current prefix length
+                let exact_idx = matching
+                    .iter()
+                    .find(|&&i| self.active_shortcuts[i].0.len() == prefix_len);
+                let has_longer = matching
+                    .iter()
+                    .any(|&i| self.active_shortcuts[i].0.len() > prefix_len);
+
+                if let Some(&idx) = exact_idx {
+                    if !has_longer {
+                        // Unambiguous exact match — execute immediately
+                        let action = self.active_shortcuts[idx].1.clone();
+                        self.float_popup = None;
+                        self.overlay.float = None;
+                        self.shortcut_active = false;
+                        self.shortcut_pending_keys.clear();
+                        self.dirty.mark_all();
+                        return self.process_action(action);
+                    }
+                    // Exact match exists but longer sequences are possible — wait
+                    self.rebuild_shortcut_popup();
+                    return CommandResult::NoOp;
+                }
+
+                // No exact match yet, but prefix matches — wait for more keys
+                self.rebuild_shortcut_popup();
+                return CommandResult::NoOp;
+            }
+
+            // Default float popup: dismiss and fall through to process key normally
             let old_rect = self.overlay.float;
             self.float_popup = None;
             self.overlay.float = None;
@@ -2194,6 +2320,7 @@ impl Editor {
             self.keybinds.clear_pending();
             self.mark_pending = false;
             self.goto_mark_pending = false;
+            self.shortcut_pending_keys.clear();
             if self.diff_popup.is_some() {
                 self.diff_popup = None;
                 self.dirty.diff = true;
@@ -2754,7 +2881,11 @@ impl Editor {
                 CommandResult::Message("LLM history cleared".to_string())
             }
             Action::LlmQuickTranslateChinese => {
-                self.llm_quick_action(LlmPreset::TranslateToChinese, "")
+                let ctx = self
+                    .shortcut_visual_context
+                    .take()
+                    .or_else(|| self.get_selection_text()); // fallback for direct visual keybind
+                self.llm_quick_action(LlmPreset::TranslateToChinese, &ctx.unwrap_or_default())
             }
             Action::LlmQuickTranslateEnglish => {
                 self.llm_active_preset = Some(LlmPreset::TranslateToEnglish);
@@ -3384,6 +3515,10 @@ impl Editor {
                 self.set_status(format!("{} — not yet implemented", action.label()));
                 CommandResult::NoOp
             }
+            Action::ShowShortcuts => {
+                self.show_shortcuts();
+                CommandResult::ViewChanged
+            }
             Action::RunBuild => self.run_build(),
             Action::RipgrepUnderCursor => self.ripgrep_under_cursor(),
             Action::RipgrepInput => {
@@ -3761,5 +3896,41 @@ impl Editor {
         self.mark_list_popup = Some(popup);
         self.dirty.mark_all();
         CommandResult::ViewChanged
+    }
+    /// Rebuild the shortcut popup showing only entries matching the current prefix.
+    pub(crate) fn rebuild_shortcut_popup(&mut self) {
+        let prefix = self.shortcut_pending_keys.clone();
+
+        let matching: Vec<(String, String)> = self
+            .active_shortcuts
+            .iter()
+            .filter(|(keys, _)| keys.len() >= prefix.len() && keys[..prefix.len()] == prefix[..])
+            .map(|(keys, action)| (format_shortcut_keys(keys), action.label()))
+            .collect();
+
+        let mut max_key_len = 0;
+        for (key_str, _) in &matching {
+            max_key_len = max_key_len.max(key_str.len());
+        }
+
+        let mut lines = Vec::new();
+        for (key_str, desc) in &matching {
+            lines.push(format!(
+                "  {:<width$}  {}",
+                key_str,
+                desc,
+                width = max_key_len
+            ));
+        }
+
+        let prefix_str = format_shortcut_keys(&prefix);
+        let title = if prefix_str.is_empty() {
+            " Shortcuts ".to_string()
+        } else {
+            format!(" Shortcuts [{}] ", prefix_str)
+        };
+
+        self.float_popup = Some(FloatPopup::new(title, lines));
+        self.dirty.mark_all();
     }
 } // end of imp editor
