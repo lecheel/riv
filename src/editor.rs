@@ -444,6 +444,12 @@ pub struct Editor {
     /// Whether the editor should auto-start LSP.
     auto_start_lsp: bool,
 
+    /// In-memory buffer positions for session-only buffer switching.
+    /// Maps BufferId → (cursor_position, scroll_line).
+    /// Covers ALL buffer kinds (including Ripgrep, GitDiff, etc.)
+    pub buffer_positions:
+        std::collections::HashMap<crate::buffer::BufferId, (crate::buffer::CursorPosition, usize)>,
+
     // ==================== Command System ====================
     /// Dynamic command registry for `:` commands.
     pub command_registry: CommandRegistry,
@@ -824,6 +830,7 @@ impl Editor {
                 m
             },
 
+            buffer_positions: std::collections::HashMap::new(),
             shortcut_active: false,
             active_shortcuts,
             shortcut_pending_keys: Vec::new(),

@@ -445,11 +445,10 @@ pub fn draw_powerline_status(f: &mut Frame, editor: &Editor, area: Rect) {
         // Build right side from the end toward the beginning
         // Start with buffer position
         let buf_text = format!(
-            " {} {} / {} ",
+            " {} {} ",
             glyphs::BUFFER_ICON,
-            editor.active_buffer_idx + 1,
-            editor.buffers.len()
-        );
+            editor.buffers.len());
+            
         right_spans.push(Span::styled(buf_text, Style::default().fg(SUBTEXT).bg(SURFACE1)));
         
         // Separator before buffer position

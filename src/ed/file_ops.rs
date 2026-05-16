@@ -216,26 +216,24 @@ impl FileOpsExt for Editor {
         data.save();
     }
 
-    /// Save the active window's cursor position for its buffer (if file-backed).
+    /// Save the cursor position for the active buffer.
     fn save_current_position(&mut self) {
-        let window = match self.windows.active_window() {
-            Some(w) => w,
-            None => return,
-        };
-        let buffer = match self.buffers.get(&window.buffer_id) {
-            Some(b) => b,
-            None => return,
-        };
-        if let Some(ref path) = buffer.file_path {
-            self.position_map.set(path, window.cursor.position);
-            self.mru.update_position(
-                path,
-                window.cursor.position.line,
-                window.cursor.position.col,
-            );
+        if let Some(window) = self.windows.active_window() {
+            let buffer_id = window.buffer_id;
+            let pos = window.cursor.position;
+            let scroll = window.viewport.scroll_line;
+
+            // 1. Persist file-backed buffers to disk (existing behavior)
+            if let Some(buffer) = self.buffers.get(&buffer_id) {
+                if let Some(ref path) = buffer.file_path {
+                    self.position_map.set(path, pos);
+                }
+            }
+
+            // 2. Remember ALL buffers (including special) for in-session :bn/:bp
+            self.buffer_positions.insert(buffer_id, (pos, scroll));
         }
     }
-
     /// Format the current buffer using an external formatter.
     /// Returns Ok(()) if formatting succeeded, Err(msg) otherwise.
     fn format_current_buffer(&mut self) -> Result<(), String> {
@@ -438,47 +436,29 @@ impl FileOpsExt for Editor {
         self.position_map.cleanup();
         self.position_map.save();
     }
-
-    /// Restore cursor position for the current buffer from the position map.
-    /// Call this after opening a file. Centers the viewport on the saved line.
+    /// Restore the cursor position for the active buffer.
     fn restore_cursor_position(&mut self) {
-        let (buffer_id, saved_pos) = {
-            let window = match self.windows.active_window() {
-                Some(w) => w,
-                None => return,
-            };
-            let buffer = match self.buffers.get(&window.buffer_id) {
-                Some(b) => b,
-                None => return,
-            };
-            let path = match &buffer.file_path {
-                Some(p) => p.clone(),
-                None => return,
-            };
-            let saved = match self.position_map.get(&path) {
-                Some(p) => p,
-                None => return,
-            };
-            (window.buffer_id, saved)
+        let buffer_id = match self.windows.active_window() {
+            Some(w) => w.buffer_id,
+            None => return,
         };
 
-        if let Some(window) = self.windows.active_window_mut() {
-            if let Some(buffer) = self.buffers.get(&buffer_id) {
-                let max_line = buffer.line_count().saturating_sub(1);
-                window.cursor.position.line = saved_pos.line.min(max_line);
-                let max_col = buffer.line_len(window.cursor.position.line);
-                window.cursor.position.col = saved_pos.col.min(max_col);
-                window.cursor.desired_col = None;
+        // 1. Try the in-session map first (works for ALL buffer kinds)
+        if let Some(&(pos, scroll)) = self.buffer_positions.get(&buffer_id) {
+            if let Some(window) = self.windows.active_window_mut() {
+                window.cursor.position = pos;
+                window.viewport.scroll_line = scroll;
+            }
+            return;
+        }
 
-                // Center the viewport on the restored line
-                let half = (window.height.saturating_sub(1) as usize) / 2;
-                window.viewport.scroll_line = window.cursor.position.line.saturating_sub(half);
-
-                // Clamp scroll to buffer end
-                let edit_height = window.height.saturating_sub(1) as usize;
-                if buffer.line_count() > edit_height {
-                    let max_scroll = buffer.line_count().saturating_sub(edit_height);
-                    window.viewport.scroll_line = window.viewport.scroll_line.min(max_scroll);
+        // 2. Fallback to cross-session map (file-backed only, for newly opened files)
+        if let Some(buffer) = self.buffers.get(&buffer_id) {
+            if let Some(ref path) = buffer.file_path {
+                if let Some(pos) = self.position_map.get(path) {
+                    if let Some(window) = self.windows.active_window_mut() {
+                        window.cursor.position = pos;
+                    }
                 }
             }
         }

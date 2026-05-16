@@ -744,12 +744,7 @@ fn render_status(
             .language
             .map(|l| l.as_str().to_string())
             .unwrap_or_else(|| "text".to_string());
-        let buf_pos = format!(
-            " {} {} / {} ",
-            glyphs::BUFFER_ICON,
-            editor.active_buffer_idx + 1,
-            editor.buffers.len()
-        );
+        let buf_pos = format!(" {} {} ", glyphs::BUFFER_ICON, editor.buffers.len());
 
         let left_approx = mode_text.len()
             + 2
@@ -1981,12 +1976,7 @@ fn render_powerline(
             .language
             .map(|l| l.as_str().to_string())
             .unwrap_or_else(|| "text".to_string());
-        let buf_pos = format!(
-            " {} {} / {} ",
-            glyphs::BUFFER_ICON,
-            editor.active_buffer_idx + 1,
-            editor.buffers.len()
-        );
+        let buf_pos = format!(" {} {} ", glyphs::BUFFER_ICON, editor.buffers.len());
 
         // Function name segment (optional)
         let func_display = editor.current_function_name.as_deref().map(|name| {

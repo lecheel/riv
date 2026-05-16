@@ -212,6 +212,7 @@ impl BufferOpsExt for Editor {
 
         // Now remove the deleted buffer
         self.buffers.remove(&current_id);
+        self.buffer_positions.remove(&current_id);
 
         self.dirty.mark_all();
 

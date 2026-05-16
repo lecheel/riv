@@ -135,6 +135,26 @@ impl RipgrepExt for Editor {
     }
 
     fn ripgrep_last(&mut self) -> CommandResult {
+        // ── If an RG buffer already exists, just switch to it (preserves position) ──
+        let existing_rg = self
+            .buffers
+            .iter()
+            .find(|b| b.kind == BufferKind::Ripgrep)
+            .map(|b| b.id);
+
+        if let Some(rg_id) = existing_rg {
+            self.save_current_position();
+            if let Some(window) = self.windows.active_window_mut() {
+                window.set_buffer(rg_id);
+            }
+            self.restore_cursor_position();
+            self.clamp_cursor_to_buffer(&rg_id);
+            self.ensure_cursor_visible_all();
+            self.dirty.mark_all();
+            return CommandResult::ViewChanged;
+        }
+
+        // ── No RG buffer exists — load last state and populate ──
         if self.last_rg_output.is_none() {
             self.load_last_rg_state();
         }
@@ -317,6 +337,10 @@ impl RipgrepExt for Editor {
     }
 
     fn open_file_at_line(&mut self, path: &Path, line: usize) -> Result<(), String> {
+        // Save the outgoing buffer's position (works for ALL buffer kinds,
+        // including Ripgrep, Build, GitLog, etc.)
+        self.save_current_position();
+
         let buffer_id = self.buffers.open_file(path).map_err(|e| e.to_string())?;
 
         if self.mode != Mode::Normal {
