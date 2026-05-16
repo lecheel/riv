@@ -312,7 +312,7 @@ leader = " "
 
 ```bash
 # Clone the repository
-git clone <repository-url>
+git clone https://github.com/lecheel/riv
 cd riv
 
 # Build release version
