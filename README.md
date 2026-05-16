@@ -20,6 +20,7 @@ cargo build --release
 ./target/release/riv [file]
 ```
 ![image](./riv01.png)
+![image](./riv02.png)
 ## Architecture
 
 | Component | Description |
