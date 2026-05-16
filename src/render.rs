@@ -12,6 +12,7 @@ use crate::ed::DiffPopupPrefix;
 use crate::editor::{Editor, FloatPopup, Mode, SearchDirection};
 use crate::highlight::Highlighter;
 use crate::misc::sanitize_single_line;
+use crate::popup::MarkListPopup;
 use crate::rounded_box::*;
 use crate::terminal::Terminal;
 use crate::terminal_sanitize::sanitize_for_display;
@@ -1539,6 +1540,12 @@ pub fn render(
         render_register_popup(editor, stdout, term_width, term_height)?;
     }
 
+    // Mark list popup (bottom-up)
+    if must_draw_all_popups || editor.dirty.mark_list {
+        if let Some(popup) = &editor.mark_list_popup {
+            render_mark_list_popup(popup, stdout, term_width, term_height)?;
+        }
+    }
     // Format info popup
     if must_draw_all_popups || editor.fmt_info_popup.is_some() {
         render_fmtinfo(editor, stdout, term_width, term_height)?;
@@ -2262,6 +2269,206 @@ fn render_fmtinfo(
 
     Ok(())
 }
+
+pub fn render_mark_list_popup(
+    popup: &MarkListPopup,
+    stdout: &mut std::io::Stdout,
+    term_width: u16,
+    term_height: u16,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let status_height = 3u16;
+    let edit_height = term_height.saturating_sub(status_height);
+
+    // Full width, bottom-up like register popup
+    let popup_width = term_width;
+    let x = 0u16;
+
+    let max_visible = 15usize;
+    let visible_count = popup.filtered.len().min(max_visible);
+    // +3 for top border, filter row, and bottom border
+    let total_height = visible_count as u16 + 3;
+
+    if popup_width == 0 || edit_height == 0 || total_height == 0 {
+        return Ok(());
+    }
+
+    let y = edit_height.saturating_sub(total_height);
+
+    clear_rect(stdout, x, y, popup_width, total_height, catppuccin::MANTLE)?;
+
+    // ── Title bar ──────────────────────────────────────────────────────
+    let title = format!(
+        " Marks {} ",
+        if popup.filtered.is_empty() {
+            "(no match)".to_string()
+        } else {
+            format!("({}/{})", popup.filtered.len(), popup.entries.len())
+        }
+    );
+    let title_style = BoxStyle::default()
+        .with_title(title)
+        .with_border(catppuccin::SURFACE2)
+        .with_bg(catppuccin::MANTLE);
+    draw_top_border(stdout, x, y, popup_width, &title_style)?;
+
+    // ── Filter row ─────────────────────────────────────────────────────
+    let filter_y = y + 1;
+    {
+        let filter_style = RowStyle::normal().with_bg(catppuccin::CRUST).no_padding();
+        let prompt_w = str_width(">");
+        let max_filter_len = content_width(popup_width, &filter_style).saturating_sub(prompt_w + 1);
+        let filter_display = truncate_to_width(&popup.filter, max_filter_len);
+
+        let segments = [
+            Segment::new(">", catppuccin::PEACH),
+            Segment::new(filter_display, catppuccin::TEXT),
+        ];
+        draw_row(stdout, x, filter_y, popup_width, &segments, &filter_style)?;
+
+        // Block cursor after the filter text
+        let cursor_x = x as usize + 1 + prompt_w + str_width(filter_display);
+        if (cursor_x as u16) < x + popup_width.saturating_sub(1) {
+            execute!(stdout, MoveTo(cursor_x as u16, filter_y))?;
+            execute!(
+                stdout,
+                SetBackgroundColor(catppuccin::TEXT),
+                SetForegroundColor(catppuccin::CRUST),
+                Print(" ")
+            )?;
+        }
+    }
+
+    // ── Content rows ───────────────────────────────────────────────────
+    let scroll = popup.scroll;
+    let file_name_width: usize = 24;
+
+    for i in 0..visible_count {
+        let row_y = filter_y + 1 + i as u16;
+        let entry_idx = scroll + i;
+
+        if entry_idx < popup.filtered.len() {
+            let real_idx = popup.filtered[entry_idx];
+            let entry = &popup.entries[real_idx];
+            let is_selected = entry_idx == popup.selected;
+            let row_style = if is_selected {
+                RowStyle::selected()
+                    .with_border(catppuccin::SURFACE2)
+                    .with_bg(catppuccin::SURFACE0)
+            } else {
+                RowStyle::normal()
+                    .with_border(catppuccin::SURFACE2)
+                    .with_bg(catppuccin::MANTLE)
+            };
+
+            let is_closed = entry.file_name == "[closed]";
+
+            let name_str = format!(" {} ", entry.name);
+            let name_color = if is_closed {
+                catppuccin::OVERLAY0
+            } else {
+                catppuccin::MAUVE
+            };
+
+            let displayed_name: String = if str_width(&entry.file_name) > file_name_width {
+                let truncated =
+                    truncate_to_width(&entry.file_name, file_name_width.saturating_sub(1));
+                format!("{}…", truncated)
+            } else {
+                entry.file_name.clone()
+            };
+
+            let file_color = if is_closed {
+                catppuccin::OVERLAY0
+            } else if is_selected {
+                catppuccin::TEXT
+            } else {
+                catppuccin::BLUE
+            };
+
+            let pos_str = format!("{}:{}", entry.line + 1, entry.col + 1);
+
+            let mut segments = Vec::new();
+            segments.push(Segment::new(&name_str, name_color));
+
+            // File name with match highlighting
+            if !popup.filter.is_empty() && !is_closed {
+                if let Some((match_start, match_end)) =
+                    crate::popup::case_insensitive_find(&displayed_name, &popup.filter)
+                {
+                    if match_start > 0 {
+                        segments.push(Segment::new(&displayed_name[..match_start], file_color));
+                    }
+                    segments.push(Segment::new(
+                        &displayed_name[match_start..match_end],
+                        catppuccin::PEACH,
+                    ));
+                    if match_end < displayed_name.len() {
+                        segments.push(Segment::new(&displayed_name[match_end..], file_color));
+                    }
+                } else {
+                    segments.push(Segment::new(&displayed_name, file_color));
+                }
+            } else {
+                segments.push(Segment::new(&displayed_name, file_color));
+            }
+
+            // Padding to fill file_name_width
+            let displayed_w = str_width(&displayed_name);
+            let padding = file_name_width.saturating_sub(displayed_w);
+            let pad = if padding > 0 {
+                " ".repeat(padding)
+            } else {
+                String::new()
+            };
+            if !pad.is_empty() {
+                segments.push(Segment::new(&pad, catppuccin::SURFACE1));
+            }
+
+            segments.push(Segment::new("  ", catppuccin::SURFACE1));
+            segments.push(Segment::new(&pos_str, catppuccin::YELLOW));
+            segments.push(Segment::new(" ", catppuccin::SURFACE1));
+
+            // Line preview
+            if !entry.line_preview.is_empty() {
+                let preview_color = if is_closed {
+                    catppuccin::OVERLAY0
+                } else if is_selected {
+                    catppuccin::SUBTEXT
+                } else {
+                    catppuccin::OVERLAY0
+                };
+                segments.push(Segment::new(&entry.line_preview, preview_color));
+            }
+
+            draw_row(stdout, x, row_y, popup_width, &segments, &row_style)?;
+        }
+    }
+
+    // ── Bottom border with status ──────────────────────────────────────
+    let bottom_y = filter_y + 1 + visible_count as u16;
+    let footer = format!(
+        "[Enter] jump  [Del] remove  [Esc]{}close  {}/{}",
+        if popup.filter.is_empty() {
+            " "
+        } else {
+            " clear "
+        },
+        if popup.filtered.is_empty() {
+            0
+        } else {
+            popup.selected + 1
+        },
+        popup.filtered.len(),
+    );
+    let footer_style = BoxStyle::default()
+        .with_border(catppuccin::SURFACE2)
+        .with_footer(footer);
+    draw_bottom_border(stdout, x, bottom_y, popup_width, &footer_style)?;
+
+    execute!(stdout, ResetColor)?;
+    Ok(())
+}
+
 fn render_register_popup(
     editor: &Editor,
     stdout: &mut std::io::Stdout,

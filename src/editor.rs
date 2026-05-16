@@ -317,6 +317,8 @@ pub struct Editor {
     pub fmt_info_popup: Option<Vec<String>>,
     /// Dynamic title for the format info popup.
     pub fmt_info_popup_title: String,
+    /// Mark list popup (if active).
+    pub mark_list_popup: Option<crate::popup::MarkListPopup>,
 
     // ==================== Git Integration ====================
     /// Automatic diff popup shown when cursor is near a git hunk.
@@ -656,6 +658,7 @@ impl Editor {
             file_picker: None,
             keymap_popup: None,
             mru_popup: None,
+            mark_list_popup: None,
             register_popup: None,
             register_popup_title: "Registers".to_string(),
             overlay: OverlayTracker::default(),
@@ -1185,7 +1188,8 @@ impl Editor {
             || self.file_picker.is_some()
             || self.function_list_popup.is_some()
             || self.keymap_popup.is_some()
-            || self.help_popup.is_some();
+            || self.help_popup.is_some()
+            || self.mark_list_popup.is_some();
 
         // ── Ripgrep buffer special keys ── RG
         if self.mode == Mode::Normal && !popup_active {
@@ -1209,6 +1213,94 @@ impl Editor {
                             }
                         }
                     }
+                }
+            }
+        }
+
+        // ── Mark list popup navigation ── MARKS
+        if let Some(popup) = &mut self.mark_list_popup {
+            match key {
+                Key::Escape | Key::Ctrl('c') => {
+                    self.mark_list_popup = None;
+                    self.dirty.mark_list = true;
+                    self.dirty.cursor = true;
+                    return CommandResult::NoOp;
+                }
+                Key::Up | Key::PageUp => {
+                    popup.move_up();
+                    self.dirty.mark_list = true;
+                    self.dirty.cursor = true;
+                    return CommandResult::NoOp;
+                }
+                Key::Down | Key::PageDown => {
+                    popup.move_down();
+                    self.dirty.mark_list = true;
+                    self.dirty.cursor = true;
+                    return CommandResult::NoOp;
+                }
+                Key::Enter => {
+                    if let Some(entry) = popup.selected_entry().cloned() {
+                        self.mark_list_popup = None;
+
+                        if self.buffers.get(&entry.buffer_id).is_none() {
+                            self.marks.remove(&entry.name);
+                            self.set_error(format!("Mark '{}' buffer closed", entry.name));
+                            self.dirty.mark_all();
+                            return CommandResult::NoOp;
+                        }
+
+                        self.save_jump_mark();
+
+                        if let Some(window) = self.windows.active_window() {
+                            if window.buffer_id != entry.buffer_id {
+                                if let Some(w) = self.windows.active_window_mut() {
+                                    w.set_buffer(entry.buffer_id);
+                                }
+                            }
+                        }
+
+                        self.move_to_position(entry.line, entry.col);
+                        self.ensure_cursor_visible_all();
+                        self.set_status(format!("Jumped to mark '{}'", entry.name));
+                        self.dirty.mark_all(); // buffer switch → full redraw
+                        return CommandResult::ViewChanged;
+                    }
+                    self.mark_list_popup = None;
+                    self.dirty.mark_list = true;
+                    self.dirty.cursor = true;
+                    return CommandResult::NoOp;
+                }
+                Key::Delete => {
+                    if let Some(entry) = popup.selected_entry().cloned() {
+                        let name = entry.name;
+                        self.marks.remove(&name);
+                        popup.remove_selected();
+                        if popup.entries.is_empty() {
+                            self.mark_list_popup = None;
+                        }
+                        self.set_status(format!("Mark '{}' removed", name));
+                    }
+                    self.dirty.mark_list = true;
+                    self.dirty.cursor = true;
+                    return CommandResult::NoOp;
+                }
+                Key::Backspace => {
+                    popup.filter_pop();
+                    self.dirty.mark_list = true;
+                    self.dirty.cursor = true;
+                    return CommandResult::NoOp;
+                }
+                Key::Char(c) => {
+                    popup.filter_push(c);
+                    self.dirty.mark_list = true;
+                    self.dirty.cursor = true;
+                    return CommandResult::NoOp;
+                }
+                _ => {
+                    self.mark_list_popup = None;
+                    self.dirty.mark_list = true;
+                    self.dirty.cursor = true;
+                    return CommandResult::NoOp;
                 }
             }
         }
@@ -1289,6 +1381,9 @@ impl Editor {
                             Key::Enter => {
                                 self.dirty.mark_all();
                                 return self.build_goto_error();
+                            }
+                            Key::Char('l') => {
+                                return self.build_insert_brace_content();
                             }
                             Key::Char('y') => {
                                 // Copy all build errors/warnings to the system clipboard
@@ -4367,5 +4462,68 @@ impl Editor {
         self.fmt_info_popup_title = title.to_string();
         self.fmt_info_popup = Some(text.lines().map(|l| l.to_string()).collect());
         self.dirty.mark_all();
+    }
+
+    /// Show a popup listing all named marks (a-z) for quick navigation.
+    pub fn show_mark_list(&mut self) -> CommandResult {
+        let mut entries = Vec::new();
+
+        for (&name, &(buffer_id, pos)) in &self.marks {
+            let buffer = self.buffers.get(&buffer_id);
+            let file_name = buffer
+                .map(|b| b.display_name())
+                .unwrap_or_else(|| "[closed]".into());
+            let line_preview = buffer
+                .and_then(|b| {
+                    if pos.line < b.line_count() {
+                        Some(b.rope.line(pos.line).to_string().trim_end().to_string())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_default();
+
+            entries.push(crate::popup::MarkEntry {
+                name,
+                buffer_id,
+                file_name,
+                line: pos.line,
+                col: pos.col,
+                line_preview,
+            });
+        }
+
+        // Sort by mark name for consistent display
+        entries.sort_by_key(|e| e.name);
+
+        if entries.is_empty() {
+            return CommandResult::Message("No marks set".into());
+        }
+
+        // Pre-select mark nearest to current cursor position
+        let cursor_line = self
+            .windows
+            .active_window()
+            .map(|w| w.cursor.position.line)
+            .unwrap_or(0);
+        let cursor_buf = self.windows.active_window().map(|w| w.buffer_id);
+
+        let mut popup = crate::popup::MarkListPopup::new(entries);
+        let mut best_idx = 0;
+        let mut best_dist = usize::MAX;
+        for (i, entry) in popup.entries.iter().enumerate() {
+            if Some(entry.buffer_id) == cursor_buf {
+                let dist = (cursor_line as isize - entry.line as isize).unsigned_abs();
+                if dist < best_dist {
+                    best_dist = dist;
+                    best_idx = i;
+                }
+            }
+        }
+        popup.selected = best_idx;
+
+        self.mark_list_popup = Some(popup);
+        self.dirty.mark_all();
+        CommandResult::ViewChanged
     }
 } // end of imp editor

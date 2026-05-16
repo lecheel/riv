@@ -3,6 +3,7 @@
 //! into a navigable build buffer (like a quickfix list).
 
 use crate::buffer::{BufferId, BufferKind};
+use crate::ed::editing::EditingExt;
 use crate::ed::file_ops::FileOpsExt;
 use crate::ed::repeat::RepeatExt;
 use crate::ed::RepeatableAction;
@@ -61,6 +62,8 @@ pub trait BuildExt {
     /// Jump to the previous build error in the quickfix list.
     fn build_prev_error(&mut self) -> CommandResult;
 
+    fn build_insert_brace_content(&mut self) -> CommandResult;
+    fn build_insert_error_snippet(&mut self) -> CommandResult;
     fn quickfix_next(&mut self) -> CommandResult;
     fn quickfix_prev(&mut self) -> CommandResult;
 }
@@ -267,6 +270,75 @@ impl BuildExt for Editor {
             self.quickfix_index = self.quickfix_results.len() - 1;
         }
         self.quickfix_goto()
+    }
+
+    fn build_insert_error_snippet(&mut self) -> CommandResult {
+        // 1. Get the current line text from the build buffer
+        let (_, line_text) = match self.current_buffer_line() {
+            Some(pair) => pair,
+            None => return CommandResult::NoOp,
+        };
+
+        // 2. Extract snippet using multiple strategies
+        let snippet = match extract_snippet(&line_text) {
+            Some(content) => content,
+            None => {
+                return CommandResult::Message(
+                    "No snippet ({ }, ` `, or | code) found on this line".into(),
+                )
+            }
+        };
+
+        if snippet.is_empty() {
+            return CommandResult::Message("Snippet is empty".into());
+        }
+
+        // 3. Copy to yank register so the user can re-paste with `p`
+        self.yank_register = snippet.clone();
+
+        // 4. Jump to the error location (switches to the source buffer)
+        let goto_result = self.build_goto_error();
+
+        // 5. If successfully jumped, insert the extracted text at cursor
+        if matches!(goto_result, CommandResult::ViewChanged) {
+            self.ensure_undo_group();
+            self.insert_text_at_cursor(&snippet);
+            return CommandResult::ContentChanged;
+        }
+
+        goto_result
+    }
+    fn build_insert_brace_content(&mut self) -> CommandResult {
+        // 1. Get the current line text from the build buffer
+        let (_, line_text) = match self.current_buffer_line() {
+            Some(pair) => pair,
+            None => return CommandResult::NoOp,
+        };
+
+        // 2. Extract content within the last { } pair
+        let brace_content = match extract_brace_content(&line_text) {
+            Some(content) => content,
+            None => return CommandResult::Message("No { } found on this line".into()),
+        };
+
+        if brace_content.is_empty() {
+            return CommandResult::Message("{ } is empty on this line".into());
+        }
+
+        // 3. Copy to yank register so the user can re-paste with `p`
+        self.yank_register = brace_content.clone();
+
+        // 4. Jump to the error location (switches to the source buffer)
+        let goto_result = self.build_goto_error();
+
+        // 5. If successfully jumped, insert the extracted text at cursor
+        if matches!(goto_result, CommandResult::ViewChanged) {
+            self.ensure_undo_group();
+            self.insert_text_at_cursor(&brace_content);
+            return CommandResult::ContentChanged;
+        }
+
+        goto_result
     }
 }
 
@@ -577,6 +649,15 @@ fn find_severity_marker(line: &str) -> Option<(usize, usize, BuildSeverity)> {
     best
 }
 
+/// Extract the content of the last matching `{ }` pair in a line.
+/// Handles the common case in compiler output where types or expressions
+/// are wrapped in `{…}` for emphasis.
+fn extract_brace_content(line: &str) -> Option<String> {
+    let close = line.rfind('}')?;
+    let open = line[..close].rfind('{')?;
+    Some(line[open + 1..close].trim().to_string())
+}
+
 /// Parse `"src/main.rs:10:5"` → `BuildDiagnostic`.
 fn parse_path_line_col(s: &str) -> Option<BuildDiagnostic> {
     // Trim trailing whitespace or punctuation
@@ -666,6 +747,88 @@ fn format_build_buffer(raw_output: &str, diagnostics: &[BuildDiagnostic]) -> Str
     );
     buf.push_str(&format!("  {}\n\n", "─".repeat(40)));
 
+    // ── Quickfix list with source context ──
+    if !diagnostics.is_empty() {
+        for (idx, diag) in diagnostics.iter().enumerate() {
+            let severity_str = match diag.severity {
+                BuildSeverity::Error => "ERROR",
+                BuildSeverity::Warning => "WARN",
+                BuildSeverity::Note => "NOTE",
+            };
+            let severity_marker = match diag.severity {
+                BuildSeverity::Error => "✗",
+                BuildSeverity::Warning => "⚠",
+                BuildSeverity::Note => "ℹ",
+            };
+
+            buf.push_str(&format!(
+                "  {} [{}] {}:{}:{}: {}\n",
+                severity_marker,
+                severity_str,
+                diag.file_path.display(),
+                diag.line_number,
+                diag.column,
+                diag.message,
+            ));
+
+            // ── Source context (like grep -B5 -A3) ──
+            if let Some((start_line, context_lines)) =
+                read_source_context(&diag.file_path, diag.line_number, 5, 3)
+            {
+                let last_line = start_line + context_lines.len().saturating_sub(1);
+                let line_num_width = format!("{}", last_line).len().max(3);
+
+                for (i, line) in context_lines.iter().enumerate() {
+                    let line_num = start_line + i;
+                    let is_error_line = line_num == diag.line_number;
+
+                    if is_error_line {
+                        buf.push_str(&format!(
+                            "  > {:>width$} │ {}\n",
+                            line_num,
+                            line,
+                            width = line_num_width,
+                        ));
+                        // Show a caret at the error column
+                        if diag.column > 0 {
+                            let prefix_w =
+                                format!("  > {:>width$} │ ", "", width = line_num_width,).len();
+                            // Calculate display width up to the column
+                            let col_display: usize = line
+                                .chars()
+                                .take(diag.column.saturating_sub(1))
+                                .map(|c| {
+                                    unicode_width::UnicodeWidthStr::width(c.to_string().as_str())
+                                })
+                                .sum();
+                            let caret_pad = prefix_w + col_display;
+                            buf.push_str(&format!("  {:pad$}^\n", "", pad = caret_pad,));
+                        }
+                    } else {
+                        buf.push_str(&format!(
+                            "    {:>width$} │ {}\n",
+                            line_num,
+                            line,
+                            width = line_num_width,
+                        ));
+                    }
+                }
+            }
+
+            // Separator between diagnostics
+            if idx + 1 < diagnostics.len() {
+                buf.push_str(&format!("  {}\n", "─".repeat(40)));
+            }
+        }
+        buf.push('\n');
+    }
+
+    // ── Raw compiler output ──
+    buf.push_str(&format!(
+        "  {} Raw Output {}\n",
+        "─".repeat(14),
+        "─".repeat(14)
+    ));
     if raw_output.trim().is_empty() {
         buf.push_str("  (no output)\n");
     } else {
@@ -678,7 +841,87 @@ fn format_build_buffer(raw_output: &str, diagnostics: &[BuildDiagnostic]) -> Str
     // ── Keybindings hint ──
     buf.push('\n');
     buf.push_str(&format!("  {}\n", "─".repeat(40)));
-    buf.push_str("  Keybindings: [Enter] open file  [y] copy to clipboard  [q] close\n");
+    buf.push_str("  Keybindings: [Enter] open file  [n/N] next/prev  [y] copy  [q] close\n");
 
     buf
+}
+/// Extract the most relevant snippet from a compiler error line.
+/// Looks for the last `{...}`, the last `` `...` ``, or a code line `| ...`.
+fn extract_snippet(line: &str) -> Option<String> {
+    // 1. Try to find the last { } pair
+    if let Some(close) = line.rfind('}') {
+        if let Some(open) = line[..close].rfind('{') {
+            let content = line[open + 1..close].trim().to_string();
+            if !content.is_empty() {
+                return Some(content);
+            }
+        }
+    }
+
+    // 2. Try to find the last ` ` pair (backticks, used by rustc for identifiers)
+    if let Some(close) = line.rfind('`') {
+        if let Some(open) = line[..close].rfind('`') {
+            if close > open + 1 {
+                let content = line[open + 1..close].trim().to_string();
+                if !content.is_empty() {
+                    return Some(content);
+                }
+            }
+        }
+    }
+
+    // 3. Try to extract the code from a source line (e.g., "42 |             al_entries: entries,")
+    if let Some(pipe_pos) = line.find("| ") {
+        let code = line[pipe_pos + 2..].trim();
+        // Ignore error underline lines like "   |             ^^^^^^^^^^"
+        if !code.is_empty()
+            && !code.starts_with('^')
+            && !code.starts_with('~')
+            && !code.starts_with('-')
+            && !code.starts_with('|')
+        {
+            return Some(code.to_string());
+        }
+    }
+
+    None
+}
+
+/// Read source lines around a given line number from a file.
+/// Returns `(start_line_1based, context_lines)` where `start_line_1based`
+/// is the 1-based line number of the first returned line.
+fn read_source_context(
+    path: &Path,
+    center_line: usize,
+    before: usize,
+    after: usize,
+) -> Option<(usize, Vec<String>)> {
+    if center_line == 0 {
+        return None;
+    }
+
+    let content = std::fs::read_to_string(path).ok()?;
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.is_empty() {
+        return None;
+    }
+
+    let center = center_line.saturating_sub(1); // convert to 0-based
+    let start = center.saturating_sub(before);
+    let end = (center + after + 1).min(lines.len());
+
+    let context: Vec<String> = lines[start..end]
+        .iter()
+        .map(|l| {
+            // Truncate very long lines to keep the buffer readable
+            let l = l.trim_end();
+            if l.chars().count() > 120 {
+                format!("{}…", l.chars().take(117).collect::<String>())
+            } else {
+                l.to_string()
+            }
+        })
+        .collect();
+
+    Some((start + 1, context)) // back to 1-based
 }

@@ -33,6 +33,7 @@ pub struct DirtyState {
     pub float: bool,
     pub diff: bool,
     pub mru: bool,
+    pub mark_list: bool,
 
     // ── Cursor ──
     pub cursor: bool,
@@ -60,6 +61,7 @@ impl DirtyState {
         self.file_picker = false;
         self.buffer_list = false;
         self.mru = false;
+        self.mark_list = false;
         self.restore_rect = None;
         self.function_list = false;
     }
@@ -79,6 +81,7 @@ impl DirtyState {
         self.file_picker = true;
         self.buffer_list = true;
         self.mru = true;
+        self.mark_list = true;
         self.function_list = true;
     }
 

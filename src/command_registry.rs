@@ -338,6 +338,10 @@ fn shell_handler(_e: &mut Editor, args: &str) -> CommandResult {
     }
 }
 
+fn bm_handler(e: &mut Editor, _args: &str) -> CommandResult {
+    e.show_mark_list()
+}
+
 fn bn_handler(e: &mut Editor, _args: &str) -> CommandResult {
     e.next_buffer()
 }
@@ -1238,6 +1242,11 @@ pub fn build_command_registry() -> CommandRegistry {
     reg.alias("Build", "build");
     reg.alias("cargo", "build");
     reg.alias("Cargo", "build");
+
+    reg.register_handler("bm", bm_handler, "Show marks popup for quick navigation");
+    reg.alias("bookmark", "bm");
+    reg.alias("marks", "bm");
+    reg.alias("Bookmarks", "bm");
 
     reg.register_handler(
         "clist",
