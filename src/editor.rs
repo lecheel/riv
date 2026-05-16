@@ -3907,30 +3907,48 @@ impl Editor {
     /// Rebuild the shortcut popup showing only entries matching the current prefix.
     pub(crate) fn rebuild_shortcut_popup(&mut self) {
         let prefix = self.shortcut_pending_keys.clone();
+        let prefix_len = prefix.len();
 
-        let matching: Vec<(String, String)> = self
+        let matching: Vec<_> = self
             .active_shortcuts
             .iter()
-            .filter(|(keys, _)| keys.len() >= prefix.len() && keys[..prefix.len()] == prefix[..])
-            .map(|(keys, action)| (format_shortcut_keys(keys), action.label()))
+            .filter(|(keys, _)| keys.len() >= prefix_len && keys[..prefix_len] == prefix[..])
             .collect();
 
+        let mode_name = self.mode.keybind_name();
+
+        // Measure column widths
         let mut max_key_len = 0;
-        for (key_str, _) in &matching {
+        let mut max_desc_len = 0;
+        for (keys, action) in &matching {
+            let key_str = crate::misc::format_shortcut_keys(keys);
             max_key_len = max_key_len.max(key_str.len());
+            max_desc_len = max_desc_len.max(action.label().len());
         }
 
         let mut lines = Vec::new();
-        for (key_str, desc) in &matching {
+        for (keys, action) in &matching {
+            let key_str = crate::misc::format_shortcut_keys(keys);
+            let desc = action.label();
+
+            let original_keys = self.keybinds.keys_for_action_in_mode(mode_name, action);
+            let hint = if original_keys.is_empty() {
+                String::new()
+            } else {
+                format!("[{}]", original_keys.join(", "))
+            };
+
             lines.push(format!(
-                "  {:<width$}  {}",
+                "  {:<key_w$}  {:<desc_w$}  {}",
                 key_str,
                 desc,
-                width = max_key_len
+                hint,
+                key_w = max_key_len,
+                desc_w = max_desc_len,
             ));
         }
 
-        let prefix_str = format_shortcut_keys(&prefix);
+        let prefix_str = crate::misc::format_shortcut_keys(&prefix);
         let title = if prefix_str.is_empty() {
             " Shortcuts ".to_string()
         } else {

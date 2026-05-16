@@ -106,6 +106,17 @@ impl KeyMap {
     pub fn log_bindings(&self, _mode: &str) {
         for _action in self.bindings.values() {}
     }
+    /// Find all key sequences bound to a given action.
+    pub fn keys_for_action(&self, action: &Action) -> Vec<String> {
+        let mut result = Vec::new();
+        for (seq, a) in &self.bindings {
+            if a == action {
+                result.push(format_key_sequence(seq));
+            }
+        }
+        result.sort();
+        result
+    }
 }
 
 impl Default for KeyMap {
@@ -368,8 +379,14 @@ impl KeyBindManager {
                 .cmp(&b.category)
                 .then_with(|| a.keys.cmp(&b.keys))
         });
-
         entries
+    }
+    /// Find all key sequences bound to a given action in a specific mode.
+    pub fn keys_for_action_in_mode(&self, mode: &str, action: &Action) -> Vec<String> {
+        self.keymaps
+            .get(mode)
+            .map(|km: &KeyMap| km.keys_for_action(action))
+            .unwrap_or_default()
     }
 }
 
