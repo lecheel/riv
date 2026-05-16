@@ -7,6 +7,7 @@ use crate::ed::ghost_text::GhostTextExt;
 use crate::ed::git::GitExt;
 use crate::ed::goto_def::GotoDefExt;
 use crate::ed::movement::MovementExt;
+use crate::ed::ReplaceExt;
 use crate::editor::{Editor, Mode};
 use crate::msgbox::AppMessage;
 use unicode_segmentation::UnicodeSegmentation;
@@ -249,9 +250,10 @@ impl LspExt for Editor {
                             if save_after {
                                 match self.save() {
                                     Ok(()) => self.set_status("Formatted and saved.".into()),
-                                    Err(e) => {
-                                        self.set_infobar_message(format!("Format ok, save failed: {}", e))
-                                    }
+                                    Err(e) => self.set_infobar_message(format!(
+                                        "Format ok, save failed: {}",
+                                        e
+                                    )),
                                 }
                             } else {
                                 self.set_status("Formatted.".into());

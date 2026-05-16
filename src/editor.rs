@@ -35,6 +35,7 @@ use crate::ed::LastAction;
 use crate::ed::LspExt;
 use crate::ed::MarksExt;
 use crate::ed::RepeatableAction;
+use crate::ed::ReplaceExt;
 use crate::ed::SearchExt;
 use crate::ed::{
     BufferOpsExt, CommandExt, CompletionExt, EditingExt, FileOpsExt, GitExt, LlmExt, MovementExt,
@@ -48,7 +49,6 @@ use crate::popup::Scrollable;
 use crate::prompt::MiniInputPrompt;
 use crate::prompt::PromptAction;
 use std::path::PathBuf;
-use unicode_segmentation::UnicodeSegmentation;
 
 // ── Editor modes ────────────────────────────────────────────────────
 
@@ -344,6 +344,7 @@ pub struct Editor {
     pub git_commit_buffer_id: Option<BufferId>,
     /// Timestamp when the git commit LLM request started (for animation).
     pub git_commit_start_time: Option<std::time::Instant>,
+    pub git_commit_diff_summary: Option<String>,
 
     // ==================== LSP Integration ====================
     /// LSP message sender (editor → async LSP task).
@@ -498,6 +499,14 @@ pub struct Editor {
     pub term_width: u16,
     /// Current buffer height (terminal rows).
     pub term_height: u16,
+
+    // ==================== powerline ===================
+    /// Cached function name for the powerline (updated in tick).
+    pub current_function_name: Option<String>,
+    /// Whether content changed since last function-name cache update.
+    pub fn_name_needs_update: bool,
+    /// Last (buffer_id, cursor_line) we computed the function name for.
+    pub fn_name_cache_key: Option<(BufferId, usize)>,
 
     // ==================== Message Passing ====================
     /// App message receiver (async tasks → editor). Polled in tick().
@@ -675,6 +684,7 @@ impl Editor {
             git_commit_buffer_id: None,
             git_log_grep: String::new(),
             git_commit_start_time: None,
+            git_commit_diff_summary: None,
 
             // LSP Integration
             lsp_tx,
@@ -770,6 +780,10 @@ impl Editor {
                 m.prune_missing();
                 m
             },
+
+            current_function_name: None,
+            fn_name_needs_update: true,
+            fn_name_cache_key: None,
 
             // Terminal
             term_width: 80,
@@ -925,6 +939,7 @@ impl Editor {
             }
             CommandResult::ContentChanged => {
                 self.search_matches_dirty = true;
+                self.fn_name_needs_update = true;
                 self.dirty.mark_insert();
                 // Dismiss infobar warnings once the user starts editing
                 if self.infobar_message.is_some() {
@@ -1314,10 +1329,6 @@ impl Editor {
                             Key::Char('s') | Key::Char('S') => {
                                 self.dirty.mark_all();
                                 return self.git_status_toggle_stage();
-                            }
-                            Key::Char('a') | Key::Char('A') => {
-                                self.dirty.mark_all();
-                                return self.git_status_add_file();
                             }
                             Key::Char('c') | Key::Char('C') => {
                                 return self.git_commit_generate();
@@ -3524,6 +3535,7 @@ impl Editor {
         self.poll_codeium_ghost();
         self.validate_ghost_text();
         self.poll_app_messages();
+        self.update_function_name_cache();
     }
     /// Poll for Codeium server startup result and show feedback.
     fn tick_codeium_startup(&mut self) {
@@ -3541,152 +3553,6 @@ impl Editor {
         }
     }
 
-    /// Return the trimmed text of the current line, for register insertion (Ctrl-R Ctrl-L).
-    /// When in LlmPrompt mode, prefer a non-special buffer so we pull the
-    /// source code line rather than the LLM conversation.
-    fn current_line_content(&self) -> String {
-        if let Some(window) = self.windows.active_window() {
-            let line_idx = window.cursor.position.line;
-            let buffer_id = window.buffer_id;
-            if let Some(buffer) = self.buffers.get(&buffer_id) {
-                // In LlmPrompt with an LLM/special buffer active, skip to find a
-                // normal buffer in another window instead.
-                if self.mode == Mode::LlmPrompt && buffer.kind != BufferKind::Normal {
-                    // fall through to search other windows below
-                } else if line_idx < buffer.line_count() {
-                    return buffer
-                        .rope
-                        .line(line_idx)
-                        .to_string()
-                        .trim_end()
-                        .to_string();
-                }
-            }
-        }
-
-        // Fallback: scan all windows for a Normal buffer (LlmPrompt edge case)
-        if self.mode == Mode::LlmPrompt {
-            for w in self.windows.iter() {
-                if let Some(buffer) = self.buffers.get(&w.buffer_id) {
-                    if buffer.kind == BufferKind::Normal {
-                        let line_idx = w.cursor.position.line;
-                        if line_idx < buffer.line_count() {
-                            return buffer
-                                .rope
-                                .line(line_idx)
-                                .to_string()
-                                .trim_end()
-                                .to_string();
-                        }
-                    }
-                }
-            }
-        }
-
-        String::new()
-    }
-    /// Setup the Top=Input / Bottom=Response split layout
-    pub fn llm_setup_split_session(&mut self, initial_text: String) -> CommandResult {
-        // Save the buffer we came from
-        self.llm_origin_buffer_id = self.windows.active_window().map(|w| w.buffer_id);
-
-        // 1. Split the window (Creates Top=Origin, Bottom=Origin)
-        self.split_horizontal();
-
-        // 2. Move to Bottom window & set it to LLM Response buffer
-        self.next_window();
-        let llm_id = self.ensure_llm_buffer();
-        if let Some(w) = self.windows.active_window_mut() {
-            w.set_buffer(llm_id);
-        }
-
-        // 3. Move back to Top window & set it to LLM Input scratchpad
-        self.prev_window();
-
-        let content = format!("## TODO / Instructions:\n\n{}", initial_text);
-
-        // Find existing LlmInput buffer ID FIRST (immutable borrow)
-        let existing_input_id = self
-            .buffers
-            .iter()
-            .find(|b| b.kind == BufferKind::LlmInput)
-            .map(|b| b.id);
-
-        let input_id = if let Some(id) = existing_input_id {
-            // Now we can mutate without the immutable borrow alive
-            if let Some(buf) = self.buffers.get_mut(&id) {
-                buf.rope = ropey::Rope::from(content);
-                buf.dirty = true;
-            }
-            id
-        } else {
-            let id = self.buffers.new_buffer();
-            if let Some(buf) = self.buffers.get_mut(&id) {
-                buf.kind = BufferKind::LlmInput;
-                buf.rope = ropey::Rope::from(content);
-                buf.dirty = true;
-            }
-            id
-        };
-
-        if let Some(w) = self.windows.active_window_mut() {
-            w.set_buffer(input_id);
-        }
-
-        // Start in Insert mode so they can immediately start typing instructions
-        self.mode = Mode::Insert;
-        self.dirty.mark_all();
-        CommandResult::ModeChanged(Mode::Insert)
-    }
-    /// Submit the contents of the Top scratchpad to the LLM
-    pub fn llm_send_input_buffer(&mut self) -> CommandResult {
-        let prompt_text = self
-            .buffers
-            .iter()
-            .find(|b| b.kind == BufferKind::LlmInput)
-            .map(|b| b.rope.to_string())
-            .unwrap_or_default();
-
-        if prompt_text.trim().is_empty() {
-            self.set_infobar_message("LLM prompt is empty".to_string());
-            return CommandResult::ViewChanged;
-        }
-
-        // CRITICAL: Clear context and todo_prefix because the context is
-        // already embedded inside the prompt_text from the scratchpad buffer!
-        // If we don't clear these, llm_send_from_prompt will duplicate the code.
-        self.llm_active_context = None;
-        self.llm_todo_prefix = false;
-        self.llm_active_preset = None;
-
-        // Switch focus to the Response window (Bottom) so the user can watch it stream
-        self.next_window();
-        self.mode = Mode::Normal;
-
-        self.llm_send_from_prompt(prompt_text)
-    }
-
-    /// Close the split and restore the original single-window layout
-    pub fn llm_close_split_session(&mut self) -> CommandResult {
-        // 1. We are in Top window (Input). Move to Bottom window (Response).
-        self.next_window();
-
-        // 2. Close the Bottom window. (Cursor automatically returns to Top window)
-        self.close_window();
-
-        // 3. Restore Top window to the original code buffer
-        if let Some(origin_id) = self.llm_origin_buffer_id.take() {
-            if let Some(w) = self.windows.active_window_mut() {
-                if self.buffers.get(&origin_id).is_some() {
-                    w.set_buffer(origin_id);
-                }
-            }
-        }
-
-        self.mode = Mode::Normal;
-        self.dirty.mark_all();
-        CommandResult::ViewChanged
-    }
     /// Show the register list popup (used by :reg and Ctrl-R in insert mode)
     /// Resolve the contents of a register by name.
     /// Supports: a-z (named), " + * (default/clipboard), % (current filename).
@@ -3752,70 +3618,7 @@ impl Editor {
         self.dirty.mark_all();
         CommandResult::ViewChanged
     }
-    // ── LLM quick-action helper ─────────────────────────────────────
 
-    /// Execute a quick LLM action (translate, explain, summarize, check English).
-    ///
-    /// Grabs text from visual selection or current line, sends it directly
-    /// to the LLM with the given preset, and streams the response to the
-    /// infobar (and register matching the preset). Does NOT enter LlmPrompt
-    /// mode — the user stays in their current mode and sees the result inline.
-    pub fn llm_quick_action(&mut self, preset: LlmPreset, status_msg: &str) -> CommandResult {
-        let was_visual = matches!(
-            self.mode,
-            Mode::Visual | Mode::VisualLine | Mode::VisualBlock
-        );
-
-        // Grab text: visual selection → fallback to current line
-        let text = if was_visual {
-            self.get_selection_text().unwrap_or_default()
-        } else {
-            self.current_line_content()
-        };
-
-        // Clear visual selection AND return to Normal mode
-        if let Some(w) = self.windows.active_window_mut() {
-            w.selection_anchor = None;
-        }
-        if was_visual {
-            self.mode = Mode::Normal;
-            self.dirty.status_powerline = true; // Update mode indicator
-        }
-
-        if text.trim().is_empty() {
-            self.set_infobar_message("No text to process".to_string());
-            return CommandResult::ViewChanged;
-        }
-
-        // Record for dot-repeat
-        self.record_action(RepeatableAction::LlmQuickAction { preset }, 1);
-
-        // ── Single-shot: no session, no conversation history ──
-        self.llm_single_shot = true;
-        self.llm_infobar_response = true;
-        self.llm_infobar_accumulator.clear();
-        self.llm_active_preset = Some(preset);
-        self.llm_active_context = None;
-        self.llm_todo_prefix = false;
-
-        let system_prompt = preset.system_prompt().to_string();
-        let messages = vec![
-            ("system".to_string(), system_prompt),
-            ("user".to_string(), text),
-        ];
-
-        self.set_status(format!("{}…", status_msg));
-        self.dirty.status_infobar = true;
-
-        self.spawn_llm_request(messages);
-
-        // Return ModeChanged if we were in Visual, so the event loop updates properly
-        if was_visual {
-            CommandResult::ModeChanged(Mode::Normal)
-        } else {
-            CommandResult::ViewChanged
-        }
-    }
     pub fn show_register_popup(&mut self) {
         self.register_popup_title = "Registers".to_string();
 
@@ -3894,573 +3697,6 @@ impl Editor {
         } else {
             self.register_popup = Some(lines);
         }
-        self.dirty.mark_all();
-    }
-    // ── Substitute confirmation ─────────────────────────────────────
-
-    /// Start interactive substitute confirmation mode.
-    pub(crate) fn start_substitute_confirm(
-        &mut self,
-        regex: regex::Regex,
-        replacement: String,
-        global: bool,
-        start_line: usize,
-        end_line: usize,
-    ) -> CommandResult {
-        let buffer_id = match self.windows.active_window() {
-            Some(w) => w.buffer_id,
-            None => return CommandResult::Error("No active window".into()),
-        };
-        let line_count = self
-            .buffers
-            .get(&buffer_id)
-            .map(|b| b.line_count())
-            .unwrap_or(0);
-        let end_line = end_line.min(line_count.saturating_sub(1));
-
-        self.ensure_undo_group();
-
-        self.substitute_confirm = Some(SubstituteConfirmState {
-            regex,
-            replacement,
-            global,
-            buffer_id,
-            start_line,
-            end_line,
-            subs_made: 0,
-            next_line: start_line,
-            next_byte_offset: 0,
-            current_match: None,
-        });
-
-        self.substitute_advance()
-    }
-
-    /// Find the next match, highlight it, and show the prompt.
-    /// If no more matches exist, finish the session and show the summary.
-    fn substitute_advance(&mut self) -> CommandResult {
-        let state = match self.substitute_confirm.take() {
-            Some(s) => s,
-            None => return CommandResult::NoOp,
-        };
-
-        let match_info = self.find_substitute_match(&state);
-
-        match match_info {
-            Some((line, start_byte, end_byte, match_text)) => {
-                let col = self.byte_offset_to_col(state.buffer_id, line, start_byte);
-                if let Some(w) = self.windows.active_window_mut() {
-                    w.cursor.position = CursorPosition::new(line, col);
-                    w.cursor.desired_col = None;
-                }
-                self.ensure_cursor_visible(&state.buffer_id);
-
-                // Set up search highlighting for the current match only
-                self.search_matches = vec![CursorPosition::new(line, col)];
-                self.current_search_match = 0;
-                self.search_matches_dirty = false;
-                self.search_prompt.buffer = match_text;
-                self.search_prompt.cursor = self.search_prompt.buffer.len();
-
-                // Build status message BEFORE moving `state`
-                let status_msg = format!("replace with \"{}\"? (y/n/a/q/l)", state.replacement);
-
-                let next_state = SubstituteConfirmState {
-                    next_line: if state.global { line } else { line + 1 },
-                    next_byte_offset: if state.global { end_byte } else { 0 },
-                    current_match: Some((line, start_byte, end_byte)),
-                    ..state
-                };
-
-                self.substitute_confirm = Some(next_state);
-                self.set_status(status_msg);
-
-                // Explicit dirty management
-                self.dirty.windows = true;
-                self.dirty.cursor = true;
-                self.dirty.status_powerline = true;
-                self.dirty.status_cmdline = true;
-                self.dirty.status_infobar = true;
-
-                // ViewChanged ensures process_event also sets these dirty flags
-                CommandResult::ViewChanged
-            }
-            None => {
-                let subs_made = state.subs_made;
-
-                // Clear search highlighting
-                self.search_matches.clear();
-                self.search_matches_dirty = false;
-                self.search_prompt.buffer.clear();
-                self.search_prompt.cursor = 0;
-
-                self.close_undo_group();
-                self.invalidate_git_gutter();
-                self.notify_lsp_change();
-
-                // Full redraw: remove highlight, update content, update status
-                self.dirty.mark_all();
-
-                if subs_made > 0 {
-                    CommandResult::Message(format!("{} substitutions", subs_made))
-                } else {
-                    CommandResult::Error("Pattern not found".into())
-                }
-            }
-        }
-    }
-    /// Search for the next match starting from `state.next_line` / `next_byte_offset`.
-    fn find_substitute_match(
-        &self,
-        state: &SubstituteConfirmState,
-    ) -> Option<(usize, usize, usize, String)> {
-        let buffer = self.buffers.get(&state.buffer_id)?;
-
-        let mut line = state.next_line.max(state.start_line);
-        let mut byte_offset = state.next_byte_offset;
-
-        while line <= state.end_line && line < buffer.line_count() {
-            let line_text = buffer.line_text(line)?.trim_end_matches('\n').to_string();
-
-            let mat = state
-                .regex
-                .find_iter(&line_text)
-                .find(|m| m.start() >= byte_offset);
-
-            if let Some(m) = mat {
-                return Some((line, m.start(), m.end(), m.as_str().to_string()));
-            }
-
-            line += 1;
-            byte_offset = 0;
-        }
-
-        None
-    }
-
-    /// Convert a byte offset within a line to a grapheme column.
-    fn byte_offset_to_col(&self, buffer_id: BufferId, line: usize, byte_offset: usize) -> usize {
-        let buffer = match self.buffers.get(&buffer_id) {
-            Some(b) => b,
-            None => return 0,
-        };
-        let line_text = match buffer.line_text(line) {
-            Some(t) => t.trim_end_matches('\n').to_string(),
-            None => return 0,
-        };
-        let safe = byte_offset.min(line_text.len());
-        line_text[..safe].graphemes(true).count()
-    }
-
-    /// Replace a single match on a line in‑place.
-    fn substitute_perform_one(
-        &mut self,
-        line: usize,
-        start_byte: usize,
-        end_byte: usize,
-        state: &SubstituteConfirmState,
-    ) {
-        let buffer = match self.buffers.get_mut(&state.buffer_id) {
-            Some(b) => b,
-            None => return,
-        };
-
-        let line_text = buffer
-            .line_text(line)
-            .unwrap_or_default()
-            .trim_end_matches('\n')
-            .to_string();
-
-        // Build the new line by splicing: prefix + replacement + suffix
-        let matched_text = &line_text[start_byte..end_byte];
-        let replaced = state
-            .regex
-            .replace(matched_text, state.replacement.as_str())
-            .to_string();
-        let new_line_text = format!(
-            "{}{}{}",
-            &line_text[..start_byte],
-            replaced,
-            &line_text[end_byte..]
-        );
-
-        // Swap the entire line content
-        let old_len = line_text.graphemes(true).count();
-        if old_len > 0 {
-            buffer.delete_at(CursorPosition::new(line, 0), old_len);
-        }
-        if !new_line_text.is_empty() {
-            buffer.insert_at(CursorPosition::new(line, 0), &new_line_text);
-        }
-        buffer.dirty = true;
-    }
-
-    /// **y** — replace current match, then advance.
-    fn substitute_confirm_yes(&mut self) -> CommandResult {
-        let mut state = match self.substitute_confirm.take() {
-            Some(s) => s,
-            None => return CommandResult::NoOp,
-        };
-
-        if let Some((line, start_byte, end_byte)) = state.current_match {
-            let matched_text = {
-                let buffer = match self.buffers.get(&state.buffer_id) {
-                    Some(b) => b,
-                    None => return CommandResult::NoOp,
-                };
-                let line_text = buffer
-                    .line_text(line)
-                    .unwrap_or_default()
-                    .trim_end_matches('\n')
-                    .to_string();
-                line_text[start_byte..end_byte].to_string()
-            };
-            let replaced_text = state
-                .regex
-                .replace(&matched_text, state.replacement.as_str())
-                .to_string();
-            let new_match_end_byte = start_byte + replaced_text.len();
-
-            self.substitute_perform_one(line, start_byte, end_byte, &state);
-            state.subs_made += 1;
-
-            self.invalidate_git_gutter();
-            self.notify_lsp_change();
-
-            if state.global {
-                let new_line_len = self
-                    .buffers
-                    .get(&state.buffer_id)
-                    .and_then(|b| b.line_text(line))
-                    .map(|t| t.trim_end_matches('\n').len())
-                    .unwrap_or(0);
-                state.next_byte_offset = new_match_end_byte.min(new_line_len);
-                state.next_line = line;
-            } else {
-                state.next_line = line + 1;
-                state.next_byte_offset = 0;
-            }
-
-            state.current_match = None;
-            self.substitute_confirm = Some(state);
-
-            // Content changed → mark for redraw
-            self.dirty.windows = true;
-            self.dirty.cursor = true;
-
-            // substitute_advance will set status and additional dirty flags
-            let result = self.substitute_advance();
-
-            // If substitute_advance found another match, it returned ViewChanged.
-            // We also changed content, so ensure the insert region is marked dirty.
-            if result == CommandResult::ViewChanged {
-                self.dirty.mark_insert();
-            }
-
-            result
-        } else {
-            self.substitute_confirm = None;
-            self.close_undo_group();
-            self.invalidate_git_gutter();
-            self.notify_lsp_change();
-            self.dirty.mark_all();
-            CommandResult::ViewChanged
-        }
-    }
-    /// **n** — skip current match, then advance.
-    fn substitute_confirm_no(&mut self) -> CommandResult {
-        let mut state = match self.substitute_confirm.take() {
-            Some(s) => s,
-            None => return CommandResult::NoOp,
-        };
-
-        if let Some((line, start_byte, end_byte)) = state.current_match {
-            if state.global {
-                state.next_line = line;
-                state.next_byte_offset = end_byte;
-            } else {
-                state.next_line = line + 1;
-                state.next_byte_offset = 0;
-            }
-
-            state.current_match = None;
-            self.substitute_confirm = Some(state);
-
-            // substitute_advance handles status and dirty flags
-            self.substitute_advance()
-        } else {
-            self.substitute_confirm = None;
-            self.close_undo_group();
-            self.dirty.mark_all();
-            CommandResult::ViewChanged
-        }
-    }
-    /// **a** — replace this and all remaining matches without prompting.
-    fn substitute_confirm_all(&mut self) -> CommandResult {
-        let mut state = match self.substitute_confirm.take() {
-            Some(s) => s,
-            None => return CommandResult::NoOp,
-        };
-
-        // Replace the current match first
-        if let Some((line, start_byte, end_byte)) = state.current_match {
-            // Compute replacement byte length before mutating
-            let matched_text = {
-                let buffer = match self.buffers.get(&state.buffer_id) {
-                    Some(b) => b,
-                    None => return CommandResult::NoOp,
-                };
-                let line_text = buffer
-                    .line_text(line)
-                    .unwrap_or_default()
-                    .trim_end_matches('\n')
-                    .to_string();
-                line_text[start_byte..end_byte].to_string()
-            };
-            let replaced_text = state
-                .regex
-                .replace(&matched_text, state.replacement.as_str())
-                .to_string();
-            let new_match_end_byte = start_byte + replaced_text.len();
-
-            self.substitute_perform_one(line, start_byte, end_byte, &state);
-            state.subs_made += 1;
-
-            if state.global {
-                let new_line_len = self
-                    .buffers
-                    .get(&state.buffer_id)
-                    .and_then(|b| b.line_text(line))
-                    .map(|t| t.trim_end_matches('\n').len())
-                    .unwrap_or(0);
-                state.next_byte_offset = new_match_end_byte.min(new_line_len);
-                state.next_line = line;
-            } else {
-                state.next_line = line + 1;
-                state.next_byte_offset = 0;
-            }
-        }
-
-        // Now replace ALL remaining matches without prompting
-        self.substitute_confirm_replace_rest(&mut state);
-
-        let subs_made = state.subs_made;
-
-        // Clear search highlighting
-        self.search_matches.clear();
-        self.search_matches_dirty = false;
-        self.search_prompt.buffer.clear();
-        self.search_prompt.cursor = 0;
-
-        self.close_undo_group();
-        self.invalidate_git_gutter();
-        self.notify_lsp_change();
-
-        // Full redraw to clear highlights and show all changes
-        self.dirty.mark_all();
-
-        if subs_made > 0 {
-            CommandResult::Message(format!("{} substitutions", subs_made))
-        } else {
-            CommandResult::Error("Pattern not found".into())
-        }
-    }
-
-    /// **q** or **Escape** — abort without replacing current match.
-    fn substitute_confirm_quit(&mut self) -> CommandResult {
-        let state = match self.substitute_confirm.take() {
-            Some(s) => s,
-            None => return CommandResult::NoOp,
-        };
-
-        let subs_made = state.subs_made;
-
-        // Clear search highlighting
-        self.search_matches.clear();
-        self.search_matches_dirty = false;
-        self.search_prompt.buffer.clear();
-        self.search_prompt.cursor = 0;
-
-        self.close_undo_group();
-
-        // If any substitutions were made earlier (y/l), notify
-        if subs_made > 0 {
-            self.invalidate_git_gutter();
-            self.notify_lsp_change();
-        }
-
-        // Full redraw to remove highlight
-        self.dirty.mark_all();
-
-        if subs_made > 0 {
-            CommandResult::Message(format!(
-                "{} substitutions — quit at current match",
-                subs_made
-            ))
-        } else {
-            CommandResult::Message("Quit — no substitutions made".into())
-        }
-    }
-
-    /// **l** — replace this match, then quit (last replacement).
-    fn substitute_confirm_last(&mut self) -> CommandResult {
-        let mut state = match self.substitute_confirm.take() {
-            Some(s) => s,
-            None => return CommandResult::NoOp,
-        };
-
-        if let Some((line, start_byte, end_byte)) = state.current_match {
-            self.substitute_perform_one(line, start_byte, end_byte, &state);
-            state.subs_made += 1;
-        }
-
-        let subs_made = state.subs_made;
-
-        // Clear search highlighting
-        self.search_matches.clear();
-        self.search_matches_dirty = false;
-        self.search_prompt.buffer.clear();
-        self.search_prompt.cursor = 0;
-
-        self.close_undo_group();
-        self.invalidate_git_gutter();
-        self.notify_lsp_change();
-
-        // Full redraw to remove highlight and show content change
-        self.dirty.mark_all();
-
-        CommandResult::Message(format!("{} substitutions — last", subs_made))
-    }
-
-    /// Replace all remaining matches without prompting (helper for "a" key).
-    fn substitute_confirm_replace_rest(&mut self, state: &mut SubstituteConfirmState) {
-        let buffer_id = state.buffer_id;
-
-        let mut line = state.next_line.max(state.start_line);
-        let mut byte_offset = state.next_byte_offset;
-
-        while line <= state.end_line {
-            let line_text = {
-                let buffer = match self.buffers.get(&buffer_id) {
-                    Some(b) => b,
-                    None => return,
-                };
-                match buffer.line_text(line) {
-                    Some(t) => t.trim_end_matches('\n').to_string(),
-                    None => {
-                        line += 1;
-                        byte_offset = 0;
-                        continue;
-                    }
-                }
-            };
-
-            let matches: Vec<_> = if state.global {
-                state
-                    .regex
-                    .find_iter(&line_text)
-                    .filter(|m| m.start() >= byte_offset)
-                    .collect()
-            } else if byte_offset == 0 {
-                match state.regex.find_iter(&line_text).next() {
-                    Some(m) => vec![m],
-                    None => vec![],
-                }
-            } else {
-                vec![]
-            };
-
-            if matches.is_empty() {
-                line += 1;
-                byte_offset = 0;
-                continue;
-            }
-
-            // Replace all matches on this line at once
-            let new_text = if state.global {
-                if byte_offset > 0 {
-                    let prefix = &line_text[..byte_offset];
-                    let suffix = &line_text[byte_offset..];
-                    let replaced = state
-                        .regex
-                        .replace_all(suffix, state.replacement.as_str())
-                        .to_string();
-                    format!("{}{}", prefix, replaced)
-                } else {
-                    state
-                        .regex
-                        .replace_all(&line_text, state.replacement.as_str())
-                        .to_string()
-                }
-            } else {
-                state
-                    .regex
-                    .replace(&line_text, state.replacement.as_str())
-                    .to_string()
-            };
-
-            let old_len = line_text.graphemes(true).count();
-            if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
-                if old_len > 0 {
-                    buffer.delete_at(CursorPosition::new(line, 0), old_len);
-                }
-                if !new_text.is_empty() {
-                    buffer.insert_at(CursorPosition::new(line, 0), &new_text);
-                }
-                buffer.dirty = true;
-            }
-
-            state.subs_made += matches.len();
-
-            line += 1;
-            byte_offset = 0;
-        }
-    }
-    /// Update `next_line` / `next_byte_offset` after a replacement at `(line, start_byte, end_byte)`.
-    fn substitute_update_search_pos(
-        &self,
-        state: &mut SubstituteConfirmState,
-        line: usize,
-        start_byte: usize,
-        end_byte: usize,
-    ) {
-        if state.global {
-            // After the replacement the byte offset shifts.
-            // new_offset = end_byte + (new_line_len − old_line_len)
-            let old_len = self
-                .buffers
-                .get(&state.buffer_id)
-                .and_then(|b| b.line_text(line))
-                .map(|t| t.trim_end_matches('\n').len())
-                .unwrap_or(0);
-            // We already mutated the buffer, so this is the *new* line.
-            // But the caller should have already performed the replacement,
-            // so old_len is actually the *new* length. We need the old length
-            // passed in separately — instead, compute delta from the match.
-            // Simplified: just search from start_byte on the same line.
-            state.next_line = line;
-            state.next_byte_offset = start_byte;
-        } else {
-            state.next_line = line + 1;
-            state.next_byte_offset = 0;
-        }
-    }
-    /// Whether the substitute confirm prompt is active.
-    pub fn is_substitute_confirm_active(&self) -> bool {
-        self.substitute_confirm.is_some()
-    }
-
-    /// Get the substitute confirm prompt text, if active.
-    pub fn substitute_confirm_prompt(&self) -> Option<String> {
-        self.substitute_confirm
-            .as_ref()
-            .map(|state| format!("replace with \"{}\"? (y/n/a/q/l)", state.replacement))
-    }
-    /// Show the format-info popup with a title and multi-line error text.
-    /// Automatically splits the text into lines and marks the view dirty.
-    pub fn show_fmt_info_popup(&mut self, title: &str, text: &str) {
-        self.fmt_info_popup_title = title.to_string();
-        self.fmt_info_popup = Some(text.lines().map(|l| l.to_string()).collect());
         self.dirty.mark_all();
     }
 

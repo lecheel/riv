@@ -1863,6 +1863,7 @@ fn render_powerline(
     let subtext = powerline::crossterm_colors::SUBTEXT;
     let peach = powerline::crossterm_colors::PEACH;
     let green = powerline::crossterm_colors::GREEN;
+    let yellow = powerline::crossterm_colors::YELLOW;
 
     let powerline_y = term_height.saturating_sub(3);
 
@@ -1935,7 +1936,7 @@ fn render_powerline(
         execute!(stdout, SetForegroundColor(overlay0))?;
         execute!(stdout, Print(&format!(" {}% ", pct)))?;
 
-        // Right side: encoding + filetype + buffer position
+        // ── Right side ──────────────────────────────────────────────
         let ft_text = buffer
             .language
             .map(|l| l.as_str().to_string())
@@ -1947,32 +1948,80 @@ fn render_powerline(
             editor.buffers.len()
         );
 
-        let left_approx = mode_text.len()
-            + 2
+        // Function name segment (optional)
+        let func_display = editor.current_function_name.as_deref().map(|name| {
+            if name.chars().count() > 25 {
+                format!("{}…", name.chars().take(24).collect::<String>())
+            } else {
+                name.to_string()
+            }
+        });
+
+        // Calculate widths for padding
+        let func_width: usize = func_display
+            .as_deref()
+            .map(|d| {
+                glyphs::SEPARATOR_RIGHT.chars().count()
+                    + format!(" {} {} ", glyphs::FUNCTION, d).chars().count()
+                    + glyphs::SEPARATOR_RIGHT.chars().count()
+            })
+            .unwrap_or(glyphs::SEPARATOR_RIGHT.chars().count());
+
+        let left_approx = format!(" {} ", mode_text).chars().count()
             + glyphs::SEPARATOR_LEFT.chars().count()
-            + buffer.display_name().len()
-            + 3
+            + format!(" {} ", buffer.display_name()).chars().count()
+            + format!(" {} ", glyphs::DIRTY).chars().count()
             + glyphs::SEPARATOR_LEFT.chars().count()
-            + format!(" {}:{} ", line, col).len()
+            + format!(" {}:{} ", line, col).chars().count()
             + glyphs::SEPARATOR_LEFT.chars().count()
-            + format!(" {}% ", pct).len();
-        let right_approx = " UTF-8 ".len()
-            + ft_text.len()
+            + format!(" {}% ", pct).chars().count();
+        let right_approx = func_width
+            + format!(" UTF-8 {} ", ft_text).chars().count()
             + glyphs::SEPARATOR_RIGHT.chars().count()
-            + buf_pos.len()
-            + glyphs::SEPARATOR_RIGHT.chars().count();
+            + buf_pos.chars().count();
+
         let padding = (term_width as usize).saturating_sub(left_approx + right_approx);
 
+        // Padding between left and right
         execute!(stdout, SetBackgroundColor(surface2))?;
         execute!(stdout, Print(&" ".repeat(padding)))?;
 
-        execute!(
-            stdout,
-            SetForegroundColor(surface0),
-            SetBackgroundColor(surface2)
-        )?;
-        execute!(stdout, Print(glyphs::SEPARATOR_RIGHT))?;
+        // Function name (or plain separator if absent)
+        if let Some(ref display) = func_display {
+            // SURFACE2 → SURFACE1
+            execute!(
+                stdout,
+                SetForegroundColor(surface1),
+                SetBackgroundColor(surface2)
+            )?;
+            execute!(stdout, Print(glyphs::SEPARATOR_RIGHT))?;
+            execute!(
+                stdout,
+                SetForegroundColor(yellow),
+                SetBackgroundColor(surface1)
+            )?;
+            execute!(
+                stdout,
+                Print(&format!(" {} {} ", glyphs::FUNCTION, display))
+            )?;
+            // SURFACE1 → SURFACE0
+            execute!(
+                stdout,
+                SetForegroundColor(surface0),
+                SetBackgroundColor(surface1)
+            )?;
+            execute!(stdout, Print(glyphs::SEPARATOR_RIGHT))?;
+        } else {
+            // No function: SURFACE2 → SURFACE0 directly
+            execute!(
+                stdout,
+                SetForegroundColor(surface0),
+                SetBackgroundColor(surface2)
+            )?;
+            execute!(stdout, Print(glyphs::SEPARATOR_RIGHT))?;
+        }
 
+        // Filetype
         execute!(
             stdout,
             SetForegroundColor(subtext),
@@ -1980,6 +2029,7 @@ fn render_powerline(
         )?;
         execute!(stdout, Print(&format!(" UTF-8 {} ", ft_text)))?;
 
+        // SURFACE0 → SURFACE1
         execute!(
             stdout,
             SetForegroundColor(surface1),
@@ -1987,6 +2037,7 @@ fn render_powerline(
         )?;
         execute!(stdout, Print(glyphs::SEPARATOR_RIGHT))?;
 
+        // Buffer position
         execute!(
             stdout,
             SetForegroundColor(subtext),
@@ -2001,7 +2052,6 @@ fn render_powerline(
     execute!(stdout, ResetColor)?;
     Ok(())
 }
-
 fn render_cmdline(
     editor: &Editor,
     stdout: &mut std::io::Stdout,

@@ -40,6 +40,7 @@ pub mod glyphs {
     pub const LOCATION: &str = "\u{2316}";
     pub const BUFFER_ICON: &str = "\u{2261}";
     pub const ENCODING: &str = "\u{2261}";
+    pub const FUNCTION: &str = "\u{f0295}";
 }
 
 // ---------------------------------------------------------------------------
@@ -132,6 +133,7 @@ pub mod crossterm_colors {
     pub const YELLOW: Color = Color::Rgb { r: 249, g: 226, b: 175 };
     pub const RED: Color = Color::Rgb { r: 243, g: 139, b: 168 };
     pub const BLUE: Color = Color::Rgb { r: 137, g: 180, b: 250 };
+    pub const FUNCTION: &str = "\u{1f4e6}"; // or whatever function icon you want
 }
 
 // ---------------------------------------------------------------------------
@@ -370,6 +372,9 @@ pub fn draw_powerline_status(f: &mut Frame, editor: &Editor, area: Rect) {
         let total_lines = buf.line_count();
 
         let _git_status = GitStatus::from_buffer(buf);
+        
+        // Get current function name (if available from LSP or context)
+        let func_display = get_current_function(buf, window.map(|w| w.cursor.position.line).unwrap_or(0));
 
         let mut left_spans: Vec<Span> = Vec::new();
         let mut right_spans: Vec<Span> = Vec::new();
@@ -437,20 +442,23 @@ pub fn draw_powerline_status(f: &mut Frame, editor: &Editor, area: Rect) {
         ));
 
         // === RIGHT SIDE ===
-        // Segment 1: Buffer position
+        // Build right side from the end toward the beginning
+        // Start with buffer position
         let buf_text = format!(
             " {} {} / {} ",
             glyphs::BUFFER_ICON,
             editor.active_buffer_idx + 1,
             editor.buffers.len()
         );
-        right_spans.insert(0, Span::styled(buf_text, Style::default().fg(SUBTEXT).bg(SURFACE1)));
+        right_spans.push(Span::styled(buf_text, Style::default().fg(SUBTEXT).bg(SURFACE1)));
+        
+        // Separator before buffer position
         right_spans.insert(0, Span::styled(
             glyphs::SEPARATOR_RIGHT,
             Style::default().fg(SURFACE1).bg(SURFACE0),
         ));
 
-        // Segment 2: Encoding & filetype
+        // Encoding & filetype
         let ft_text = buf.language.map(|l| l.as_str().to_string()).unwrap_or_else(|| "text".to_string());
         right_spans.insert(0, Span::styled(
             format!(" UTF-8 {} ", ft_text),
@@ -458,8 +466,21 @@ pub fn draw_powerline_status(f: &mut Frame, editor: &Editor, area: Rect) {
         ));
         right_spans.insert(0, Span::styled(
             glyphs::SEPARATOR_RIGHT,
-            Style::default().fg(SURFACE0).bg(SURFACE0),
+            Style::default().fg(SURFACE0).bg(func_bg_color()),
         ));
+
+        // Function name if available
+        if let Some(func_name) = func_display {
+            // Add separator and function segment
+            right_spans.insert(0, Span::styled(
+                glyphs::SEPARATOR_RIGHT,
+                Style::default().fg(SURFACE2).bg(SURFACE1),
+            ));
+            right_spans.insert(0, Span::styled(
+                format!(" {} {} ", glyphs::FUNCTION, func_name),
+                Style::default().fg(YELLOW).bg(SURFACE1),
+            ));
+        }
 
         // Calculate padding between left and right
         let left_width: usize = left_spans.iter().map(|s| s.content.chars().count()).sum();
@@ -467,6 +488,7 @@ pub fn draw_powerline_status(f: &mut Frame, editor: &Editor, area: Rect) {
         let area_width = area.width as usize;
         let padding = area_width.saturating_sub(left_width + right_width);
 
+        // Fill padding with background color
         left_spans.push(Span::styled(
             " ".repeat(padding),
             Style::default().bg(SURFACE2),
@@ -498,6 +520,19 @@ pub fn draw_powerline_status(f: &mut Frame, editor: &Editor, area: Rect) {
     }
 }
 
+// Helper functions needed for the fix above
+
+fn get_current_function(buffer: &Buffer, line: usize) -> Option<String> {
+    // This should be implemented based on your language server integration
+    // For now, return None or implement basic parsing
+    // You might want to cache this information or get it from LSP
+    None
+}
+
+fn func_bg_color() -> Color {
+    // Return the appropriate background color for the function segment
+    SURFACE2
+}
 // ---------------------------------------------------------------------------
 // Compact Powerline (ratatui)
 // ---------------------------------------------------------------------------

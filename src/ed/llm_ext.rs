@@ -2,6 +2,10 @@
 
 use crate::buffer::{BufferId, BufferKind};
 use crate::ed::git_commit::GitCommitExt;
+use crate::ed::repeat::RepeatExt;
+use crate::ed::visual::VisualExt;
+use crate::ed::window::WindowExt;
+use crate::ed::RepeatableAction;
 use crate::editor::{CommandResult, Editor, Mode};
 use crate::llm::{LlmPreset, LlmRole};
 use crate::llm_client::{Cancelled, LlmClient};
@@ -23,6 +27,11 @@ pub trait LlmExt {
     fn spawn_llm_request(&mut self, messages: Vec<(String, String)>) -> CommandResult;
     fn sync_llm_to_buffer(&mut self);
 
+    fn current_line_content(&self) -> String;
+    fn llm_quick_action(&mut self, preset: LlmPreset, status_msg: &str) -> CommandResult;
+    fn llm_close_split_session(&mut self) -> CommandResult;
+    fn llm_send_input_buffer(&mut self) -> CommandResult;
+    fn llm_setup_split_session(&mut self, initial_text: String) -> CommandResult;
     // Session persistence
     fn llm_session_save(&mut self) -> CommandResult;
     fn llm_session_load(&mut self) -> CommandResult;
@@ -582,6 +591,216 @@ impl LlmExt for Editor {
         }
 
         self.dirty.mark_all();
+    }
+    /// Setup the Top=Input / Bottom=Response split layout
+    fn llm_setup_split_session(&mut self, initial_text: String) -> CommandResult {
+        // Save the buffer we came from
+        self.llm_origin_buffer_id = self.windows.active_window().map(|w| w.buffer_id);
+
+        // 1. Split the window (Creates Top=Origin, Bottom=Origin)
+        self.split_horizontal();
+
+        // 2. Move to Bottom window & set it to LLM Response buffer
+        self.next_window();
+        let llm_id = self.ensure_llm_buffer();
+        if let Some(w) = self.windows.active_window_mut() {
+            w.set_buffer(llm_id);
+        }
+
+        // 3. Move back to Top window & set it to LLM Input scratchpad
+        self.prev_window();
+
+        let content = format!("## TODO / Instructions:\n\n{}", initial_text);
+
+        // Find existing LlmInput buffer ID FIRST (immutable borrow)
+        let existing_input_id = self
+            .buffers
+            .iter()
+            .find(|b| b.kind == BufferKind::LlmInput)
+            .map(|b| b.id);
+
+        let input_id = if let Some(id) = existing_input_id {
+            // Now we can mutate without the immutable borrow alive
+            if let Some(buf) = self.buffers.get_mut(&id) {
+                buf.rope = ropey::Rope::from(content);
+                buf.dirty = true;
+            }
+            id
+        } else {
+            let id = self.buffers.new_buffer();
+            if let Some(buf) = self.buffers.get_mut(&id) {
+                buf.kind = BufferKind::LlmInput;
+                buf.rope = ropey::Rope::from(content);
+                buf.dirty = true;
+            }
+            id
+        };
+
+        if let Some(w) = self.windows.active_window_mut() {
+            w.set_buffer(input_id);
+        }
+
+        // Start in Insert mode so they can immediately start typing instructions
+        self.mode = Mode::Insert;
+        self.dirty.mark_all();
+        CommandResult::ModeChanged(Mode::Insert)
+    }
+    /// Submit the contents of the Top scratchpad to the LLM
+    fn llm_send_input_buffer(&mut self) -> CommandResult {
+        let prompt_text = self
+            .buffers
+            .iter()
+            .find(|b| b.kind == BufferKind::LlmInput)
+            .map(|b| b.rope.to_string())
+            .unwrap_or_default();
+
+        if prompt_text.trim().is_empty() {
+            self.set_infobar_message("LLM prompt is empty".to_string());
+            return CommandResult::ViewChanged;
+        }
+
+        // CRITICAL: Clear context and todo_prefix because the context is
+        // already embedded inside the prompt_text from the scratchpad buffer!
+        // If we don't clear these, llm_send_from_prompt will duplicate the code.
+        self.llm_active_context = None;
+        self.llm_todo_prefix = false;
+        self.llm_active_preset = None;
+
+        // Switch focus to the Response window (Bottom) so the user can watch it stream
+        self.next_window();
+        self.mode = Mode::Normal;
+
+        self.llm_send_from_prompt(prompt_text)
+    }
+
+    /// Close the split and restore the original single-window layout
+    fn llm_close_split_session(&mut self) -> CommandResult {
+        // 1. We are in Top window (Input). Move to Bottom window (Response).
+        self.next_window();
+
+        // 2. Close the Bottom window. (Cursor automatically returns to Top window)
+        self.close_window();
+
+        // 3. Restore Top window to the original code buffer
+        if let Some(origin_id) = self.llm_origin_buffer_id.take() {
+            if let Some(w) = self.windows.active_window_mut() {
+                if self.buffers.get(&origin_id).is_some() {
+                    w.set_buffer(origin_id);
+                }
+            }
+        }
+
+        self.mode = Mode::Normal;
+        self.dirty.mark_all();
+        CommandResult::ViewChanged
+    }
+
+    /// Execute a quick LLM action (translate, explain, summarize, check English).
+    ///
+    /// Grabs text from visual selection or current line, sends it directly
+    /// to the LLM with the given preset, and streams the response to the
+    /// infobar (and register matching the preset). Does NOT enter LlmPrompt
+    /// mode — the user stays in their current mode and sees the result inline.
+    fn llm_quick_action(&mut self, preset: LlmPreset, status_msg: &str) -> CommandResult {
+        let was_visual = matches!(
+            self.mode,
+            Mode::Visual | Mode::VisualLine | Mode::VisualBlock
+        );
+
+        // Grab text: visual selection → fallback to current line
+        let text = if was_visual {
+            self.get_selection_text().unwrap_or_default()
+        } else {
+            self.current_line_content()
+        };
+
+        // Clear visual selection AND return to Normal mode
+        if let Some(w) = self.windows.active_window_mut() {
+            w.selection_anchor = None;
+        }
+        if was_visual {
+            self.mode = Mode::Normal;
+            self.dirty.status_powerline = true; // Update mode indicator
+        }
+
+        if text.trim().is_empty() {
+            self.set_infobar_message("No text to process".to_string());
+            return CommandResult::ViewChanged;
+        }
+
+        // Record for dot-repeat
+        self.record_action(RepeatableAction::LlmQuickAction { preset }, 1);
+
+        // ── Single-shot: no session, no conversation history ──
+        self.llm_single_shot = true;
+        self.llm_infobar_response = true;
+        self.llm_infobar_accumulator.clear();
+        self.llm_active_preset = Some(preset);
+        self.llm_active_context = None;
+        self.llm_todo_prefix = false;
+
+        let system_prompt = preset.system_prompt().to_string();
+        let messages = vec![
+            ("system".to_string(), system_prompt),
+            ("user".to_string(), text),
+        ];
+
+        self.set_status(format!("{}…", status_msg));
+        self.dirty.status_infobar = true;
+
+        self.spawn_llm_request(messages);
+
+        // Return ModeChanged if we were in Visual, so the event loop updates properly
+        if was_visual {
+            CommandResult::ModeChanged(Mode::Normal)
+        } else {
+            CommandResult::ViewChanged
+        }
+    }
+
+    /// Return the trimmed text of the current line, for register insertion (Ctrl-R Ctrl-L).
+    /// When in LlmPrompt mode, prefer a non-special buffer so we pull the
+    /// source code line rather than the LLM conversation.
+    fn current_line_content(&self) -> String {
+        if let Some(window) = self.windows.active_window() {
+            let line_idx = window.cursor.position.line;
+            let buffer_id = window.buffer_id;
+            if let Some(buffer) = self.buffers.get(&buffer_id) {
+                // In LlmPrompt with an LLM/special buffer active, skip to find a
+                // normal buffer in another window instead.
+                if self.mode == Mode::LlmPrompt && buffer.kind != BufferKind::Normal {
+                    // fall through to search other windows below
+                } else if line_idx < buffer.line_count() {
+                    return buffer
+                        .rope
+                        .line(line_idx)
+                        .to_string()
+                        .trim_end()
+                        .to_string();
+                }
+            }
+        }
+
+        // Fallback: scan all windows for a Normal buffer (LlmPrompt edge case)
+        if self.mode == Mode::LlmPrompt {
+            for w in self.windows.iter() {
+                if let Some(buffer) = self.buffers.get(&w.buffer_id) {
+                    if buffer.kind == BufferKind::Normal {
+                        let line_idx = w.cursor.position.line;
+                        if line_idx < buffer.line_count() {
+                            return buffer
+                                .rope
+                                .line(line_idx)
+                                .to_string()
+                                .trim_end()
+                                .to_string();
+                        }
+                    }
+                }
+            }
+        }
+
+        String::new()
     }
 }
 

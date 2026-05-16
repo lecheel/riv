@@ -7,6 +7,7 @@ use crate::buffer::CursorPosition;
 use crate::ed::editing::EditingExt;
 use crate::ed::git::GitExt;
 use crate::ed::MovementExt;
+use crate::ed::ReplaceExt;
 use crate::editor::{CommandResult, Editor};
 use crate::prompt::MiniInputPrompt;
 use unicode_segmentation::UnicodeSegmentation;

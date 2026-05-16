@@ -2,6 +2,7 @@
 //! `--healthy` startup check — validates config, keybindings, and environment.
 
 use crate::config::{Config, ConfigError, HistoryData, LlmBackend};
+use crossterm::style::Stylize;
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -18,6 +19,16 @@ impl std::fmt::Display for Severity {
             Severity::Ok => write!(f, "  OK"),
             Severity::Warn => write!(f, "WARN"),
             Severity::Err => write!(f, "ERR!"),
+        }
+    }
+}
+
+impl Severity {
+    fn styled(&self) -> String {
+        match self {
+            Severity::Ok => "  OK".green().to_string(),
+            Severity::Warn => "WARN".yellow().to_string(),
+            Severity::Err => "ERR!".red().to_string(),
         }
     }
 }
@@ -40,7 +51,7 @@ impl HealthReport {
 
     pub fn print(&self) {
         if self.issues.is_empty() {
-            println!("(no checks run)");
+            println!("{}", "(no checks run)".grey());
             return;
         }
 
@@ -58,14 +69,24 @@ impl HealthReport {
         }
 
         for (category, items) in &categories {
-            println!("\n── {} ──", category.to_uppercase());
+            println!(
+                "\n{} {} {}",
+                "──".dark_grey(),
+                category.to_uppercase().bold().cyan(),
+                "──".dark_grey(),
+            );
             for issue in items {
-                let icon = match issue.severity {
-                    Severity::Ok => "✓",
-                    Severity::Warn => "⚠",
-                    Severity::Err => "✗",
+                let (icon, styled_severity) = match issue.severity {
+                    Severity::Ok => ("✓".green().to_string(), Severity::Ok.styled()),
+                    Severity::Warn => ("⚠".yellow().to_string(), Severity::Warn.styled()),
+                    Severity::Err => ("✗".red().to_string(), Severity::Err.styled()),
                 };
-                println!("  {} [{}] {}", icon, issue.severity, issue.message);
+                println!(
+                    "  {} {} {}",
+                    icon,
+                    format!("[{}]", styled_severity),
+                    colorize_message(&issue.message),
+                );
             }
         }
 
@@ -88,15 +109,151 @@ impl HealthReport {
         println!();
         if errors > 0 {
             println!(
-                "✗ {} error(s), {} warning(s), {} passed",
-                errors, warns, oks
+                "{} {} {}{} {} {}{} {}",
+                "✗".red(),
+                errors.to_string().red().bold(),
+                "error".red(),
+                if errors != 1 { "s" } else { "" }.red(),
+                warns.to_string().yellow().bold(),
+                "warning".yellow(),
+                if warns != 1 { "s" } else { "" }.yellow(),
+                format!("{}, {} passed", oks, oks + warns + errors).grey(),
             );
         } else if warns > 0 {
-            println!("⚠ 0 error(s), {} warning(s), {} passed", warns, oks);
+            println!(
+                "{} {} {}{} {} {}",
+                "⚠".yellow(),
+                "0 errors,".green(),
+                warns.to_string().yellow().bold(),
+                " warning".yellow(),
+                if warns != 1 { "s" } else { "" }.yellow(),
+                format!("{}, {} passed", oks, oks + warns).grey(),
+            );
         } else {
-            println!("✓ All {} check(s) passed", oks);
+            println!(
+                "{} {}",
+                "✓".green(),
+                format!("All {} check(s) passed", oks).green().bold(),
+            );
         }
     }
+}
+
+/// Apply mild colorization to message content:
+///   - Base text is rendered in dark white (grey)
+///   - Paths inside `⟨…⟩` or `"…"` → magenta
+///   - Quoted values like `'foo'` → cyan
+///   - Numbers attached to key names → yellow
+fn colorize_message(msg: &str) -> String {
+    use crossterm::style::Color;
+
+    // Normal text is rendered as dark white (grey)
+    let base = Color::Grey;
+
+    let mut out = String::with_capacity(msg.len() + 32);
+    let chars: Vec<char> = msg.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        // ── Quoted string: "…" or '…' → cyan ──
+        if chars[i] == '"' || chars[i] == '\'' {
+            let quote = chars[i];
+            let start = i;
+            i += 1;
+            while i < chars.len() && chars[i] != quote {
+                i += 1;
+            }
+            if i < chars.len() {
+                i += 1; // consume closing quote
+            }
+            let slice: String = chars[start..i].iter().collect();
+            out.push_str(&slice.to_string().cyan().to_string());
+            continue;
+        }
+
+        // ── Backtick: `…` → magenta (code / command) ──
+        if chars[i] == '`' {
+            let start = i;
+            i += 1;
+            while i < chars.len() && chars[i] != '`' {
+                i += 1;
+            }
+            if i < chars.len() {
+                i += 1;
+            }
+            let slice: String = chars[start..i].iter().collect();
+            out.push_str(&slice.to_string().magenta().to_string());
+            continue;
+        }
+
+        // ── Path-like segments (contain / or .json / .toml etc.) → dark magenta ──
+        // Heuristic: if we see a word containing '/' or ending in a known extension
+        if chars[i] == '/' || (chars[i].is_alphanumeric() && looks_like_path_start(&chars, i)) {
+            let start = i;
+            while i < chars.len()
+                && !chars[i].is_whitespace()
+                && chars[i] != ')'
+                && chars[i] != ':'
+                && chars[i] != ','
+            {
+                i += 1;
+            }
+            let slice: String = chars[start..i].iter().collect();
+            if slice.contains('/')
+                || slice.contains(".json")
+                || slice.contains(".toml")
+                || slice.contains(".rs")
+            {
+                out.push_str(&slice.to_string().dark_magenta().to_string());
+            } else {
+                out.push_str(&slice.to_string().stylize().with(base).to_string());
+            }
+            continue;
+        }
+
+        // ── Numbers → yellow ──
+        if chars[i].is_ascii_digit()
+            || (chars[i] == '-' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit())
+        {
+            let start = i;
+            if chars[i] == '-' {
+                i += 1;
+            }
+            while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') {
+                i += 1;
+            }
+            // Also consume trailing units like "s", "ms", etc.
+            if i < chars.len() && (chars[i] == 's' || chars[i] == 'm') {
+                i += 1;
+                if i < chars.len() && chars[i] == 's' {
+                    i += 1;
+                }
+            }
+            let slice: String = chars[start..i].iter().collect();
+            out.push_str(&slice.to_string().yellow().to_string());
+            continue;
+        }
+
+        // ── Default: base grey color ──
+        let ch = chars[i];
+        out.push_str(&ch.to_string().stylize().with(base).to_string());
+        i += 1;
+    }
+
+    out
+}
+
+/// Check if position looks like the start of a path token.
+fn looks_like_path_start(chars: &[char], i: usize) -> bool {
+    let rest: String = chars[i..].iter().take(60).collect();
+    let lower = rest.to_lowercase();
+    lower.contains('/')
+        || lower.contains(".json")
+        || lower.contains(".toml")
+        || lower.contains(".rs")
+        || lower.contains(".txt")
+        || lower.contains(".md")
+        || lower.contains(".lock")
 }
 
 // ── Entry point ─────────────────────────────────────────────────────
@@ -561,6 +718,7 @@ fn check_keybindings(issues: &mut Vec<HealthIssue>) {
         ));
     }
 }
+
 fn check_history_file(issues: &mut Vec<HealthIssue>) {
     let path = match Config::history_path() {
         Ok(p) => p,
@@ -584,7 +742,6 @@ fn check_history_file(issues: &mut Vec<HealthIssue>) {
                     "history",
                     format!("History OK ({} commands, {} searches)", cmd_len, search_len),
                 ));
-                // Warn if history is very large
                 if cmd_len > 800 {
                     issues.push(warn(
                         "history",
@@ -620,42 +777,39 @@ fn check_mru_file(issues: &mut Vec<HealthIssue>) {
     }
 
     match std::fs::read_to_string(&path) {
-        Ok(content) => {
-            match serde_json::from_str::<serde_json::Value>(&content) {
-                Ok(data) => {
-                    let count = data
-                        .get("mru_files")
-                        .and_then(|v| v.as_array())
-                        .map(|a| a.len())
-                        .unwrap_or(0);
-                    issues.push(ok("mru", format!("MRU OK ({} entries)", count)));
+        Ok(content) => match serde_json::from_str::<serde_json::Value>(&content) {
+            Ok(data) => {
+                let count = data
+                    .get("mru_files")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.len())
+                    .unwrap_or(0);
+                issues.push(ok("mru", format!("MRU OK ({} entries)", count)));
 
-                    // Check how many entries point to missing files
-                    let missing = data
-                        .get("mru_files")
-                        .and_then(|v| v.as_array())
-                        .map(|arr| {
-                            arr.iter()
-                                .filter_map(|entry| entry.get("path").and_then(|p| p.as_str()))
-                                .filter(|p| !std::path::Path::new(p).exists())
-                                .count()
-                        })
-                        .unwrap_or(0);
-                    if missing > 0 {
-                        issues.push(warn(
-                            "mru",
-                            format!(
-                                "{} of {} entries point to files that no longer exist",
-                                missing, count
-                            ),
-                        ));
-                    }
-                }
-                Err(e) => {
-                    issues.push(err("mru", format!("Corrupt MRU file {:?}: {}", path, e)));
+                let missing = data
+                    .get("mru_files")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|entry| entry.get("path").and_then(|p| p.as_str()))
+                            .filter(|p| !std::path::Path::new(p).exists())
+                            .count()
+                    })
+                    .unwrap_or(0);
+                if missing > 0 {
+                    issues.push(warn(
+                        "mru",
+                        format!(
+                            "{} of {} entries point to files that no longer exist",
+                            missing, count
+                        ),
+                    ));
                 }
             }
-        }
+            Err(e) => {
+                issues.push(err("mru", format!("Corrupt MRU file {:?}: {}", path, e)));
+            }
+        },
         Err(e) => {
             issues.push(warn("mru", format!("Cannot read {:?}: {}", path, e)));
         }
@@ -718,7 +872,6 @@ fn check_tool_availability(issues: &mut Vec<HealthIssue>) {
     for (cmd, desc, required) in &tools {
         match which::which(cmd) {
             Ok(path) => {
-                // Try to get version
                 let version = get_tool_version(cmd);
                 let ver_str = match version {
                     Some(v) => format!(" {}", v),
@@ -817,7 +970,6 @@ fn check_clipboard(issues: &mut Vec<HealthIssue>) {
 }
 
 fn check_locale(issues: &mut Vec<HealthIssue>) {
-    // Check LANG / LC_ALL
     let lang = std::env::var("LANG")
         .or_else(|_| std::env::var("LC_ALL"))
         .unwrap_or_else(|_| "(not set)".to_string());
@@ -874,7 +1026,6 @@ fn get_tool_version(cmd: &str) -> Option<String> {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    // Take first line, strip common prefixes
     let first_line = stdout.lines().next().unwrap_or("");
     let version = first_line
         .trim()
@@ -890,28 +1041,18 @@ fn get_tool_version(cmd: &str) -> Option<String> {
 }
 
 /// Check if a key sequence string looks valid.
-///
-/// Supported formats:
-/// - Single char: `a`, `+`, `-`
-/// - Multi-char sequence: `dd`, `gg`
-/// - Named key in angle brackets: `<Tab>`, `<Enter>`, `<F2>`
-/// - Modifier in angle brackets: `<ctrl-b>`, `<alt-d>`, `<C-b>`, `<A-b>`
-/// - Leader prefix: `<leader>p`, `<leader>pp`
-/// - Mixed: `<C-w>s`, `<leader>ff`
 fn is_valid_key_sequence(key: &str) -> bool {
     let key = key.trim();
     if key.is_empty() {
         return false;
     }
 
-    // Parse the sequence into tokens: either single chars or <...> blocks
     let mut pos = 0;
     let bytes = key.as_bytes();
     let mut tokens = Vec::new();
 
     while pos < bytes.len() {
         if bytes[pos] == b'<' {
-            // Find closing >
             let start = pos;
             let mut found_end = false;
             while pos < bytes.len() {
@@ -924,10 +1065,9 @@ fn is_valid_key_sequence(key: &str) -> bool {
                 pos += 1;
             }
             if !found_end {
-                return false; // unclosed <
+                return false;
             }
         } else {
-            // Single character (could be part of a multi-key sequence)
             tokens.push(&key[pos..pos + 1]);
             pos += 1;
         }
@@ -937,7 +1077,6 @@ fn is_valid_key_sequence(key: &str) -> bool {
         return false;
     }
 
-    // Validate each token
     for token in &tokens {
         if !is_valid_key_token(token) {
             return false;
@@ -948,13 +1087,11 @@ fn is_valid_key_sequence(key: &str) -> bool {
 }
 
 fn is_valid_key_token(token: &str) -> bool {
-    // <...> bracket form
     if token.starts_with('<') && token.ends_with('>') {
         let inner = &token[1..token.len() - 1];
         return is_valid_bracket_key(inner);
     }
 
-    // Single printable ASCII character
     if token.chars().count() == 1 {
         return token.chars().next().unwrap().is_ascii();
     }
@@ -965,12 +1102,10 @@ fn is_valid_key_token(token: &str) -> bool {
 fn is_valid_bracket_key(inner: &str) -> bool {
     let lower = inner.to_lowercase();
 
-    // ── Leader ──
     if lower == "leader" {
         return true;
     }
 
-    // ── Named keys ──
     let named = [
         "enter",
         "return",
@@ -1003,16 +1138,12 @@ fn is_valid_bracket_key(inner: &str) -> bool {
         return true;
     }
 
-    // ── Function keys ──
     for i in 1..=12 {
         if lower == format!("f{}", i) {
             return true;
         }
     }
 
-    // ── Modifier + key ──
-    // Handles: ctrl-b, alt-b, c-b, a-b, Ctrl-B, Alt-B, C-B, A-B
-    // Also: ctrl+b, alt+b
     for sep in &["-", "+"] {
         for prefix in &["ctrl", "alt", "c", "a"] {
             let pattern = format!("{}{}", prefix, sep);
@@ -1020,15 +1151,12 @@ fn is_valid_bracket_key(inner: &str) -> bool {
                 if rest.is_empty() {
                     return false;
                 }
-                // Single char after modifier
                 if rest.chars().count() == 1 {
                     return rest.chars().next().unwrap().is_ascii();
                 }
-                // Named key after modifier (e.g., <ctrl-enter>, <alt-pageup>)
                 if named.contains(&rest) {
                     return true;
                 }
-                // Function key after modifier
                 for i in 1..=12 {
                     if rest == format!("f{}", i) {
                         return true;
@@ -1043,18 +1171,12 @@ fn is_valid_bracket_key(inner: &str) -> bool {
 }
 
 /// Check if an action name looks structurally valid.
-///
-/// We intentionally do NOT validate against a hardcoded list — actions
-/// are added frequently during development and the list would constantly
-/// be out of date. Instead we check that the name is a non-empty string
-/// of reasonable characters.
 fn is_valid_action_name(name: &str) -> bool {
     let name = name.trim();
     if name.is_empty() {
         return false;
     }
 
-    // Must contain only alphanumeric, underscores, or hyphens
     name.chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }

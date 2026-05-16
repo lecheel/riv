@@ -33,6 +33,7 @@
 
 use unicode_segmentation::UnicodeSegmentation;
 
+use crate::buffer::BufferKind;
 use crate::buffer::{Buffer, CursorPosition, Language};
 use crate::ed::git::GitExt;
 use crate::ed::EditingExt;
@@ -40,6 +41,7 @@ use crate::ed::MovementExt;
 use crate::editor::{Editor, Mode};
 use crate::popup::FunctionEntry;
 use crate::CommandResult;
+use log::debug;
 
 // ── Kinds & operators ───────────────────────────────────────────────
 
@@ -546,6 +548,227 @@ impl TextObjectExt for Editor {
     }
 }
 
+// ── Editor helpers ──────────────────────────────────────────────────
+
+impl Editor {
+    pub fn yank_line_range(&mut self, start_line: usize, end_line: usize) {
+        let buffer_id = match self.windows.active_window() {
+            Some(w) => w.buffer_id,
+            None => return,
+        };
+        if let Some(buffer) = self.buffers.get(&buffer_id) {
+            let mut text = String::new();
+            for i in start_line..=end_line {
+                if let Some(line) = buffer.line_text(i) {
+                    text.push_str(line.trim_end_matches('\n'));
+                    text.push('\n');
+                }
+            }
+            self.yank_register = text;
+        }
+    }
+    /// Return the name of the function the cursor is currently inside, if any.
+    ///
+    /// Walks up the tree-sitter tree from the cursor position looking for an
+    /// enclosing function/method node.  Returns `None` if no tree-sitter tree
+    /// is available or the cursor is not inside a function.
+    pub fn current_function_name(&self) -> Option<String> {
+        let window = self.windows.active_window()?;
+        let buffer_id = window.buffer_id;
+        let buffer = self.buffers.get(&buffer_id)?;
+        let cursor_pos = window.cursor.position;
+
+        let tree = buffer.tree()?;
+        let root = tree.root_node();
+
+        let byte_off = cursor_pos_to_byte(buffer, cursor_pos)?;
+
+        let mut node = match root.descendant_for_byte_range(byte_off, byte_off) {
+            Some(n) => n,
+            None => return None,
+        };
+
+        loop {
+            if FUNCTION_KINDS.contains(&node.kind()) {
+                let name = extract_node_name(buffer, &node);
+                return Some(name);
+            }
+            node = match node.parent() {
+                Some(p) => p,
+                None => return None,
+            };
+        }
+    }
+
+    /// Update the cached current function name. Called from tick().
+    pub fn update_function_name_cache(&mut self) {
+        let window = match self.windows.active_window() {
+            Some(w) => w,
+            None => {
+                debug!("[fn_name] no active window");
+                self.current_function_name = None;
+                self.fn_name_cache_key = None;
+                return;
+            }
+        };
+        let buffer_id = window.buffer_id;
+        let cursor_line = window.cursor.position.line;
+        let cache_key = (buffer_id, cursor_line);
+
+        // Skip if nothing changed since last computation
+        if !self.fn_name_needs_update && self.fn_name_cache_key == Some(cache_key) {
+            return;
+        }
+
+        debug!(
+            "[fn_name] recomputing: needs_update={}, old_key={:?}, new_key={:?}",
+            self.fn_name_needs_update, self.fn_name_cache_key, cache_key
+        );
+
+        self.fn_name_needs_update = false;
+        self.fn_name_cache_key = Some(cache_key);
+
+        // Skip special buffer types and buffers without language support
+        if let Some(buffer) = self.buffers.get(&buffer_id) {
+            debug!(
+                "[fn_name] buffer kind={:?}, language={:?}, has_file={:?}",
+                buffer.kind,
+                buffer.language,
+                buffer.file_path.as_ref().map(|p| p.display().to_string()),
+            );
+            if buffer.kind != BufferKind::Normal || buffer.language.is_none() {
+                debug!("[fn_name] skipping: non-Normal buffer or no language");
+                self.current_function_name = None;
+                return;
+            }
+        } else {
+            debug!("[fn_name] buffer not found for id={:?}", buffer_id);
+            self.current_function_name = None;
+            return;
+        }
+
+        // Ensure tree-sitter is initialized and up-to-date
+        if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
+            let had_tree_before = buffer.tree().is_some();
+            if buffer.tree().is_none() {
+                debug!("[fn_name] initializing tree-sitter");
+                buffer.init_tree_sitter();
+            } else {
+                buffer.reparse_tree();
+            }
+            let has_tree_after = buffer.tree().is_some();
+            debug!(
+                "[fn_name] tree-sitter: had_tree={}, has_tree_now={}",
+                had_tree_before, has_tree_after
+            );
+        }
+
+        // Compute the function name
+        let new_name = self.compute_current_function_name();
+
+        debug!("[fn_name] computed={:?}", new_name);
+
+        // Only mark powerline dirty if name actually changed
+        if self.current_function_name != new_name {
+            debug!(
+                "[fn_name] changed: old={:?}, new={:?}",
+                self.current_function_name, new_name
+            );
+            self.current_function_name = new_name;
+            self.dirty.status_powerline = true;
+        }
+    }
+
+    /// Compute the current function name from tree-sitter.
+    fn compute_current_function_name(&self) -> Option<String> {
+        let window = match self.windows.active_window() {
+            Some(w) => w,
+            None => return None,
+        };
+        let buffer_id = window.buffer_id;
+        let buffer = match self.buffers.get(&buffer_id) {
+            Some(b) => b,
+            None => return None,
+        };
+        let cursor_pos = window.cursor.position;
+
+        let tree = match buffer.tree() {
+            Some(t) => t,
+            None => {
+                debug!("[fn_name] compute: no tree for buffer {:?}", buffer_id);
+                return None;
+            }
+        };
+        let root = tree.root_node();
+
+        debug!(
+            "[fn_name] compute: cursor=({}, {}), root_kind={}, root_bytes=({},{})",
+            cursor_pos.line,
+            cursor_pos.col,
+            root.kind(),
+            root.start_byte(),
+            root.end_byte()
+        );
+
+        let byte_off = match cursor_pos_to_byte(buffer, cursor_pos) {
+            Some(b) => b,
+            None => {
+                debug!(
+                    "[fn_name] compute: cursor_pos_to_byte returned None for ({}, {})",
+                    cursor_pos.line, cursor_pos.col
+                );
+                return None;
+            }
+        };
+
+        debug!("[fn_name] compute: byte_off={}", byte_off);
+
+        let mut node = match root.descendant_for_byte_range(byte_off, byte_off) {
+            Some(n) => {
+                debug!(
+                    "[fn_name] compute: descendant kind={}, bytes=({},{})",
+                    n.kind(),
+                    n.start_byte(),
+                    n.end_byte()
+                );
+                n
+            }
+            None => {
+                debug!("[fn_name] compute: no descendant at byte {}", byte_off);
+                return None;
+            }
+        };
+
+        let mut depth = 0;
+        loop {
+            let is_fn = FUNCTION_KINDS.contains(&node.kind());
+            debug!(
+                "[fn_name] compute: walk depth={} kind={} is_function={}",
+                depth,
+                node.kind(),
+                is_fn
+            );
+
+            if is_fn {
+                let name = extract_node_name(buffer, &node);
+                debug!("[fn_name] compute: found function, name={:?}", name);
+                return Some(name);
+            }
+            match node.parent() {
+                Some(p) => {
+                    depth += 1;
+                    node = p;
+                }
+                None => {
+                    debug!("[fn_name] compute: reached root without finding function");
+                    return None;
+                }
+            }
+        }
+    }
+}
+
+// ── Pure helper functions ───────────────────────────────────────────
 /// Validate that a tree-sitter function range includes braces for brace-based
 /// languages.  Tree-sitter error recovery can sometimes return a partial range
 /// (e.g. just the body) that excludes the `{` and `}` lines.  This function
@@ -798,28 +1021,6 @@ fn try_find_function_at(
         };
     }
 }
-// ── Editor helpers ──────────────────────────────────────────────────
-
-impl Editor {
-    pub fn yank_line_range(&mut self, start_line: usize, end_line: usize) {
-        let buffer_id = match self.windows.active_window() {
-            Some(w) => w.buffer_id,
-            None => return,
-        };
-        if let Some(buffer) = self.buffers.get(&buffer_id) {
-            let mut text = String::new();
-            for i in start_line..=end_line {
-                if let Some(line) = buffer.line_text(i) {
-                    text.push_str(line.trim_end_matches('\n'));
-                    text.push('\n');
-                }
-            }
-            self.yank_register = text;
-        }
-    }
-}
-
-// ── Pure helper functions ───────────────────────────────────────────
 
 fn find_char_line(buffer: &Buffer, start: usize, end: usize, ch: char) -> Option<usize> {
     for line in start..=end {
@@ -851,4 +1052,42 @@ fn cursor_pos_to_byte(buffer: &Buffer, pos: CursorPosition) -> Option<usize> {
         return Some(rope.len_bytes());
     }
     Some(rope.char_to_byte(cursor_char))
+}
+
+/// Extract the declared name of a tree-sitter function node.
+///
+/// Tries tree-sitter's `name` field first, then `identifier`, and
+/// finally falls back to text-based heuristics.
+fn extract_node_name(buffer: &Buffer, node: &tree_sitter::Node) -> String {
+    // Try the "name" field (Rust `fn`, Go `func`, C/C++ `function_definition`)
+    if let Some(name_node) = node.child_by_field_name("name") {
+        let start = name_node.start_byte();
+        let end = name_node.end_byte();
+        if start < end && end <= buffer.rope.len_bytes() {
+            let name = buffer.rope.byte_slice(start..end).to_string();
+            if !name.is_empty() {
+                return name;
+            }
+        }
+    }
+
+    // Try the "identifier" field (some grammars use this instead)
+    if let Some(id_node) = node.child_by_field_name("identifier") {
+        let start = id_node.start_byte();
+        let end = id_node.end_byte();
+        if start < end && end <= buffer.rope.len_bytes() {
+            let name = buffer.rope.byte_slice(start..end).to_string();
+            if !name.is_empty() {
+                return name;
+            }
+        }
+    }
+
+    // Text-based fallback
+    let line_text = buffer
+        .line_text(node.start_position().row)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    extract_function_name_from_text(&line_text, node.kind())
 }

@@ -200,24 +200,30 @@ impl BuildExt for Editor {
             )),
         }
     }
+
     fn build_close(&mut self) -> CommandResult {
-        // Switch back to the nearest Normal buffer
-        if let Some(window) = self.windows.active_window() {
-            if let Some(buffer) = self.buffers.get(&window.buffer_id) {
-                if buffer.kind == BufferKind::Build {
-                    if let Some(other_id) = self
-                        .buffers
-                        .iter()
-                        .find(|b| b.kind == BufferKind::Normal)
-                        .map(|b| b.id)
-                    {
-                        if let Some(w) = self.windows.active_window_mut() {
-                            w.set_buffer(other_id);
-                        }
-                    }
+        let other_id = self
+            .buffers
+            .iter()
+            .find(|b| b.kind == BufferKind::Normal)
+            .map(|b| b.id);
+
+        let is_build = self
+            .windows
+            .active_window()
+            .and_then(|w| self.buffers.get(&w.buffer_id))
+            .map(|b| b.kind == BufferKind::Build)
+            .unwrap_or(false);
+
+        if is_build {
+            if let Some(other_id) = other_id {
+                if let Some(w) = self.windows.active_window_mut() {
+                    w.set_buffer(other_id);
                 }
+                self.restore_cursor_position();
             }
         }
+
         self.dirty.mark_all();
         CommandResult::ViewChanged
     }

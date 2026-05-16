@@ -9,6 +9,7 @@ use crate::buffer::Language;
 use crate::config::HistoryData;
 use crate::ed::lsp::LspExt;
 use crate::ed::GitExt;
+use crate::ed::ReplaceExt;
 use crate::editor::Editor;
 use crate::msgbox::AppMessage;
 use crate::popup::FilePicker;
