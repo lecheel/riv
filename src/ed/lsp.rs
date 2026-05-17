@@ -1,14 +1,14 @@
 use std::path::Path;
 use std::time::Instant;
 
+use crate::ed::buffer_ops::BufferOpsExt;
 use crate::ed::file_ops::FileOpsExt;
 use crate::ed::ghost_text::GhostTextExt;
 use crate::ed::git::GitExt;
-use crate::ed::goto_def::GotoDefExt;
-use crate::ed::movement::MovementExt;
 use crate::ed::ReplaceExt;
 use crate::editor::{Editor, Mode};
 use crate::msgbox::AppMessage;
+use crate::popup::TagListPopup;
 use unicode_segmentation::UnicodeSegmentation;
 
 pub trait LspExt {
@@ -445,7 +445,9 @@ impl LspExt for Editor {
 
         let path = match self.current_buffer().and_then(|b| b.file_path.clone()) {
             Some(p) => p,
-            None => return,
+            None => {
+                return;
+            }
         };
 
         let window = match self.windows.active_window() {
@@ -456,69 +458,44 @@ impl LspExt for Editor {
         let line = window.cursor.position.line as u32;
         let col = window.cursor.position.col as u32;
 
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        self.send_lsp_message(crate::lsp::LspMessage::GotoDefinition {
-            path,
-            line,
-            col,
-            respond_to: tx,
-        });
+        self.send_lsp_message(crate::lsp::LspMessage::GotoDefinition { path, line, col });
         self.set_status("Goto definition…".to_string());
     }
 
     fn handle_lsp_goto_definition(&mut self, locations: Vec<crate::lsp::Location>) {
         if locations.is_empty() {
-            // LSP found nothing — fall back to Tree-sitter
-            self.set_status("LSP: no definition. Trying local…".to_string());
-            let result = self.goto_definition();
-            if let crate::editor::CommandResult::Error(e) = result {
-                self.set_infobar_message(e);
-            }
+            self.set_infobar_message("No definition found".to_string());
             return;
         }
 
-        let location = &locations[0];
-        let path = crate::lsp::uri_to_path(&location.uri);
-        let target_line = location.range.start.line as usize;
-        let target_col = location.range.start.character as usize;
-
-        // Check if the file is already open
-        let existing_id = self
-            .buffers
-            .iter()
-            .find(|b| b.file_path.as_ref() == Some(&path))
-            .map(|b| b.id);
-
-        if let Some(id) = existing_id {
-            if let Some(window) = self.windows.active_window_mut() {
-                window.set_buffer(id);
-            }
+        if locations.len() == 1 {
+            // Single result — jump directly
+            let loc = &locations[0];
+            let path = lsp_uri_to_path(&loc.uri);
+            let line = loc.range.start.line as usize + 1;
+            let word = self.word_under_cursor_in_current_buffer();
+            crate::ed::tag::tag_jump(self, &path, line, &word);
+            self.set_status("Definition".to_string());
         } else {
-            match self.open_file(&path) {
-                Ok(_) => {}
-                Err(e) => {
-                    self.set_infobar_message(format!("Failed to open definition: {}", e));
-                    return;
-                }
-            }
+            // Multiple results — show interactive tag list popup
+            let word = self.word_under_cursor_in_current_buffer();
+
+            // Jump to first as preview
+            let first = &locations[0];
+            let path = lsp_uri_to_path(&first.uri);
+            let line = first.range.start.line as usize + 1;
+            crate::ed::tag::tag_jump(self, &path, line, &word);
+
+            let popup = TagListPopup::from_lsp_locations(&word, &locations);
+            self.tag_list_popup = Some(popup);
+
+            self.set_status(format!(
+                "{} definitions found — select in popup",
+                locations.len()
+            ));
         }
-
-        self.move_to_position(target_line, target_col);
-        self.ensure_cursor_visible_all();
-
-        let display = self
-            .current_buffer()
-            .map(|b| b.display_name())
-            .unwrap_or_else(|| "?".into());
-        self.set_status(format!(
-            "Goto definition: {} line {}",
-            display,
-            target_line + 1
-        ));
-        self.dirty.mark_all();
     }
 }
-
 // Private helper methods for Editor (these need to be implemented or called via public methods)
 impl Editor {
     /// These methods should be implemented in editor.rs or exposed as public methods:
@@ -628,5 +605,16 @@ impl Editor {
             }
         }
         None
+    }
+}
+
+/// Convert an LSP document URI string to a PathBuf.
+fn lsp_uri_to_path(uri: &str) -> std::path::PathBuf {
+    if uri.starts_with("file:///") {
+        std::path::PathBuf::from(&uri[7..])
+    } else if uri.starts_with("file://") {
+        std::path::PathBuf::from(&uri[7..])
+    } else {
+        std::path::PathBuf::from(uri)
     }
 }

@@ -103,6 +103,7 @@ impl TagManager {
                 "--extras=+q",
                 "--exclude=.git",
                 "--exclude=target",
+                "--exclude=.venv",
                 "--exclude=build",
                 "--exclude=node_modules",
                 "--exclude=dist",

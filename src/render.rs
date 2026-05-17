@@ -1749,7 +1749,28 @@ fn position_cursor(
                 display_col = softwrap_display_col(&cursor_line_text, cursor_col, content_width);
             }
         }
-        let display_col = display_col.saturating_sub(vp.scroll_col as usize);
+        let display_col = if editor.config.word_wrap {
+            let mut col = cursor_col;
+            if let Some(cursor_line_text) = buffer.and_then(|b| b.line_text(cursor_line)) {
+                col = softwrap_display_col(&cursor_line_text, cursor_col, content_width);
+            }
+            col.saturating_sub(vp.scroll_col as usize)
+        } else {
+            // No word wrap: compute actual display width of visible portion
+            // between the horizontal scroll offset and the cursor.
+            if let Some(cursor_line_text) = buffer.and_then(|b| b.line_text(cursor_line)) {
+                let line_text = cursor_line_text.trim_end_matches('\n');
+                let graphemes: Vec<_> = line_text.graphemes(true).collect();
+                let start = (vp.scroll_col as usize).min(graphemes.len());
+                let end = cursor_col.min(graphemes.len());
+                graphemes[start..end]
+                    .iter()
+                    .map(|g| UnicodeWidthStr::width(*g))
+                    .sum::<usize>()
+            } else {
+                cursor_col.saturating_sub(vp.scroll_col as usize)
+            }
+        };
         let abs_cursor_col =
             window.x_offset + gutter_w + mark_gutter_w + git_gutter_w + display_col as u16;
 
@@ -2309,6 +2330,13 @@ pub fn render(
     if must_draw_all_popups || editor.dirty.mru {
         if let Some(popup) = &editor.mru_popup {
             crate::popup::render_mru_popup(popup, stdout, term_width, term_height)?;
+        }
+    }
+
+    // Tag list popup
+    if must_draw_all_popups || editor.tag_list_popup.is_some() {
+        if let Some(popup) = &editor.tag_list_popup {
+            crate::popup::render_tag_list_popup(popup, stdout, term_width, term_height)?;
         }
     }
 

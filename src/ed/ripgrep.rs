@@ -10,6 +10,7 @@ use crate::buffer::{Buffer, BufferId, BufferKind};
 use crate::config::Config;
 use crate::ed::build::BuildExt;
 use crate::ed::file_ops::FileOpsExt;
+use crate::ed::movement::MovementExt;
 use crate::editor::{CommandResult, Editor, Mode};
 use crate::ripgrep;
 use crate::ripgrep::RipgrepOutput;
@@ -357,7 +358,7 @@ impl RipgrepExt for Editor {
             window.cursor.position.col = 0;
             window.cursor.desired_col = None;
         }
-
+        self.scroll_center();
         self.ensure_cursor_visible(&buffer_id);
         self.clamp_cursor_to_buffer(&buffer_id);
         self.dirty.mark_all();

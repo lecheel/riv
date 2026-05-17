@@ -9,23 +9,11 @@ use std::time::Instant;
 use crate::action::Action;
 use crate::buffer::BufferKind;
 use crate::buffer::{Buffer, BufferCollection, BufferId, CursorPosition};
+use crate::codeium::CodeiumManager;
 use crate::command::CommandRegistry;
 use crate::completion::CompletionEngine;
 use crate::config::{Config, HistoryData};
 use crate::dirty::DirtyState;
-use crate::git::DiffHunk;
-use crate::keybind::{
-    apply_custom_keybindings, default_command_keymap, default_insert_keymap, default_normal_keymap,
-    default_visual_keymap, KeyBindManager, KeyBindResult,
-};
-use crate::mru::MruManager;
-use crate::overlay::OverlayTracker;
-use crate::popup::{FilePicker, HelpPopup, MruPopup};
-use crate::terminal::{Key, TerminalEvent};
-use crate::window::WindowManager;
-use tokio::sync::mpsc;
-// Import the block insert state from visual module (only definition)
-use crate::codeium::CodeiumManager;
 use crate::ed::build::BuildExt;
 use crate::ed::git_commit::GitCommitExt;
 use crate::ed::visual::BlockInsertState;
@@ -45,14 +33,26 @@ use crate::ed::{
 use crate::ed::{GitDiffExt, GitLogExt, GitStatusExt};
 use crate::ed::{TextObjectExt, TextObjectKind, TextObjectOperator};
 use crate::ghost_text::GhostTextManager;
+use crate::git::DiffHunk;
+use crate::keybind::{
+    apply_custom_keybindings, default_command_keymap, default_insert_keymap, default_normal_keymap,
+    default_visual_keymap, KeyBindManager, KeyBindResult,
+};
 use crate::llm::{LlmBuffer, LlmPreset};
 use crate::misc::format_shortcut_keys;
 use crate::misc::parse_shortcut_keys;
+use crate::mru::MruManager;
+use crate::overlay::OverlayTracker;
 use crate::popup::Scrollable;
+use crate::popup::TagListPopup;
+use crate::popup::{FilePicker, HelpPopup, MruPopup};
 use crate::prompt::MiniInputPrompt;
 use crate::prompt::PromptAction;
+use crate::terminal::{Key, TerminalEvent};
 use crate::vocab::VocabManager;
+use crate::window::WindowManager;
 use std::path::PathBuf;
+use tokio::sync::mpsc;
 
 // ── Editor modes ────────────────────────────────────────────────────
 
@@ -290,6 +290,7 @@ pub struct Editor {
     pub tag_manager: crate::tags::TagManager,
     /// Current tag search results (for cycling with :tnext/:tprev).
     pub tag_results: Vec<crate::tags::TagEntry>,
+    pub tag_list_popup: Option<TagListPopup>,
 
     // ==================== Clipboard & Registers ====================
     /// Yank (copy) register.
@@ -716,6 +717,7 @@ impl Editor {
 
             tag_manager: crate::tags::TagManager::new(),
             tag_results: Vec::new(),
+            tag_list_popup: None,
             // Clipboard & Registers
             yank_register: String::new(),
             named_registers: std::collections::HashMap::new(),
@@ -2044,6 +2046,43 @@ impl Editor {
                     self.dirty.cursor = true;
                     return CommandResult::NoOp;
                 }
+            }
+        }
+
+        // Tag list popup — intercept keys when active
+        if let Some(ref mut popup) = self.tag_list_popup {
+            match key {
+                Key::Char('j') | Key::Down => {
+                    popup.move_down();
+                    // Also jump to the now-selected entry as preview
+                    if let Some(entry) = popup.selected_entry().cloned() {
+                        let path = std::path::PathBuf::from(&entry.file);
+                        crate::ed::tag::tag_jump(self, &path, entry.line, &entry.name);
+                    }
+                    return CommandResult::ViewChanged;
+                }
+                Key::Char('k') | Key::Up => {
+                    popup.move_up();
+                    if let Some(entry) = popup.selected_entry().cloned() {
+                        let path = std::path::PathBuf::from(&entry.file);
+                        crate::ed::tag::tag_jump(self, &path, entry.line, &entry.name);
+                    }
+                    return CommandResult::ViewChanged;
+                }
+                Key::Enter => {
+                    if let Some(entry) = popup.selected_entry().cloned() {
+                        let path = std::path::PathBuf::from(&entry.file);
+                        crate::ed::tag::tag_jump(self, &path, entry.line, &entry.name);
+                    }
+                    self.tag_list_popup = None;
+                    return CommandResult::ViewChanged;
+                }
+                Key::Escape => {
+                    // Use whatever your Key enum calls Escape
+                    self.tag_list_popup = None;
+                    return CommandResult::ViewChanged;
+                }
+                _ => {}
             }
         }
 
@@ -3462,13 +3501,31 @@ impl Editor {
                 Ok(()) => CommandResult::Message("File saved.".to_string()),
                 Err(e) => CommandResult::Error(e.to_string()),
             },
-            Action::SaveFmt => match self.format_current_buffer_async(true) {
-                Ok(()) => {
-                    self.set_status("Formatting…".into());
-                    CommandResult::ViewChanged
+            Action::SaveFmt => {
+                match self.format_current_buffer_async(true) {
+                    Ok(()) => {
+                        self.set_status("Formatting…".into());
+                        CommandResult::ViewChanged
+                    }
+                    Err(e) => {
+                        // Async formatter unavailable or failed immediately (e.g., no formatter for this language).
+                        // Fall back to a regular save.
+
+                        // Temporarily disable format_on_save so self.save() doesn't
+                        // redundantly try the synchronous formatter and show duplicate errors.
+                        let prev_fmt = self.config.format_on_save;
+                        self.config.format_on_save = false;
+
+                        let result = match self.save() {
+                            Ok(()) => CommandResult::Message(format!("File saved. ({})", e)),
+                            Err(save_err) => CommandResult::Error(save_err.to_string()),
+                        };
+
+                        self.config.format_on_save = prev_fmt;
+                        result
+                    }
                 }
-                Err(e) => CommandResult::Error(e),
-            },
+            }
             Action::FormatDocument => match self.format_current_buffer_async(false) {
                 Ok(()) => {
                     self.set_status("Formatting…".into());

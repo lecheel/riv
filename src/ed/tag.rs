@@ -5,6 +5,7 @@ use crate::ed::buffer_ops::BufferOpsExt;
 use crate::ed::file_ops::FileOpsExt;
 use crate::ed::movement::MovementExt;
 use crate::editor::{CommandResult, Editor};
+use crate::popup::TagListPopup;
 use crate::tags::TagEntry;
 use std::path::PathBuf;
 
@@ -150,23 +151,14 @@ pub(crate) fn handle_tag_matches(editor: &mut Editor, matches: Vec<TagEntry>, wo
         editor.set_status(format!("Tag: {}", word));
     } else {
         editor.tag_results = matches.clone();
-        editor.tag_manager.set_current_matches(matches);
+        editor.tag_manager.set_current_matches(matches.clone());
 
-        let display: Vec<String> = editor
-            .tag_manager
-            .get_matches_display(editor.tag_manager.project_root());
+        // NEW: Interactive tag list popup instead of FloatPopup
+        let popup = TagListPopup::new(word, &matches, editor.tag_manager.project_root());
+        editor.tag_list_popup = Some(popup);
+        // NO active_popup — just check tag_list_popup.is_some()
 
-        editor.float_popup = Some(crate::editor::FloatPopup::new(
-            format!("Tags: {}", word),
-            display,
-        ));
-        editor.overlay.float = Some(crate::dirty::Rect {
-            x: 0,
-            y: 0,
-            w: 80,
-            h: 20,
-        });
-
+        // Jump to first match as preview
         if let Some(tag) = editor.tag_manager.current_match().cloned() {
             let root = editor.tag_manager.project_root().to_path_buf();
             let path = root.join(&tag.file);
@@ -174,15 +166,12 @@ pub(crate) fn handle_tag_matches(editor: &mut Editor, matches: Vec<TagEntry>, wo
         }
 
         editor.set_status(format!(
-            "{} matches for '{}' — :tn/:tp to cycle, :pop to return",
+            "{} matches for '{}' — select in popup or :tn/:tp to cycle",
             editor.tag_results.len(),
             word
         ));
     }
 }
-
-/// Perform the actual jump to a tag at a specific line in a file.
-/// Pushes the current position onto the unified tag/jump stack before jumping.
 /// Positions the cursor on the identifier name rather than column 0.
 pub fn tag_jump(editor: &mut Editor, filepath: &PathBuf, line: usize, name: &str) {
     let current_path = editor.current_buffer().and_then(|b| b.file_path.clone());
@@ -274,7 +263,7 @@ fn find_identifier_col(editor: &Editor, line_idx: usize, name: &str) -> usize {
 }
 
 /// Center the current line in the viewport.
-fn center_current_line(editor: &mut Editor) {
+pub fn center_current_line(editor: &mut Editor) {
     if let Some(window) = editor.windows.active_window_mut() {
         let cursor_line = window.cursor.position.line;
         let viewport_height = window.height as usize;

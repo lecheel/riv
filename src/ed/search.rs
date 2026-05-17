@@ -8,6 +8,7 @@
 use crate::buffer::CursorPosition;
 use crate::ed::buffer_ops::BufferOpsExt;
 use crate::ed::command::CommandExt;
+use crate::ed::movement::MovementExt;
 use crate::editor::{CommandResult, Editor, SearchDirection};
 use crate::CommandResult::*;
 
@@ -666,10 +667,13 @@ impl Editor {
         if let Some(window) = self.windows.active_window_mut() {
             window.cursor.position = pos;
             window.cursor.desired_col = None;
+
+            self.scroll_center();
         }
         if let Some(buffer_id) = buffer_id {
             self.ensure_cursor_visible(&buffer_id);
         }
+
         self.dirty.windows = true;
         ViewChanged
     }

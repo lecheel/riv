@@ -14,7 +14,6 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Child;
 use tokio::sync::mpsc;
-use tokio::sync::oneshot;
 use tokio::time::Duration;
 
 use crate::msgbox::{AppMessage, AppSender};
@@ -544,7 +543,6 @@ pub enum LspMessage {
         path: PathBuf,
         line: u32,
         col: u32,
-        respond_to: oneshot::Sender<Vec<Location>>,
     },
     RequestFormatting(
         PathBuf,
@@ -561,7 +559,7 @@ pub enum LspMessage {
 // ============================================================================
 
 enum PendingKind {
-    GotoDefinition(oneshot::Sender<Vec<Location>>),
+    GotoDefinition,
     Formatting {
         buffer_idx: usize,
         cursor_state: Option<(usize, usize)>,
@@ -1080,23 +1078,35 @@ impl LspManager {
         let is_error = msg.get("error").is_some();
 
         match kind {
-            PendingKind::GotoDefinition(tx) => {
+            PendingKind::GotoDefinition => {
                 let locations = if is_error || result.is_null() {
+                    log::debug!(
+                        "[lsp] GotoDefinition response: error={}, result_is_null={}",
+                        is_error,
+                        result.is_null()
+                    );
                     Vec::new()
                 } else {
                     // try single Location
                     if let Ok(loc) = serde_json::from_value::<Location>(result.clone()) {
+                        log::debug!(
+                            "[lsp] GotoDefinition: single location: {}:{}",
+                            loc.uri,
+                            loc.range.start.line
+                        );
                         vec![loc]
                     }
                     // try array of Locations
                     else if let Ok(locs) = serde_json::from_value::<Vec<Location>>(result.clone())
                     {
+                        log::debug!("[lsp] GotoDefinition: {} locations", locs.len());
                         locs
                     }
                     // support LocationLink array
                     else if let Ok(links) =
                         serde_json::from_value::<Vec<LocationLink>>(result.clone())
                     {
+                        log::debug!("[lsp] GotoDefinition: {} location links", links.len());
                         links
                             .into_iter()
                             .map(|link| Location {
@@ -1105,10 +1115,17 @@ impl LspManager {
                             })
                             .collect()
                     } else {
+                        log::debug!(
+                            "[lsp] GotoDefinition: failed to parse response: {}",
+                            result.to_string().chars().take(200).collect::<String>()
+                        );
                         Vec::new()
                     }
                 };
-                let _ = tx.send(locations);
+                // FIX: Send via app_tx instead of dead oneshot channel
+                let _ = self
+                    .app_tx
+                    .send(AppMessage::LspGotoDefinitionResult { locations });
             }
             PendingKind::Formatting {
                 buffer_idx,
@@ -1185,8 +1202,10 @@ impl LspManager {
 
     fn reject_pending(&self, kind: PendingKind, _reason: &str) {
         match kind {
-            PendingKind::GotoDefinition(tx) => {
-                let _ = tx.send(Vec::new());
+            PendingKind::GotoDefinition => {
+                let _ = self.app_tx.send(AppMessage::LspGotoDefinitionResult {
+                    locations: Vec::new(),
+                });
             }
             PendingKind::Formatting {
                 buffer_idx,
@@ -1209,18 +1228,23 @@ impl LspManager {
 
     async fn dispatch_editor_msg(&mut self, msg: LspMessage) {
         match msg {
-            LspMessage::GotoDefinition {
-                path,
-                line,
-                col,
-                respond_to,
-            } => {
+            LspMessage::GotoDefinition { path, line, col } => {
                 let Some(lsp) = &mut self.active_lsp else {
-                    let _ = respond_to.send(Vec::new());
+                    let _ = self.app_tx.send(AppMessage::LspGotoDefinitionResult {
+                        locations: Vec::new(),
+                    });
                     return;
                 };
                 let uri = path_to_uri(&path);
+                log::debug!(
+                    "[lsp] GotoDefinition: uri={}, opened={}, line={}, col={}",
+                    uri,
+                    self.opened_files.contains(&uri),
+                    line,
+                    col
+                );
                 if !self.opened_files.contains(&uri) {
+                    log::debug!("[lsp] GotoDefinition: file not opened, sending empty result");
                     let _ = self.app_tx.send(AppMessage::LspGotoDefinitionResult {
                         locations: Vec::new(),
                     });
@@ -1237,11 +1261,14 @@ impl LspManager {
                     .await
                 {
                     Ok(id) => {
-                        self.pending
-                            .insert(id, PendingKind::GotoDefinition(respond_to));
+                        log::debug!("[lsp] GotoDefinition: request sent, id={}", id);
+                        self.pending.insert(id, PendingKind::GotoDefinition);
                     }
-                    Err(_) => {
-                        let _ = respond_to.send(Vec::new());
+                    Err(e) => {
+                        log::debug!("[lsp] GotoDefinition: send_request failed: {}", e);
+                        let _ = self.app_tx.send(AppMessage::LspGotoDefinitionResult {
+                            locations: Vec::new(),
+                        });
                     }
                 }
             }
