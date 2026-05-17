@@ -14,6 +14,7 @@ pub trait CompletionExt {
     fn select_prev_completion(&mut self) -> CommandResult;
     fn confirm_completion(&mut self) -> CommandResult;
     fn trigger_command_completion(&mut self);
+    fn request_completion_resolve(&mut self);
 }
 
 // ── Internal helper: check if the last typed char is a trigger char ──────────
@@ -88,7 +89,19 @@ impl CompletionExt for Editor {
             }
         };
 
-        let triggered = self.completion.try_trigger(buffer, cursor_pos);
+        // ─────────────────────────────────────────────────────────────────────────
+        // ✅ DEBOUNCE GOES HERE – after we have buffer/cursor but before any real work
+        // ─────────────────────────────────────────────────────────────────────────
+        if let Some(timer) = self.completion_debounce_timer {
+            if timer.elapsed().as_millis() < self.completion_debounce_ms.into() {
+                // Still within debounce window – skip this keystroke entirely
+                return CommandResult::NoOp;
+            }
+        }
+        // Reset timer for the *next* keystroke (this one will run)
+        self.completion_debounce_timer = Some(std::time::Instant::now());
+
+        let triggered = self.completion.try_trigger(buffer, cursor_pos, &self.vocab);
 
         if triggered {
             self.request_lsp_completions();
@@ -100,7 +113,6 @@ impl CompletionExt for Editor {
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
     fn maybe_update_completion(&mut self) {
         if self.block_insert.is_some() {
             return;
@@ -133,18 +145,23 @@ impl CompletionExt for Editor {
         //     user types the first letter after the dot.
         if let Some(last_ch) = last_char_before_cursor(buffer, cursor_pos) {
             if is_trigger_char(last_ch) {
+                log::debug!(
+                "[maybe_update] trigger char '{}' detected → activating with empty trigger, requesting LSP",
+                last_ch
+            );
                 // ── Don't cancel! Set up a "pending" state so LSP results have
                 //    somewhere to land when they arrive asynchronously.
                 self.completion.active = true;
                 self.completion.items.clear();
+                self.completion.base_items.clear();
                 self.completion.selected_index = 0;
                 self.completion.context = Some(crate::completion::CompletionContext {
-                    trigger: String::new(), // empty: we're right after the dot
+                    trigger: String::new(),
                     position: cursor_pos,
                     line_text: buffer.line_text(cursor_pos.line).unwrap_or_default(),
                     is_path: false,
+                    after_trigger_char: true,
                 });
-                // Keep the overlay open (or mark dirty so render can show a loading state)
                 self.dirty.completion = true;
                 self.request_lsp_completions();
                 return;
@@ -187,7 +204,7 @@ impl CompletionExt for Editor {
                 if let Some(rect) = old_rect {
                     self.dirty.mark_popup_closed(rect);
                 }
-                if self.completion.try_trigger(buffer, cursor_pos) {
+                if self.completion.try_trigger(buffer, cursor_pos, &self.vocab) {
                     self.request_lsp_completions();
                 }
                 self.dirty.completion = true;
@@ -218,7 +235,7 @@ impl CompletionExt for Editor {
                 if let Some(rect) = old_rect {
                     self.dirty.mark_popup_closed(rect);
                 }
-                if self.completion.try_trigger(buffer, cursor_pos) {
+                if self.completion.try_trigger(buffer, cursor_pos, &self.vocab) {
                     self.request_lsp_completions();
                 }
                 self.dirty.completion = true;
@@ -234,9 +251,9 @@ impl CompletionExt for Editor {
             }
 
             // Request fresh LSP completions when the trigger is long enough.
-            if word.len() >= 1 {
-                self.request_lsp_completions();
-            }
+            // if word.len() >= 1 {
+            // self.request_lsp_completions();
+            // }
         } else {
             // Case 3: no popup open — try to auto-trigger
             let (word, is_path) = crate::completion::word_or_path_before_cursor(buffer, cursor_pos);
@@ -255,12 +272,21 @@ impl CompletionExt for Editor {
                 }
             };
 
-            let triggered = self.completion.try_trigger(buffer, cursor_pos);
+            let triggered = self.completion.try_trigger(buffer, cursor_pos, &self.vocab);
 
             // ── Always fire LSP for member-access or if buffer words triggered.
             //    try_trigger may return false when word is 1 char (below trigger_len),
             //    but LSP completions are the primary source after a dot.
             if triggered || after_dot {
+                // Debounce LSP request only
+                const LSP_DEBOUNCE_MS: u128 = 50;
+                if let Some(timer) = self.completion_debounce_timer {
+                    if timer.elapsed().as_millis() < LSP_DEBOUNCE_MS {
+                        return;
+                    }
+                }
+                self.completion_debounce_timer = Some(std::time::Instant::now());
+
                 self.request_lsp_completions();
             }
         }
@@ -277,6 +303,7 @@ impl CompletionExt for Editor {
             return CommandResult::NoOp;
         }
         self.completion.select_next();
+        self.request_completion_resolve();
         self.dirty.mark_completion_scroll();
         CommandResult::NoOp
     }
@@ -286,8 +313,37 @@ impl CompletionExt for Editor {
             return CommandResult::NoOp;
         }
         self.completion.select_prev();
+        self.request_completion_resolve();
         self.dirty.mark_completion_scroll();
         CommandResult::NoOp
+    }
+
+    fn request_completion_resolve(&mut self) {
+        if !self.lsp_connected {
+            return;
+        }
+
+        // Extract the lsp_item without holding a borrow across the send.
+        let lsp_item = self.completion.selected_item().and_then(|item| {
+            if item.source == crate::completion::CompletionSource::Lsp
+                && item.documentation.is_none()
+                && item.lsp_item.is_some()
+            {
+                item.lsp_item.clone()
+            } else {
+                None
+            }
+        });
+
+        if let Some(lsp_item) = lsp_item {
+            // Only resolve if the server indicated it supports resolve
+            // by attaching a `data` field.
+            if lsp_item.data.is_some() {
+                let _ = self
+                    .lsp_tx
+                    .send(crate::lsp::LspMessage::ResolveCompletionItem(lsp_item));
+            }
+        }
     }
 
     fn confirm_completion(&mut self) -> CommandResult {
@@ -350,18 +406,55 @@ impl CompletionExt for Editor {
             // ── Step 3: Insert the full completion text ────────────────────
             self.insert_text_at_cursor(&text);
 
+            // ── Step 4: Dismiss popup and catch up ─────────────────────────
+            //
+            // While the completion popup was active, tree-sitter reparsing was
+            // deferred (tree_dirty = true) to avoid flickering. Now that the
+            // popup is closing, we must reparse so syntax highlighting is
+            // correct for the full redraw.
+            let old_rect = self.overlay.completion;
+            self.completion.cancel();
             self.overlay.completion = None;
-            self.dirty.mark_insert();
+
+            // Reparse the tree now that the popup is dismissed
+            if let Some(window) = self.windows.active_window() {
+                let buffer_id = window.buffer_id;
+                if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
+                    buffer.reparse_if_dirty();
+                }
+            }
+
+            // Mark the old popup region for restoration + full redraw
+            if let Some(rect) = old_rect {
+                self.dirty.mark_popup_closed(rect);
+            }
+            self.dirty.mark_all();
 
             // If we completed a directory (ends with '/'), immediately trigger
             // path completion for entries inside it.
             if text.ends_with('/') {
                 self.maybe_update_completion();
             }
-            self.dirty.mark_all();
+
             CommandResult::ContentChanged
         } else {
+            // Nothing selected — just dismiss
+            let old_rect = self.overlay.completion;
+            self.completion.cancel();
             self.overlay.completion = None;
+
+            if let Some(rect) = old_rect {
+                self.dirty.mark_popup_closed(rect);
+            }
+
+            // Catch up on deferred reparse
+            if let Some(window) = self.windows.active_window() {
+                let buffer_id = window.buffer_id;
+                if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
+                    buffer.reparse_if_dirty();
+                }
+            }
+
             self.dirty.mark_all();
             CommandResult::NoOp
         }
@@ -415,6 +508,7 @@ impl CompletionExt for Editor {
                     .into_iter()
                     .map(|entry| crate::completion::CompletionEntry {
                         text: format!("{}{}", cmd_prefix, entry.text),
+                        label: format!("{}{}", cmd_prefix, entry.label),
                         ..entry
                     })
                     .collect();
@@ -436,11 +530,13 @@ impl CompletionExt for Editor {
                         let score = crate::completion::compute_score(display_name, &cmd_lower);
                         crate::completion::CompletionEntry {
                             text: format!("{}{}", range_prefix, display_name),
+                            label: format!("{}{}", range_prefix, display_name),
                             detail: Some(desc),
                             documentation: None,
                             kind: crate::completion::CompletionKind::Keyword,
                             source: crate::completion::CompletionSource::BufferWords,
                             score,
+                            lsp_item: None,
                         }
                     })
                     .collect();
@@ -468,6 +564,7 @@ impl CompletionExt for Editor {
                     position: CursorPosition::zero(),
                     line_text: self.command_prompt.buffer.clone(),
                     is_path: true,
+                    after_trigger_char: false,
                 });
                 return;
             }
@@ -490,11 +587,13 @@ impl CompletionExt for Editor {
                 let score = crate::completion::compute_score(display_name, &input_lower);
                 crate::completion::CompletionEntry {
                     text: display_name.to_string(),
+                    label: display_name.to_string(),
                     detail: Some(desc),
                     documentation: None,
                     kind: crate::completion::CompletionKind::Keyword,
                     source: crate::completion::CompletionSource::BufferWords,
                     score,
+                    lsp_item: None,
                 }
             })
             .collect();
@@ -519,6 +618,7 @@ impl CompletionExt for Editor {
             position: CursorPosition::zero(),
             line_text: self.command_prompt.buffer.clone(),
             is_path: false,
+            after_trigger_char: false,
         });
     }
 }

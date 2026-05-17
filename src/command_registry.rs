@@ -595,6 +595,10 @@ fn tpop_handler(e: &mut Editor, _args: &str) -> CommandResult {
     crate::ed::tag::tag_pop(e)
 }
 
+fn vocab_handler(e: &mut Editor, args: &str) -> CommandResult {
+    e.vocab_handle(args)
+}
+
 // ── Ripgrep handlers ───────────────────────────────────────────────
 
 /// `:rg <pattern>` — Search the project with ripgrep.
@@ -1258,6 +1262,11 @@ pub fn build_command_registry() -> CommandRegistry {
         "Show keybindings for current mode in a float popup",
     );
     reg.alias("sc", "shortcuts");
+    reg.register_handler(
+        "vocab",
+        vocab_handler,
+        "Add word to local vocabulary completion (:vocab <word>)",
+    );
 
     reg.register_handler(
         "clist",

@@ -332,6 +332,7 @@ pub struct Buffer {
     parser: Option<Parser>,
     /// Current syntax tree.
     tree: Option<Tree>,
+    pub tree_dirty: bool,
     pub undo_group_depth: usize,
 }
 
@@ -374,6 +375,7 @@ impl Buffer {
             display_name_override: None,
             parser: None,
             tree: None,
+            tree_dirty: false,
             undo_group_depth: 0,
         }
     }
@@ -500,7 +502,7 @@ impl Buffer {
             .map(|s| s.graphemes(true).count())
             .unwrap_or(0);
 
-        self.reparse_tree();
+        self.tree_dirty = true;
         CursorPosition {
             line: pos.line + new_lines,
             col: if new_lines > 0 {
@@ -542,7 +544,7 @@ impl Buffer {
             self.dirty = true;
         }
 
-        self.reparse_tree();
+        self.tree_dirty = true;
         CursorPosition { line, col: pos.col }
     }
 
@@ -558,7 +560,7 @@ impl Buffer {
             self.rope.len_chars()
         };
         self.rope.remove(start..end);
-        self.reparse_tree();
+        self.tree_dirty = true;
         self.revision += 1;
         self.dirty = true;
     }
@@ -717,7 +719,7 @@ impl Buffer {
         self.rope = ropey::Rope::from_str(new_text);
         self.dirty = true;
         self.revision += 1;
-        self.reparse_tree(); // ← ADD THIS
+        self.tree_dirty = true;
         true
     }
 
@@ -778,6 +780,18 @@ impl Buffer {
         let text = self.text();
         if let Some(parser) = self.parser.as_mut() {
             self.tree = parser.parse(&text, None);
+        }
+        self.tree_dirty = false;
+    }
+
+    /// Re-parse the tree only if it has been marked dirty by an edit.
+    /// Returns true if a reparse occurred.
+    pub fn reparse_if_dirty(&mut self) -> bool {
+        if self.tree_dirty {
+            self.reparse_tree();
+            true
+        } else {
+            false
         }
     }
 

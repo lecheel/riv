@@ -466,7 +466,6 @@ impl FileOpsExt for Editor {
 }
 
 impl Editor {
-    /// Open a file, reusing the current buffer if it is empty and unnamed.
     pub fn open_file_in_current_if_empty(&mut self, path: &Path) -> Result<BufferId, BufferError> {
         use crate::buffer::Language;
         use ropey::Rope;
@@ -487,44 +486,38 @@ impl Editor {
 
             {
                 let buffer = self.buffers.get_mut(&buf_id).unwrap();
-
-                // Try to read the file. If it doesn't exist yet, keep the empty
-                // buffer but still assign the file path so :w works for new files.
                 match std::fs::read_to_string(path) {
                     Ok(content) => {
                         buffer.rope = Rope::from_str(&content);
-                        buffer.last_saved_text = content; // keep dirty-tracking accurate
+                        buffer.last_saved_text = content;
                     }
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                        // New file — keep the empty rope; last_saved_text stays ""
-                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                     Err(e) => return Err(BufferError::Io(e)),
                 }
-
                 buffer.file_path = Some(path.to_path_buf());
                 buffer.dirty = false;
                 buffer.clear_undo_history();
-
                 buffer.language = Some(
                     path.extension()
                         .and_then(|ext| ext.to_str())
                         .map(Language::from_extension)
                         .unwrap_or(Language::PlainText),
                 );
-
                 buffer.init_tree_sitter();
-            } // ← mutable borrow ends here
+            }
 
-            // ── Init git gutter (same as open_file) ──
             self.git_provider = None;
             self.cached_diff_hunks.clear();
-            self.git_gutter_dirty_since = None; // bypass debounce
+            self.git_gutter_dirty_since = None;
             if let Some(w) = self.windows.active_window() {
                 if let Some(buf) = self.buffers.get_mut(&w.buffer_id) {
                     buf.git_gutter.clear();
                 }
             }
             self.ensure_git_gutter();
+
+            // ── Notify LSP that this file is now open ──
+            self.lsp_did_open(path);
 
             self.set_status(format!("Opened {:?}", path));
             self.restore_cursor_position();

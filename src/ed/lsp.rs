@@ -1,7 +1,6 @@
 use std::path::Path;
 use std::time::Instant;
 
-use crate::buffer::CursorPosition;
 use crate::ed::file_ops::FileOpsExt;
 use crate::ed::ghost_text::GhostTextExt;
 use crate::ed::git::GitExt;
@@ -73,9 +72,16 @@ impl LspExt for Editor {
                 AppMessage::LspReady => {
                     self.set_lsp_connected(true);
 
-                    let path_to_open = self.current_buffer().and_then(|b| b.file_path.clone());
-                    if let Some(path) = path_to_open {
-                        self.lsp_did_open(&path);
+                    // Collect file paths first to avoid borrowing self.buffers
+                    // while calling self.lsp_did_open (which needs &mut self).
+                    let paths: Vec<std::path::PathBuf> = self
+                        .buffers
+                        .iter()
+                        .filter_map(|b| b.file_path.clone())
+                        .collect();
+
+                    for path in &paths {
+                        self.lsp_did_open(path);
                     }
 
                     self.dirty.mark_all();
@@ -89,12 +95,18 @@ impl LspExt for Editor {
                     let Some(items) = items else {
                         continue;
                     };
+                    log::debug!(
+                        "[lsp] LspCompletion: received {} items, completion.active={}",
+                        items.len(),
+                        self.completion.active
+                    );
                     if items.is_empty() {
                         continue;
                     }
 
-                    // Try to create ghost text from the top LSP item
-                    let should_try_lsp_ghost = !self.is_completion_active()
+                    let after_trigger_char = self.detect_completion_trigger().is_some();
+                    let should_try_lsp_ghost = !after_trigger_char
+                        && !self.is_completion_active()
                         && matches!(self.get_mode(), Mode::Insert | Mode::Replace)
                         && self.is_ghost_text_enabled()
                         && !self.is_ghost_text_visible();
@@ -113,40 +125,18 @@ impl LspExt for Editor {
                         }
                     }
 
-                    // Existing completion popup handling
-                    if self.is_completion_active() {
-                        self.add_lsp_items_to_completion(items);
+                    // Unified completion update handles both fresh activation and updating local lists
+                    if matches!(self.get_mode(), Mode::Insert | Mode::Replace) {
+                        crate::completion::CompletionEngine::update_unified_completions(
+                            self,
+                            Some(items),
+                        );
                         self.dirty.mark_all();
-                    } else if matches!(self.get_mode(), Mode::Insert | Mode::Replace) {
-                        let cursor_pos = self.windows.active_window().map(|w| w.cursor.position);
-                        let buffer_id = self.windows.active_window().map(|w| w.buffer_id);
 
-                        if let (Some(pos), Some(bid)) = (cursor_pos, buffer_id) {
-                            if let Some(buffer) = self.buffers.get(&bid) {
-                                use crate::completion::word_or_path_before_cursor;
-                                let (word, is_path) = word_or_path_before_cursor(buffer, pos);
-
-                                let trigger = word.clone();
-
-                                self.set_completion_context(
-                                    trigger.clone(),
-                                    pos,
-                                    buffer.line_text(pos.line).unwrap_or_default(),
-                                    is_path,
-                                );
-                                self.set_completion_active(true);
-                                self.clear_completion_items();
-                                self.set_completion_selected_index(0);
-
-                                self.add_lsp_items_to_completion(items);
-
-                                if self.get_completion_items_count() == 0 {
-                                    self.cancel_completion();
-                                } else {
-                                    self.dirty.mark_all();
-                                }
-                            }
-                        }
+                        // After adding LSP items, trigger resolve for the selected item
+                        // so documentation appears for the first item without requiring
+                        // the user to navigate away and back.
+                        crate::ed::completion::CompletionExt::request_completion_resolve(self);
                     }
                 }
 
@@ -186,10 +176,16 @@ impl LspExt for Editor {
                     self.handle_lsp_format_result(result, buffer_idx, cursor_state, save_after);
                 }
 
-                AppMessage::LspCompletionResolved(_item) => {
-                    // Could update the selected item's detail/documentation in the popup
+                AppMessage::LspCompletionResolved(resolved_item) => {
+                    log::debug!(
+                        "[lsp] CompletionResolved: label='{}', has_doc={}",
+                        resolved_item.label,
+                        resolved_item.documentation.is_some()
+                    );
+                    self.completion.update_resolved_item(&resolved_item);
+                    self.dirty.completion = true;
+                    self.dirty.cursor = true;
                 }
-
                 AppMessage::LspError(e) => {
                     self.set_lsp_connected(false);
                     self.set_infobar_message(format!("LSP: {}", e));
@@ -267,6 +263,10 @@ impl LspExt for Editor {
     }
 
     fn request_lsp_completions(&mut self) {
+        log::debug!(
+            "[lsp] request_lsp_completions: connected={}",
+            self.is_lsp_connected()
+        );
         self.flush_lsp_changes();
         if !self.is_lsp_connected() {
             return;
@@ -291,7 +291,6 @@ impl LspExt for Editor {
         ));
         self.set_lsp_completion_pending(true);
     }
-
     fn flush_lsp_changes(&mut self) {
         if !self.is_lsp_change_pending() {
             return;
@@ -457,7 +456,13 @@ impl LspExt for Editor {
         let line = window.cursor.position.line as u32;
         let col = window.cursor.position.col as u32;
 
-        self.send_lsp_message(crate::lsp::LspMessage::GotoDefinition { path, line, col });
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.send_lsp_message(crate::lsp::LspMessage::GotoDefinition {
+            path,
+            line,
+            col,
+            respond_to: tx,
+        });
         self.set_status("Goto definition…".to_string());
     }
 
@@ -587,38 +592,6 @@ impl Editor {
     // Completion state
     fn is_completion_active(&self) -> bool {
         self.completion.active
-    }
-    fn get_completion_items_count(&self) -> usize {
-        self.completion.items.len()
-    }
-    fn set_completion_active(&mut self, active: bool) {
-        self.completion.active = active;
-    }
-    fn set_completion_context(
-        &mut self,
-        trigger: String,
-        pos: CursorPosition,
-        line_text: String,
-        is_path: bool,
-    ) {
-        self.completion.context = Some(crate::completion::CompletionContext {
-            trigger,
-            position: pos,
-            line_text,
-            is_path,
-        });
-    }
-    fn clear_completion_items(&mut self) {
-        self.completion.items.clear();
-    }
-    fn set_completion_selected_index(&mut self, index: usize) {
-        self.completion.selected_index = index;
-    }
-    fn add_lsp_items_to_completion(&mut self, items: Vec<crate::lsp::CompletionItem>) {
-        self.completion.add_lsp_items(items);
-    }
-    fn cancel_completion(&mut self) {
-        self.completion.cancel();
     }
 
     // Ghost text

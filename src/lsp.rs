@@ -8,14 +8,14 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
 
+use ropey::Rope;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Child;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use tokio::time::Duration;
-
-use ropey::Rope;
 
 use crate::msgbox::{AppMessage, AppSender};
 
@@ -544,6 +544,7 @@ pub enum LspMessage {
         path: PathBuf,
         line: u32,
         col: u32,
+        respond_to: oneshot::Sender<Vec<Location>>,
     },
     RequestFormatting(
         PathBuf,
@@ -560,7 +561,7 @@ pub enum LspMessage {
 // ============================================================================
 
 enum PendingKind {
-    GotoDefinition,
+    GotoDefinition(oneshot::Sender<Vec<Location>>),
     Formatting {
         buffer_idx: usize,
         cursor_state: Option<(usize, usize)>,
@@ -975,6 +976,7 @@ pub struct LspManager {
     pending: HashMap<i32, PendingKind>,
     pub supports_snippets: bool,
     pub supports_completion_resolve: bool,
+    last_completion_id: Option<i32>,
 }
 
 impl LspManager {
@@ -991,6 +993,7 @@ impl LspManager {
             pending: HashMap::new(),
             supports_snippets: false,
             supports_completion_resolve: false,
+            last_completion_id: None,
         }
     }
 
@@ -1039,11 +1042,16 @@ impl LspManager {
     }
 
     async fn handle_server_msg(&mut self, msg: Value) {
+        log::debug!(
+            "[lsp_worker] server msg: method={:?} id={:?}",
+            msg.get("method").and_then(|m| m.as_str()),
+            msg.get("id").and_then(|v| v.as_i64())
+        );
         // Response to a pending request?
         if let Some(id_val) = msg.get("id") {
             if let Some(id) = id_val.as_i64().map(|v| v as i32) {
                 if let Some(kind) = self.pending.remove(&id) {
-                    self.resolve_pending(kind, &msg).await;
+                    self.resolve_pending(kind, &msg, id).await;
                     return;
                 }
             }
@@ -1067,12 +1075,12 @@ impl LspManager {
         }
     }
 
-    async fn resolve_pending(&mut self, kind: PendingKind, msg: &Value) {
+    async fn resolve_pending(&mut self, kind: PendingKind, msg: &Value, request_id: i32) {
         let result = msg.get("result").cloned().unwrap_or(json!(null));
         let is_error = msg.get("error").is_some();
 
         match kind {
-            PendingKind::GotoDefinition => {
+            PendingKind::GotoDefinition(tx) => {
                 let locations = if is_error || result.is_null() {
                     Vec::new()
                 } else {
@@ -1100,9 +1108,7 @@ impl LspManager {
                         Vec::new()
                     }
                 };
-                let _ = self
-                    .app_tx
-                    .send(AppMessage::LspGotoDefinitionResult { locations });
+                let _ = tx.send(locations);
             }
             PendingKind::Formatting {
                 buffer_idx,
@@ -1149,6 +1155,11 @@ impl LspManager {
                 let _ = self.app_tx.send(AppMessage::LspSignatureHelp(state));
             }
             PendingKind::Completion => {
+                // Only process if this is still the most recent request
+                if Some(request_id) != self.last_completion_id {
+                    return; // stale, discard
+                }
+                self.last_completion_id = None;
                 let items = if is_error || result.is_null() {
                     None
                 } else {
@@ -1174,10 +1185,8 @@ impl LspManager {
 
     fn reject_pending(&self, kind: PendingKind, _reason: &str) {
         match kind {
-            PendingKind::GotoDefinition => {
-                let _ = self.app_tx.send(AppMessage::LspGotoDefinitionResult {
-                    locations: Vec::new(),
-                });
+            PendingKind::GotoDefinition(tx) => {
+                let _ = tx.send(Vec::new());
             }
             PendingKind::Formatting {
                 buffer_idx,
@@ -1200,11 +1209,14 @@ impl LspManager {
 
     async fn dispatch_editor_msg(&mut self, msg: LspMessage) {
         match msg {
-            LspMessage::GotoDefinition { path, line, col } => {
+            LspMessage::GotoDefinition {
+                path,
+                line,
+                col,
+                respond_to,
+            } => {
                 let Some(lsp) = &mut self.active_lsp else {
-                    let _ = self.app_tx.send(AppMessage::LspGotoDefinitionResult {
-                        locations: Vec::new(),
-                    });
+                    let _ = respond_to.send(Vec::new());
                     return;
                 };
                 let uri = path_to_uri(&path);
@@ -1225,12 +1237,11 @@ impl LspManager {
                     .await
                 {
                     Ok(id) => {
-                        self.pending.insert(id, PendingKind::GotoDefinition);
+                        self.pending
+                            .insert(id, PendingKind::GotoDefinition(respond_to));
                     }
                     Err(_) => {
-                        let _ = self.app_tx.send(AppMessage::LspGotoDefinitionResult {
-                            locations: Vec::new(),
-                        });
+                        let _ = respond_to.send(Vec::new());
                     }
                 }
             }
@@ -1258,10 +1269,13 @@ impl LspManager {
                         .await;
                 }
             }
-
             LspMessage::OpenFile(path) => {
                 if let Some(lsp) = &mut self.active_lsp {
                     let uri = path_to_uri(&path);
+                    // ── Skip if already opened ──
+                    if self.opened_files.contains(&uri) {
+                        return;
+                    }
                     let lang = detect_language_from_path(&path);
                     if let Ok(text) = std::fs::read_to_string(&path) {
                         let _ = lsp.did_open(&uri, lang.language_id, &text).await;
@@ -1437,11 +1451,19 @@ impl LspManager {
             }
 
             LspMessage::RequestCompletion(path, line, character, trigger) => {
+                // Cancel any in-flight completion requests
+                self.pending
+                    .retain(|_, v| !matches!(v, PendingKind::Completion));
                 let Some(lsp) = &mut self.active_lsp else {
                     let _ = self.app_tx.send(AppMessage::LspCompletion(Some(vec![])));
                     return;
                 };
                 let uri = path_to_uri(&path);
+                log::debug!(
+                    "[lsp_worker] RequestCompletion: uri={} opened={}",
+                    uri,
+                    self.opened_files.contains(&uri)
+                ); // ← add this
                 if !self.opened_files.contains(&uri) {
                     let _ = self.app_tx.send(AppMessage::LspCompletion(Some(vec![])));
                     return;
@@ -1458,6 +1480,7 @@ impl LspManager {
                 });
                 if let Ok(id) = lsp.send_request("textDocument/completion", params).await {
                     self.pending.insert(id, PendingKind::Completion);
+                    self.last_completion_id = Some(id);
                 }
             }
 

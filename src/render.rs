@@ -7,6 +7,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::completion::CompletionKind;
+use crate::completion::CompletionSource;
 use crate::dirty::Rect;
 use crate::ed::DiffPopupPrefix;
 use crate::editor::{Editor, FloatPopup, Mode, SearchDirection};
@@ -16,6 +17,7 @@ use crate::popup::MarkListPopup;
 use crate::rounded_box::*;
 use crate::terminal::Terminal;
 use crate::terminal_sanitize::sanitize_for_display;
+
 // Convenience — wraps the cow into a &str for Print
 macro_rules! safe {
     ($s:expr_2021) => {
@@ -1062,6 +1064,232 @@ fn render_diff_popup(
     Ok(())
 }
 
+/// Word-wrap text to fit within `max_width` display columns.
+/// Respects paragraph breaks (newlines) and preserves code-block /
+/// indented lines as-is (truncated if too long).
+fn word_wrap(text: &str, max_width: usize) -> Vec<String> {
+    if max_width == 0 {
+        return vec![String::new()];
+    }
+
+    let mut lines = Vec::new();
+    for paragraph in text.split('\n') {
+        if paragraph.is_empty() {
+            lines.push(String::new());
+            continue;
+        }
+
+        // Code-fence lines and heavily indented lines: keep as-is
+        let trimmed = paragraph.trim_start();
+        if trimmed.starts_with("```") || paragraph.starts_with("  ") || paragraph.starts_with('\t')
+        {
+            if UnicodeWidthStr::width(paragraph) <= max_width {
+                lines.push(paragraph.to_string());
+            } else {
+                lines.push(truncate_to_width(paragraph, max_width).to_string());
+            }
+            continue;
+        }
+
+        let mut current_line = String::new();
+        let mut current_width = 0usize;
+
+        for word in paragraph.split_whitespace() {
+            let word_width = UnicodeWidthStr::width(word);
+            let (sep, sep_width) = if current_line.is_empty() {
+                ("", 0)
+            } else {
+                (" ", 1)
+            };
+
+            if current_width + sep_width + word_width > max_width && !current_line.is_empty() {
+                lines.push(current_line);
+                current_line = word.to_string();
+                current_width = word_width;
+            } else {
+                current_line.push_str(sep);
+                current_line.push_str(word);
+                current_width += sep_width + word_width;
+            }
+        }
+
+        if !current_line.is_empty() {
+            lines.push(current_line);
+        }
+    }
+
+    lines
+}
+
+/// Render a documentation popup for the selected completion item.
+/// Positioned to the right of the completion list (or left if no room).
+
+fn render_completion_doc_popup(
+    item: &crate::completion::CompletionEntry,
+    stdout: &mut std::io::Stdout,
+    comp_x: u16,
+    comp_y: u16,
+    comp_width: u16,
+    comp_height: u16,
+    term_width: u16,
+    term_height: u16,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // ── Only show documentation popup for LSP items ─────────────────
+    // Non-LSP sources (BufferWords, Vocab, FilePath, Snippet) only
+    // carry metadata tags or file-size detail — not real documentation.
+    if item.source != CompletionSource::Lsp {
+        return Ok(());
+    }
+
+    // Strip source tags to get the "real" detail content
+    let clean_detail = item.detail.as_deref().map(|d| {
+        d.replace(" [lsp]", "")
+            .replace(" [buffer]", "")
+            .replace(" [vocab]", "")
+    });
+
+    let has_meaningful_doc = item
+        .documentation
+        .as_ref()
+        .map_or(false, |d| !d.trim().is_empty());
+
+    let has_meaningful_detail = clean_detail
+        .as_deref()
+        .map_or(false, |d| !d.trim().is_empty());
+
+    // Only show the popup if there's something worth showing
+    if !has_meaningful_doc && !has_meaningful_detail {
+        return Ok(());
+    }
+
+    let doc_max_width: u16 = 60;
+    let gap: u16 = 1;
+    let available_right = term_width.saturating_sub(comp_x + comp_width + gap);
+    let available_left = comp_x.saturating_sub(gap);
+
+    let (doc_width, x): (u16, u16) = if available_right >= 30 {
+        let w = doc_max_width.min(available_right);
+        (w, comp_x + comp_width + gap)
+    } else if available_left >= 30 {
+        let w = doc_max_width.min(available_left);
+        (w, comp_x.saturating_sub(w + gap))
+    } else {
+        return Ok(()); // Not enough space for a useful popup
+    };
+
+    let content_width = doc_width.saturating_sub(2) as usize;
+    if content_width == 0 {
+        return Ok(());
+    }
+
+    // ── Build the content lines ─────────────────────────────────────
+    let mut doc_lines: Vec<String> = Vec::new();
+
+    // With this (reuse the clean_detail from the guard above):
+    if let Some(ref d) = clean_detail {
+        let d = d.trim();
+        if !d.is_empty() {
+            doc_lines.extend(word_wrap(d, content_width));
+            doc_lines.push(String::new());
+        }
+    }
+
+    // Documentation
+    if let Some(doc) = &item.documentation {
+        if !doc.is_empty() {
+            doc_lines.extend(word_wrap(doc, content_width));
+        }
+    }
+
+    if doc_lines.is_empty() {
+        return Ok(());
+    }
+
+    let max_visible_rows = comp_height.saturating_sub(2) as usize;
+    let visible_rows = doc_lines.len().min(max_visible_rows).max(1);
+    let doc_height = visible_rows as u16 + 2; // +2 for border top/bottom
+
+    // Clamp to edit area
+    let edit_height = term_height.saturating_sub(3);
+    let doc_height = doc_height.min(edit_height.saturating_sub(comp_y));
+    if doc_height < 3 {
+        return Ok(());
+    }
+
+    let visible_rows = (doc_height.saturating_sub(2)) as usize;
+
+    clear_rect(stdout, x, comp_y, doc_width, doc_height, catppuccin::MANTLE)?;
+
+    // ── Title bar ───────────────────────────────────────────────────
+    let kind_label = item.kind.as_str();
+    let title = if kind_label.is_empty() {
+        format!(" {} ", item.label)
+    } else {
+        format!(" {} {} ", kind_label, item.label)
+    };
+    let title_style = BoxStyle::default()
+        .with_title(title)
+        .with_border(catppuccin::SURFACE2)
+        .with_bg(catppuccin::MANTLE);
+    draw_top_border(stdout, x, comp_y, doc_width, &title_style)?;
+
+    // ── Content rows ────────────────────────────────────────────────
+    for (i, line) in doc_lines.iter().take(visible_rows).enumerate() {
+        let row_y = comp_y + 1 + i as u16;
+
+        let row_style = RowStyle::normal()
+            .with_border(catppuccin::SURFACE2)
+            .with_bg(catppuccin::MANTLE);
+
+        if line.is_empty() {
+            draw_empty_row(stdout, x, row_y, doc_width, &row_style)?;
+        } else {
+            // Heuristic colouring for common documentation patterns
+            let color = if line.starts_with("```") {
+                catppuccin::OVERLAY0
+            } else if line.starts_with('#') {
+                catppuccin::MAUVE
+            } else if line.starts_with("pub ")
+                || line.starts_with("fn ")
+                || line.starts_with("async ")
+                || line.starts_with("struct ")
+                || line.starts_with("impl ")
+                || line.starts_with("trait ")
+                || line.starts_with("enum ")
+                || line.starts_with("type ")
+                || line.starts_with("const ")
+                || line.starts_with("let ")
+            {
+                catppuccin::BLUE
+            } else if line.starts_with("•") || line.starts_with("- ") || line.starts_with("* ") {
+                catppuccin::SUBTEXT
+            } else if line.starts_with('@') {
+                catppuccin::TEAL
+            } else {
+                catppuccin::SUBTEXT
+            };
+
+            let segments = [Segment::new(line, color)];
+            draw_row(stdout, x, row_y, doc_width, &segments, &row_style)?;
+        }
+    }
+
+    // ── Bottom border with scroll indicator ─────────────────────────
+    let bottom_y = comp_y + 1 + visible_rows as u16;
+    let more = doc_lines.len() > visible_rows;
+    let footer = if more {
+        format!("↓ {}/{}", visible_rows, doc_lines.len())
+    } else {
+        String::new()
+    };
+    let bottom_style = BoxStyle::default()
+        .with_border(catppuccin::SURFACE2)
+        .with_footer(footer);
+    draw_bottom_border(stdout, x, bottom_y, doc_width, &bottom_style)?;
+
+    Ok(())
+}
+
 fn render_completion_popup(
     editor: &Editor,
     stdout: &mut std::io::Stdout,
@@ -1087,21 +1315,35 @@ fn render_completion_popup(
     let max_visible = 8usize;
     let visible_count = items.len().min(max_visible);
 
-    let mut max_item_width = trigger.len();
-    for item in items.iter().take(visible_count) {
-        let kind_label = item.kind.as_str();
-        let detail_w = item.detail.as_deref().map(|d| d.len() + 3).unwrap_or(0);
-        let w = kind_label.len() + 2 + item.text.len() + detail_w;
-        max_item_width = max_item_width.max(w);
-    }
-    let popup_content_width = (max_item_width + 4).min((term_width - 4) as usize) as u16;
+    // ── Compute column widths for right-alignment ──
+    let max_kind_w = items
+        .iter()
+        .take(visible_count)
+        .map(|item| UnicodeWidthStr::width(item.kind.as_str()))
+        .max()
+        .unwrap_or(0);
+
+    let max_left_w = items
+        .iter()
+        .take(visible_count)
+        .map(|item| {
+            max_kind_w
+                + if max_kind_w > 0 { 1 } else { 0 }
+                + UnicodeWidthStr::width(item.label.as_str())
+        })
+        .max()
+        .unwrap_or(0);
+    let max_item_width = max_left_w.max(UnicodeWidthStr::width(trigger));
+    let popup_content_width =
+        (max_item_width + 4).min((term_width as usize).saturating_sub(4)) as u16;
+
     let popup_width = (popup_content_width + 2).max(40);
     let popup_height = (visible_count as u16) + 2;
 
     // Cursor position for anchoring
     let window = editor.windows.active_window();
 
-    // ── Gutter widths (must be computed BEFORE cursor_screen_row closure) ──
+    // ── Gutter widths ──
     let gutter_w = if editor.config.line_numbers { 5u16 } else { 0 };
     let mark_gutter_w = {
         let current_bid = if let Some(w) = editor.windows.active_window() {
@@ -1157,34 +1399,36 @@ fn render_completion_popup(
         })
         .unwrap_or(0);
 
-    let gutter_w = if editor.config.line_numbers { 5u16 } else { 0 };
-    let mark_gutter_w = {
-        let current_bid = if let Some(w) = editor.windows.active_window() {
-            w.buffer_id
-        } else {
-            crate::buffer::BufferId::default()
-        };
-        if editor.marks.iter().any(|(_, (bid, _))| *bid == current_bid) {
-            1u16
-        } else {
-            0u16
-        }
-    };
-    let git_gutter_w = if editor.git_gutter_enabled && editor.config.enable_git {
-        1u16
-    } else {
-        0u16
-    };
     let cursor_screen_col = window
         .map(|w| {
             let scroll_col = w.viewport.scroll_col as usize;
-            let col = w.cursor.position.col.saturating_sub(scroll_col);
-            w.x_offset + gutter_w + mark_gutter_w + git_gutter_w + col as u16
+            let cursor_col = w.cursor.position.col;
+
+            // Compute actual display-width of characters up to cursor (respects unicode)
+            let buf = editor.buffers.get(&w.buffer_id);
+            let display_col = if let Some(buf) = buf {
+                let line_text = buf.line_text(w.cursor.position.line).unwrap_or_default();
+                let line_text = line_text.trim_end_matches('\n');
+                let graphemes: Vec<_> = line_text.graphemes(true).collect();
+                // Sum display widths of visible graphemes up to cursor
+                graphemes[scroll_col.min(graphemes.len())..cursor_col.min(graphemes.len())]
+                    .iter()
+                    .map(|g| UnicodeWidthStr::width(*g))
+                    .sum::<usize>()
+            } else {
+                cursor_col.saturating_sub(scroll_col)
+            };
+
+            w.x_offset + gutter_w + mark_gutter_w + git_gutter_w + display_col as u16
         })
         .unwrap_or(0);
 
-    let x = (cursor_screen_col as usize)
+    // Then subtract the trigger's display width so popup pins to trigger start:
+    let trigger_display_width = UnicodeWidthStr::width(trigger) as u16;
+
+    let x = (cursor_screen_col.saturating_sub(trigger_display_width) as usize)
         .min((term_width as usize).saturating_sub(popup_width as usize)) as u16;
+
     let y = if cursor_screen_row > popup_height {
         cursor_screen_row.saturating_sub(popup_height) - 1
     } else {
@@ -1227,20 +1471,39 @@ fn render_completion_popup(
             CompletionKind::Constant | CompletionKind::Enum => catppuccin::TEAL,
             _ => catppuccin::SUBTEXT,
         };
+
+        // ── Left side: kind badge (padded to max_kind_w) + label ──
         segments.push(Segment::new(kind_label, kind_color));
-        segments.push(Segment::new(" ", catppuccin::SUBTEXT));
+
+        // Declare outside the if-block so it lives long enough for draw_row
+        let kind_pad;
+        let kind_padding_len = max_kind_w.saturating_sub(UnicodeWidthStr::width(kind_label));
+        if kind_padding_len > 0 {
+            kind_pad = Some(" ".repeat(kind_padding_len));
+            segments.push(Segment::new(
+                kind_pad.as_deref().unwrap(),
+                catppuccin::SUBTEXT,
+            ));
+        } else {
+            kind_pad = None;
+        }
+
+        // Space between kind column and label
+        if max_kind_w > 0 {
+            segments.push(Segment::new(" ", catppuccin::SUBTEXT));
+        }
+
         segments.push(Segment::new(
-            &item.text,
+            &item.label,
             if is_selected {
                 catppuccin::TEXT
             } else {
                 catppuccin::SUBTEXT
             },
         ));
-        if let Some(detail) = &item.detail {
-            segments.push(Segment::new(" ", catppuccin::SUBTEXT));
-            segments.push(Segment::new(detail, catppuccin::OVERLAY0));
-        }
+
+        // ── Right side: detail with dynamic padding ──
+        // Declare outside if-let so the String lives until draw_row is called
 
         let row_style = if is_selected {
             RowStyle::selected()
@@ -1276,9 +1539,21 @@ fn render_completion_popup(
         }
     }
 
+    // ── Documentation popup for the selected item ───────────────────
+    if let Some(selected_item) = items.get(selected) {
+        render_completion_doc_popup(
+            selected_item,
+            stdout,
+            x,
+            y,
+            popup_width,
+            popup_height,
+            term_width,
+            term_height,
+        )?;
+    }
     Ok(())
 }
-
 // -----------------------------------------------------------------------------
 // Internal render helpers
 // -----------------------------------------------------------------------------
@@ -1489,6 +1764,380 @@ fn position_cursor(
 
     Ok(())
 }
+
+/// Render exactly one line of the active window's buffer.
+/// Used when the completion popup is active to avoid redrawing the
+/// entire screen (which causes flicker under the popup).
+fn render_single_buffer_line(
+    editor: &Editor,
+    stdout: &mut std::io::Stdout,
+    abs_line: usize,
+    highlighter: &mut Highlighter,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use crossterm::cursor::MoveTo;
+    use crossterm::execute;
+    use crossterm::style::{Color, Print, ResetColor, SetBackgroundColor, SetForegroundColor};
+    use unicode_width::UnicodeWidthStr;
+
+    let window = match editor.windows.active_window() {
+        Some(w) => w,
+        None => return Ok(()),
+    };
+
+    let buffer_id = window.buffer_id;
+    let buffer = match editor.buffers.get(&buffer_id) {
+        Some(b) => b,
+        None => return Ok(()),
+    };
+
+    let scroll_line = window.viewport.scroll_line;
+    let scroll_col = window.viewport.scroll_col as usize;
+
+    // Convert abs_line to screen row
+    let screen_row = abs_line.saturating_sub(scroll_line);
+
+    // Account for soft-wrap: count visual rows of lines above
+    let content_width = {
+        let gutter_w = if editor.config.line_numbers { 5u16 } else { 0 };
+        let mark_gutter_w = {
+            if editor.marks.iter().any(|(_, (bid, _))| *bid == buffer_id) {
+                1u16
+            } else {
+                0u16
+            }
+        };
+        let git_gutter_w = if editor.git_gutter_enabled && editor.config.enable_git {
+            1u16
+        } else {
+            0u16
+        };
+        (window
+            .width
+            .saturating_sub(gutter_w + mark_gutter_w + git_gutter_w)) as usize
+    };
+
+    let visual_screen_row = if editor.config.word_wrap {
+        let mut vrow = 0usize;
+        for line_i in scroll_line..abs_line {
+            if let Some(txt) = buffer.line_text(line_i) {
+                vrow += softwrap_rows(&txt, content_width);
+            }
+        }
+        // For the target line itself, we only need the first visual row
+        // (the one at the start of the line — the cursor's wrap row would
+        // need softwrap_row_offset but for single-line update we redraw
+        // ALL visual rows of this logical line)
+        vrow
+    } else {
+        screen_row
+    };
+
+    let is_active = true;
+    let cursor_line = window.cursor.position.line;
+    let cursor_col = window.cursor.position.col;
+
+    let gutter_width = if editor.config.line_numbers { 5u16 } else { 0 };
+    let git_gutter_width = if editor.git_gutter_enabled && editor.config.enable_git {
+        1u16
+    } else {
+        0u16
+    };
+
+    let mark_at_line: std::collections::HashMap<usize, char> = editor
+        .marks
+        .iter()
+        .filter(|(_, (bid, _))| *bid == buffer_id)
+        .map(|(ch, (_, pos))| (pos.line, *ch))
+        .collect();
+    let mark_gutter_width = if !mark_at_line.is_empty() { 1u16 } else { 0u16 };
+
+    if abs_line >= buffer.line_count() {
+        return Ok(());
+    }
+
+    let line_text = buffer.line_text(abs_line).unwrap_or_default();
+    let line_text = line_text.trim_end_matches('\n');
+
+    let wrap_rows = if editor.config.word_wrap {
+        softwrap_rows(line_text, content_width)
+    } else {
+        1
+    };
+
+    let graphemes: Vec<_> = line_text.graphemes(true).collect();
+    let line_spans = highlighter.highlight_line(line_text, buffer.language);
+
+    let line_scroll_offset_w: usize = if scroll_col > 0 && !editor.config.word_wrap {
+        graphemes[..scroll_col.min(graphemes.len())]
+            .iter()
+            .map(|g| UnicodeWidthStr::width(*g))
+            .sum()
+    } else {
+        0
+    };
+
+    // ── Check if the completion popup covers any of these rows ──
+    let completion_rect = editor.overlay.completion;
+
+    for wrap_row in 0..wrap_rows {
+        let row_screen = visual_screen_row + wrap_row;
+        let y = window.y_offset + row_screen as u16;
+
+        // Bounds check
+        if row_screen >= window.height as usize {
+            break;
+        }
+
+        // ── Skip rows covered by the completion popup ──
+        if let Some(rect) = completion_rect {
+            let popup_top = rect.y as usize;
+            let popup_bottom = (rect.y + rect.h) as usize;
+            let row_abs = row_screen;
+            if row_abs >= popup_top && row_abs < popup_bottom {
+                continue; // Popup covers this row — don't waste time rendering
+            }
+        }
+
+        let is_cursor_line = is_active && abs_line == cursor_line;
+
+        execute!(stdout, MoveTo(window.x_offset, y))?;
+
+        if is_cursor_line {
+            execute!(stdout, SetBackgroundColor(Color::DarkGrey))?;
+        }
+
+        // Line number gutter
+        if editor.config.line_numbers && wrap_row == 0 {
+            let line_num_abs = abs_line + 1;
+            let display_num = if editor.config.relative_line_numbers && is_active {
+                if abs_line == cursor_line {
+                    line_num_abs
+                } else {
+                    (cursor_line as isize - abs_line as isize).unsigned_abs()
+                }
+            } else {
+                line_num_abs
+            };
+            let num_str = format!("{:>4} ", display_num);
+            if is_cursor_line {
+                execute!(stdout, SetForegroundColor(Color::Cyan))?;
+            } else {
+                execute!(stdout, SetForegroundColor(Color::DarkGrey))?;
+            }
+            execute!(stdout, Print(&num_str))?;
+            if is_cursor_line {
+                execute!(stdout, SetForegroundColor(Color::Reset))?;
+            } else {
+                execute!(stdout, ResetColor)?;
+            }
+        } else if editor.config.line_numbers {
+            execute!(stdout, Print(&" ".repeat(gutter_width as usize)))?;
+        }
+
+        // Mark gutter
+        if mark_gutter_width > 0 && wrap_row == 0 {
+            if let Some(mark_char) = mark_at_line.get(&abs_line) {
+                if is_cursor_line {
+                    execute!(
+                        stdout,
+                        SetForegroundColor(Color::Rgb {
+                            r: 203,
+                            g: 166,
+                            b: 247
+                        })
+                    )?;
+                } else {
+                    execute!(
+                        stdout,
+                        SetForegroundColor(Color::Rgb {
+                            r: 145,
+                            g: 125,
+                            b: 190
+                        })
+                    )?;
+                }
+                execute!(stdout, Print(&mark_char.to_string()))?;
+                if is_cursor_line {
+                    execute!(stdout, SetForegroundColor(Color::Reset))?;
+                } else {
+                    execute!(stdout, ResetColor)?;
+                }
+            } else {
+                execute!(stdout, Print(" "))?;
+            }
+        } else if mark_gutter_width > 0 {
+            execute!(stdout, Print(" "))?;
+        }
+
+        // Git gutter
+        if git_gutter_width > 0 && wrap_row == 0 {
+            let sign = buffer.git_gutter.sign_at(abs_line);
+            match sign {
+                Some(crate::git::GitSign::Added) => {
+                    execute!(stdout, SetForegroundColor(Color::Green))?;
+                    execute!(stdout, Print("+"))?;
+                    if is_cursor_line {
+                        execute!(stdout, SetForegroundColor(Color::Reset))?;
+                    } else {
+                        execute!(stdout, ResetColor)?;
+                    }
+                }
+                Some(crate::git::GitSign::Modified) => {
+                    execute!(stdout, SetForegroundColor(Color::Yellow))?;
+                    execute!(stdout, Print("~"))?;
+                    if is_cursor_line {
+                        execute!(stdout, SetForegroundColor(Color::Reset))?;
+                    } else {
+                        execute!(stdout, ResetColor)?;
+                    }
+                }
+                Some(crate::git::GitSign::RemovedAbove) => {
+                    execute!(stdout, SetForegroundColor(Color::Red))?;
+                    execute!(stdout, Print("_"))?;
+                    if is_cursor_line {
+                        execute!(stdout, SetForegroundColor(Color::Reset))?;
+                    } else {
+                        execute!(stdout, ResetColor)?;
+                    }
+                }
+                None => {
+                    execute!(stdout, Print(" "))?;
+                }
+            }
+        } else if git_gutter_width > 0 {
+            execute!(stdout, Print(" "))?;
+        }
+
+        // Calculate display text (same logic as render_window)
+        let mut wrap_start_grapheme = 0usize;
+        let display = if editor.config.word_wrap {
+            let mut rows_so_far = 0;
+            let mut row_col = 0usize;
+            let mut start_grapheme = 0usize;
+            let mut end_grapheme = graphemes.len();
+
+            for (gi, g) in graphemes.iter().enumerate() {
+                if gi >= graphemes.len() {
+                    break;
+                }
+                let w = UnicodeWidthStr::width(*g);
+                if row_col + w > content_width && gi > 0 {
+                    rows_so_far += 1;
+                    if rows_so_far == wrap_row {
+                        start_grapheme = gi;
+                        row_col = w;
+                        for gj in gi..graphemes.len() {
+                            let gw = UnicodeWidthStr::width(graphemes[gj]);
+                            if row_col + gw > content_width {
+                                end_grapheme = gj;
+                                break;
+                            }
+                            row_col += gw;
+                        }
+                        break;
+                    }
+                    row_col = w;
+                } else {
+                    row_col += w;
+                }
+            }
+
+            if wrap_row == 0 {
+                start_grapheme = 0;
+                let mut rc = 0usize;
+                for gi in 0..graphemes.len() {
+                    let gw = UnicodeWidthStr::width(graphemes[gi]);
+                    if rc + gw > content_width {
+                        end_grapheme = gi;
+                        break;
+                    }
+                    rc += gw;
+                }
+            } else if rows_so_far != wrap_row && start_grapheme == 0 {
+                start_grapheme = graphemes.len();
+                end_grapheme = graphemes.len();
+            }
+
+            wrap_start_grapheme = start_grapheme;
+            graphemes[start_grapheme..end_grapheme.min(graphemes.len())].join("")
+        } else {
+            let visible: String = if scroll_col < graphemes.len() {
+                graphemes[scroll_col..].join("")
+            } else {
+                String::new()
+            };
+            if content_width > 0 {
+                let display_width = UnicodeWidthStr::width(visible.as_str());
+                if display_width > content_width {
+                    graphemes[scroll_col..]
+                        .iter()
+                        .scan(0usize, |acc, g| {
+                            *acc += UnicodeWidthStr::width(*g);
+                            if *acc <= content_width {
+                                Some(g.to_string())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
+                } else {
+                    visible
+                }
+            } else {
+                visible
+            }
+        };
+
+        // Render highlighted text
+        if wrap_row == 0 {
+            crate::highlight::render_highlighted_line(
+                stdout,
+                &display,
+                &line_spans,
+                is_cursor_line,
+                None,
+            )?;
+        } else {
+            let offset_spans: Vec<crate::highlight::HighlightSpan> = line_spans
+                .iter()
+                .filter_map(|s| {
+                    let start = s.start.saturating_sub(wrap_start_grapheme);
+                    let end = s.end.saturating_sub(wrap_start_grapheme);
+                    if end == 0 || s.end <= wrap_start_grapheme {
+                        return None;
+                    }
+                    Some(crate::highlight::HighlightSpan {
+                        start,
+                        end,
+                        style: s.style,
+                    })
+                })
+                .collect();
+            crate::highlight::render_highlighted_line(
+                stdout,
+                &display,
+                &offset_spans,
+                is_cursor_line,
+                None,
+            )?;
+        }
+
+        // Clear rest of line
+        let display_w = UnicodeWidthStr::width(display.as_str());
+        let remaining = content_width.saturating_sub(display_w);
+        if is_cursor_line {
+            execute!(stdout, SetBackgroundColor(Color::DarkGrey))?;
+        }
+        if remaining > 0 {
+            execute!(stdout, Print(&" ".repeat(remaining)))?;
+        }
+        if is_cursor_line {
+            execute!(stdout, ResetColor)?;
+        }
+    }
+
+    Ok(())
+}
 // -----------------------------------------------------------------------------
 // Main render entry point
 // -----------------------------------------------------------------------------
@@ -1499,7 +2148,8 @@ pub fn render(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (term_width, term_height) = terminal.size().unwrap_or((80, 24));
     let stdout = terminal.stdout_mut();
-    // ── Hide cursor for the entire frame ──────────────────────────────────
+
+    // ── Hide cursor for the entire frame ──
     let _ = execute!(stdout, crossterm::cursor::Hide);
 
     let _edit_height = term_height.saturating_sub(3);
@@ -1507,7 +2157,6 @@ pub fn render(
     // ── 1. Restore editor content if a popup was closed ──
     if let Some(rect) = editor.dirty.restore_rect {
         restore_region(editor, stdout, rect, highlighter)?;
-        // Separators might need redrawing too
         if editor.windows.len() > 1 {
             render_separators(editor, stdout, term_width, term_height)?;
         }
@@ -1518,7 +2167,33 @@ pub fn render(
         set_cursor_style(editor, stdout)?;
     }
 
-    // ── 3. Editor windows (only if dirty, NOT when only popups changed) ──
+    // ══════════════════════════════════════════════════════════════════
+    //  FAST PATH: Single-line update (completion popup is active)
+    //
+    //  When the completion popup is showing and the user types a character,
+    //  only the current line needs redrawing. Redrawing the entire window
+    //  would clear the popup's screen area, causing a visible flash.
+    // ══════════════════════════════════════════════════════════════════
+    if let Some(line) = editor.dirty.single_line {
+        render_single_buffer_line(editor, stdout, line, highlighter)?;
+
+        // Always re-render the completion popup on top
+        if editor.completion.active && !editor.completion.items.is_empty() {
+            render_completion_popup(editor, stdout, term_width, term_height)?;
+        }
+
+        // Cursor must be repositioned
+        position_cursor(editor, stdout, term_width, term_height)?;
+
+        editor.dirty.clear();
+        return Ok(());
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    //  NORMAL PATH: Full or partial redraw
+    // ══════════════════════════════════════════════════════════════════
+
+    // ── 3. Editor windows ──
     let must_draw_windows = editor.dirty.full || editor.dirty.windows;
     if must_draw_windows {
         let window_count = editor.windows.len();
@@ -1581,6 +2256,7 @@ pub fn render(
             render_mark_list_popup(popup, stdout, term_width, term_height)?;
         }
     }
+
     // Format info popup
     if must_draw_all_popups || editor.fmt_info_popup.is_some() {
         render_fmtinfo(editor, stdout, term_width, term_height)?;
@@ -1647,6 +2323,7 @@ pub fn render(
     if editor.dirty.full || editor.dirty.cursor {
         position_cursor(editor, stdout, term_width, term_height)?;
     }
+
     editor.dirty.clear();
     Ok(())
 }

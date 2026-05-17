@@ -3,10 +3,9 @@
 //! Provides word-based and LSP-based completion suggestions.
 //! Manages the completion popup state (active, selected index, items).
 
-use crate::lsp::CompletionItem;
+use crate::editor::Editor;
 use std::collections::HashSet;
 use std::path::Path;
-
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::buffer::{Buffer, CursorPosition};
@@ -26,6 +25,42 @@ pub enum CompletionSource {
     Snippet,
     /// Suggested from file paths.
     FilePath,
+    Vocab,
+}
+
+// In completion.rs
+#[derive(Debug, Clone)]
+pub struct CursorContext {
+    pub word_prefix: String,
+    pub start_col: usize,
+    pub trigger_char: Option<char>,
+    pub post_trigger_prefix: String,
+    pub is_after_trigger: bool,
+}
+
+impl CursorContext {
+    /// Return the prefix to use for filtering completions.
+    /// After a trigger char (`.`, `:`), uses the post-trigger prefix;
+    /// otherwise uses the full word prefix.
+    pub fn filter_prefix(&self) -> &str {
+        if self.is_after_trigger {
+            &self.post_trigger_prefix
+        } else {
+            &self.word_prefix
+        }
+    }
+}
+
+impl Default for CursorContext {
+    fn default() -> Self {
+        CursorContext {
+            word_prefix: String::new(),
+            start_col: 0,
+            trigger_char: None,
+            post_trigger_prefix: String::new(),
+            is_after_trigger: false,
+        }
+    }
 }
 
 // ── Completion item ─────────────────────────────────────────────────
@@ -33,18 +68,22 @@ pub enum CompletionSource {
 /// An item in the completion list.
 #[derive(Debug, Clone)]
 pub struct CompletionEntry {
-    /// Text to display and insert.
+    /// Text to insert into the buffer.
     pub text: String,
-    /// Optional detail (e.g., type signature).
+    /// Text to display in the popup (e.g. LSP label might differ from insert_text).
+    pub label: String,
+    /// Right-aligned detail (type signature + source tag).
     pub detail: Option<String>,
     /// Optional documentation.
     pub documentation: Option<String>,
-    /// The kind of completion.
+    /// The kind of completion (for left badge).
     pub kind: CompletionKind,
     /// Where this came from.
     pub source: CompletionSource,
     /// Relevance score for sorting.
     pub score: f64,
+    /// Original LSP CompletionItem (kept for resolve requests).
+    pub lsp_item: Option<crate::lsp::CompletionItem>,
 }
 
 /// Kind of completion for display purposes.
@@ -73,23 +112,23 @@ impl CompletionKind {
     /// Return a short label for display.
     pub fn as_str(&self) -> &'static str {
         match self {
-            CompletionKind::Text => "text",
+            CompletionKind::Text => "",
             CompletionKind::Function => "fn",
-            CompletionKind::Method => "meth",
+            CompletionKind::Method => "fn",
             CompletionKind::Variable => "var",
-            CompletionKind::Field => "field",
-            CompletionKind::Type => "type",
+            CompletionKind::Field => "fld",
+            CompletionKind::Type => "typ",
             CompletionKind::Module => "mod",
             CompletionKind::Keyword => "kw",
             CompletionKind::Snippet => "snip",
             CompletionKind::File => "file",
             CompletionKind::Folder => "dir",
-            CompletionKind::Class => "class",
-            CompletionKind::Interface => "iface",
-            CompletionKind::Property => "prop",
+            CompletionKind::Class => "cls",
+            CompletionKind::Interface => "if",
+            CompletionKind::Property => "prp",
             CompletionKind::Enum => "enum",
-            CompletionKind::Constant => "const",
-            CompletionKind::Struct => "struct",
+            CompletionKind::Constant => "con",
+            CompletionKind::Struct => "st",
         }
     }
 
@@ -111,6 +150,9 @@ pub struct CompletionContext {
     pub line_text: String,
     /// Whether the trigger is a file path.
     pub is_path: bool,
+    /// True when completion was activated by a trigger character ('.' or ':').
+    /// Prevents `update()` from cancelling on short prefixes.    
+    pub after_trigger_char: bool,
 }
 
 // ── Completion engine ───────────────────────────────────────────────
@@ -123,6 +165,7 @@ pub struct CompletionEngine {
     pub active: bool,
     /// Current completion items.
     pub items: Vec<CompletionEntry>,
+    pub base_items: Vec<CompletionEntry>,
     /// Currently selected item index.
     pub selected_index: usize,
     /// The context when completion was triggered.
@@ -137,6 +180,7 @@ impl CompletionEngine {
             trigger_len,
             active: false,
             items: Vec::new(),
+            base_items: Vec::new(),
             selected_index: 0,
             context: None,
             max_items: 50,
@@ -144,7 +188,12 @@ impl CompletionEngine {
     }
 
     // In CompletionEngine::try_trigger()
-    pub fn try_trigger(&mut self, buffer: &Buffer, position: CursorPosition) -> bool {
+    pub fn try_trigger(
+        &mut self,
+        buffer: &Buffer,
+        position: CursorPosition,
+        vocab: &crate::vocab::VocabManager,
+    ) -> bool {
         let (word, is_path) = word_or_path_before_cursor(buffer, position);
 
         // ── After a member-access dot, the word fragment can be 0 chars.
@@ -185,6 +234,12 @@ impl CompletionEngine {
             items.extend(word_items);
         }
 
+        if !after_dot && word.len() >= self.trigger_len {
+            // vocab passed in via closure or stored ref — see step 3
+            let vocab_items = collect_vocab_words(vocab, &word);
+            items.extend(vocab_items);
+        }
+
         // Collect file paths if it looks like a path
         if is_path {
             let path_items = collect_file_paths(&word, base_dir);
@@ -200,6 +255,23 @@ impl CompletionEngine {
         items.truncate(self.max_items);
 
         if items.is_empty() {
+            // ── NEW: After a dot, activate in pending state so LSP items
+            //    have somewhere to land when they arrive asynchronously.
+            if after_dot {
+                let context = CompletionContext {
+                    trigger: word.clone(),
+                    position,
+                    line_text,
+                    is_path,
+                    after_trigger_char: true,
+                };
+                self.base_items.clear();
+                self.items.clear();
+                self.selected_index = 0;
+                self.context = Some(context);
+                self.active = true;
+                return true;
+            }
             self.cancel();
             return false;
         }
@@ -209,8 +281,10 @@ impl CompletionEngine {
             position,
             line_text,
             is_path,
+            after_trigger_char: after_dot,
         };
 
+        self.base_items = items.clone();
         self.items = items;
         self.selected_index = 0;
         self.context = Some(context);
@@ -218,65 +292,30 @@ impl CompletionEngine {
 
         true
     }
-
-    // In CompletionEngine::add_lsp_items()
-    pub fn add_lsp_items(&mut self, lsp_items: Vec<CompletionItem>) {
-        if lsp_items.is_empty() {
-            return; // nothing to show
-        }
-
-        // ── Activate if we have items but completion was in "pending" state.
-        //    This handles the case where the trigger char set active=true
-        //    but then cancel() was called by a later update, or where
-        //    completion was never activated because try_trigger failed
-        //    on a short prefix but LSP still has results.
-        if !self.active {
-            self.active = true;
-            if self.context.is_none() {
-                // Fabricate a minimal context so confirm() works
-                self.context = Some(CompletionContext {
-                    trigger: String::new(),
-                    position: CursorPosition::zero(),
-                    line_text: String::new(),
-                    is_path: false,
-                });
-            }
-        }
-
-        let trigger = self
+    // completion.rs — inside impl CompletionEngine
+    fn apply_filter(&mut self) {
+        let trigger_lower = self
             .context
             .as_ref()
             .map(|c| c.trigger.to_lowercase())
             .unwrap_or_default();
 
-        for item in lsp_items {
-            let text = item.insert_text.unwrap_or(item.label.clone());
-            let score = compute_score(&text, &trigger);
-
-            let final_score = if trigger.is_empty() {
-                50.0
-            } else {
-                score + 10.0
-            };
-
-            let kind = item
-                .kind
-                .map(CompletionKind::from_lsp_kind)
-                .unwrap_or(CompletionKind::Text);
-
-            self.items.push(CompletionEntry {
-                text,
-                detail: item.detail,
-                documentation: item.documentation.and_then(|v| {
-                    v.as_str()
-                        .map(String::from)
-                        .or_else(|| v.get("value")?.as_str().map(String::from))
-                }),
-                kind,
-                source: CompletionSource::Lsp,
-                score: final_score,
-            });
-        }
+        self.items = self
+            .base_items
+            .iter()
+            .filter(|item| {
+                trigger_lower.is_empty() || fuzzy_match(&item.text.to_lowercase(), &trigger_lower)
+            })
+            .map(|item| {
+                let mut entry = item.clone();
+                entry.score = compute_score(&item.text, &trigger_lower);
+                // LSP items get a boost so they rank above buffer words
+                if item.source == CompletionSource::Lsp {
+                    entry.score += 10.0;
+                }
+                entry
+            })
+            .collect();
 
         self.items.sort_by(|a, b| {
             b.score
@@ -284,43 +323,35 @@ impl CompletionEngine {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
         self.items.truncate(self.max_items);
+        // self.selected_index = 0;
     }
-
-    // In CompletionEngine::update()
     pub fn update(&mut self, new_trigger: &str) {
         if !self.active {
             return;
         }
 
-        if new_trigger.len() < self.trigger_len {
+        let after_trigger_char = self
+            .context
+            .as_ref()
+            .map(|ctx| ctx.after_trigger_char)
+            .unwrap_or(false);
+
+        if new_trigger.len() < self.trigger_len && !after_trigger_char {
             self.cancel();
             return;
         }
 
-        // Re-score and filter existing items.
-        let trigger_lower = new_trigger.to_lowercase();
-        let _before_count = self.items.len();
-        self.items
-            .retain(|item| item.text.to_lowercase().contains(&trigger_lower));
-        let _after_retain = self.items.len();
-
-        for item in &mut self.items {
-            item.score = compute_score(&item.text, &trigger_lower);
-        }
-
-        self.items.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        self.selected_index = 0;
-
         if let Some(ctx) = self.context.as_mut() {
             ctx.trigger = new_trigger.to_string();
+            if new_trigger.len() >= self.trigger_len {
+                ctx.after_trigger_char = false;
+            }
         }
 
-        if self.items.is_empty() {
-            self.cancel(); // ← add this: cancel when no items remain after filtering
+        self.apply_filter(); // ← replaces the retain + re-score block
+
+        if self.items.is_empty() && !after_trigger_char {
+            self.cancel();
         }
     }
 
@@ -364,6 +395,7 @@ impl CompletionEngine {
     pub fn cancel(&mut self) {
         self.active = false;
         self.items.clear();
+        self.base_items.clear();
         self.selected_index = 0;
         self.context = None;
     }
@@ -414,6 +446,181 @@ impl CompletionEngine {
         if self.items.is_empty() {
             self.cancel();
         }
+    }
+    /// Unified completion update: merges local + LSP candidates,
+    /// filters, scores, and updates the completion state.
+    pub fn update_unified_completions(
+        editor: &mut Editor,
+        lsp_items: Option<Vec<crate::lsp::CompletionItem>>,
+    ) {
+        let ctx = extract_cursor_context(editor);
+        let prefix = ctx.filter_prefix().to_string();
+        let prefix_lower = prefix.to_lowercase();
+
+        // Collect local completions (buffer words, vocab, file paths)
+        let mut all_entries = collect_local_completions(editor, &ctx);
+
+        // Convert and add LSP items
+        if let Some(lsp) = lsp_items {
+            for item in lsp {
+                let raw_label = item.label.clone();
+                let label = raw_label
+                    .split("(use ")
+                    .next()
+                    .unwrap_or(&raw_label)
+                    .trim()
+                    .to_string();
+                let text = item
+                    .insert_text
+                    .as_deref()
+                    .unwrap_or(&raw_label)
+                    .split("(use ")
+                    .next()
+                    .unwrap_or(&raw_label)
+                    .trim()
+                    .to_string();
+
+                let doc = item.documentation.as_ref().and_then(|v| {
+                    v.as_str()
+                        .map(String::from)
+                        .or_else(|| v.get("value")?.as_str().map(String::from))
+                });
+
+                let score = compute_score(&text, &prefix_lower) + 10.0; // LSP boost
+                let kind = item
+                    .kind
+                    .map(CompletionKind::from_lsp_kind)
+                    .unwrap_or(CompletionKind::Text);
+
+                let lsp_detail = match &item.detail {
+                    Some(d) if !d.trim().is_empty() => Some(format!("{} [lsp]", d)),
+                    _ => None,
+                };
+                all_entries.push(CompletionEntry {
+                    text,
+                    label,
+                    detail: lsp_detail,
+                    documentation: doc,
+                    kind,
+                    source: CompletionSource::Lsp,
+                    score,
+                    lsp_item: Some(item),
+                });
+            }
+        }
+
+        // Filter and score all candidates together
+        let filtered = filter_and_score_entries(all_entries, &prefix);
+
+        // Update completion state
+        if !filtered.is_empty() {
+            editor.completion.base_items = filtered.clone();
+            editor.completion.items = filtered;
+            editor.completion.selected_index = 0;
+            editor.completion.active = true;
+
+            let position = editor
+                .windows
+                .active_window()
+                .map(|w| w.cursor.position)
+                .unwrap_or_default();
+            let line_text = editor
+                .current_buffer()
+                .and_then(|b| b.line_text(position.line))
+                .unwrap_or_default();
+
+            editor.completion.context = Some(CompletionContext {
+                trigger: prefix,
+                position,
+                line_text,
+                is_path: is_path_trigger(&ctx.word_prefix),
+                after_trigger_char: ctx.is_after_trigger,
+            });
+        } else {
+            editor.completion.cancel();
+        }
+    }
+    /// Update a resolved LSP item's documentation/detail in base_items
+    /// and re-apply the filter so the display refreshes.
+    pub fn update_resolved_item(&mut self, resolved: &crate::lsp::CompletionItem) {
+        let label = &resolved.label;
+        let new_doc = resolved.documentation.as_ref().and_then(|v| {
+            v.as_str()
+                .map(String::from)
+                .or_else(|| v.get("value")?.as_str().map(String::from))
+        });
+        let new_detail = resolved.detail.clone();
+
+        let mut found = false;
+        for item in &mut self.base_items {
+            if item.source == CompletionSource::Lsp && item.label == *label {
+                if let Some(doc) = &new_doc {
+                    if !doc.is_empty() {
+                        item.documentation = Some(doc.clone());
+                    }
+                }
+                if let Some(detail) = &new_detail {
+                    if !detail.trim().is_empty() {
+                        item.detail = Some(format!("{} [lsp]", detail));
+                    } else {
+                        item.detail = None;
+                    }
+                }
+                item.lsp_item = Some(resolved.clone());
+                found = true;
+                break;
+            }
+        }
+
+        if found {
+            // Preserve the current selection across the filter refresh
+            let saved = self.selected_index;
+            self.apply_filter();
+            self.selected_index = saved.min(self.items.len().saturating_sub(1));
+        }
+    }
+    /// Return completion items as pre-formatted, right-aligned strings.
+    /// Ready to be passed directly to a popup renderer that expects `Vec<String>`.
+    pub fn formatted_items(&self) -> Vec<String> {
+        if self.items.is_empty() {
+            return Vec::new();
+        }
+
+        // Calculate the maximum width of the left side (kind + label)
+        let max_left_len = self
+            .items
+            .iter()
+            .map(|i| {
+                let kind_str = i.kind.as_str();
+                let kind_len = if kind_str.is_empty() {
+                    0
+                } else {
+                    kind_str.chars().count() + 1 // +1 for the space after the kind badge
+                };
+                kind_len + i.label.chars().count()
+            })
+            .max()
+            .unwrap_or(0);
+
+        self.items
+            .iter()
+            .map(|item| {
+                let kind_str = item.kind.as_str();
+                let left = if kind_str.is_empty() {
+                    item.label.clone()
+                } else {
+                    format!("{} {}", kind_str, item.label)
+                };
+
+                // Pad the left side so the detail aligns perfectly
+                let padded_left = format!("{:<width$}", left, width = max_left_len);
+
+                match &item.detail {
+                    Some(detail) => format!("{}  {}", padded_left, detail), // 2 spaces gap
+                    None => padded_left,
+                }
+            })
+            .collect()
     }
 }
 
@@ -543,6 +750,35 @@ pub fn collect_file_paths(trigger: &str, base_dir: Option<&Path>) -> Vec<Complet
         !trigger.starts_with('.'),
     )
 }
+
+pub fn collect_vocab_words(
+    vocab: &crate::vocab::VocabManager,
+    prefix: &str,
+) -> Vec<CompletionEntry> {
+    let prefix_lower = prefix.to_lowercase();
+    vocab
+        .words()
+        .iter()
+        .filter(|w| {
+            let wl = w.to_lowercase();
+            wl.starts_with(&prefix_lower) && w.len() > prefix.len()
+        })
+        .map(|w| {
+            let score = compute_score(w, &prefix_lower) + 5.0;
+            CompletionEntry {
+                text: w.clone(),
+                label: w.clone(),
+                detail: Some("[vocab]".into()),
+                documentation: None,
+                kind: CompletionKind::Text,
+                source: CompletionSource::Vocab,
+                score,
+                lsp_item: None,
+            }
+        })
+        .collect()
+}
+
 /// Collect words from the buffer that start with the given prefix.
 fn collect_buffer_words(buffer: &Buffer, prefix: &str) -> Vec<CompletionEntry> {
     let mut words: HashSet<String> = HashSet::new();
@@ -580,19 +816,21 @@ fn collect_buffer_words(buffer: &Buffer, prefix: &str) -> Vec<CompletionEntry> {
         .map(|text| {
             let score = compute_score(&text, &prefix_lower);
             CompletionEntry {
-                text,
-                detail: None,
+                text: text.clone(),
+                label: text,
+                detail: Some("[buffer]".into()),
                 documentation: None,
                 kind: CompletionKind::Text,
                 source: CompletionSource::BufferWords,
                 score,
+                lsp_item: None,
             }
         })
         .collect()
 }
 
 /// Compute a relevance score for a completion item.
-/// Higher is better. Simple prefix-matching heuristic.
+/// Higher is better. Uses prefix, substring, and fuzzy matching heuristics.
 pub fn compute_score(text: &str, trigger: &str) -> f64 {
     if trigger.is_empty() {
         return 0.0;
@@ -601,24 +839,29 @@ pub fn compute_score(text: &str, trigger: &str) -> f64 {
     let text_lower = text.to_lowercase();
     let trigger_lower = trigger.to_lowercase();
 
-    if !text_lower.starts_with(&trigger_lower) {
-        // Contains but doesn't start with — lower score.
-        if text_lower.contains(&trigger_lower) {
-            return 5.0;
-        }
-        return 0.0;
-    }
-
     // Exact match bonus.
     if text_lower == trigger_lower {
         return 100.0;
     }
 
-    // Score based on how much of the trigger is covered relative to text length.
-    let coverage = trigger.len() as f64 / text.len().max(1) as f64;
-    coverage * 50.0
-}
+    // Prefix match (best for completion)
+    if text_lower.starts_with(&trigger_lower) {
+        let coverage = trigger.len() as f64 / text.len().max(1) as f64;
+        return coverage * 50.0;
+    }
 
+    // Substring match
+    if text_lower.contains(&trigger_lower) {
+        return 5.0;
+    }
+
+    // Fuzzy match fallback (e.g., "ins_" matches "insert_str")
+    if fuzzy_match(&text_lower, &trigger_lower) {
+        return 2.0;
+    }
+
+    0.0
+}
 // ── Add after the existing `collect_file_paths` function ──────────
 
 /// List directory entries matching a file prefix, returning completion items.
@@ -701,12 +944,14 @@ fn list_dir_completion_entries(
         };
 
         items.push(CompletionEntry {
-            text: insert_text,
+            text: insert_text.clone(),
+            label: insert_text,
             detail,
             documentation: None,
             kind,
             source: CompletionSource::FilePath,
             score,
+            lsp_item: None,
         });
 
         // Early cutoff to avoid collecting too many items
@@ -786,4 +1031,139 @@ pub fn collect_file_completions_for_arg(
         // Non-path prefix — list files in base directory matching the prefix
         list_dir_completion_entries(&base, prefix, "", !prefix.starts_with('.'))
     }
+}
+
+// ── Unified completion pipeline ────────────────────────────────────
+
+/// Collect local (non-LSP) completion candidates from buffer words,
+/// vocabulary, and file paths.
+fn collect_local_completions(editor: &Editor, ctx: &CursorContext) -> Vec<CompletionEntry> {
+    let mut entries = Vec::new();
+    let prefix = ctx.filter_prefix();
+
+    // Buffer words
+    if let Some(buffer) = editor.current_buffer() {
+        if prefix.len() >= editor.completion.trigger_len {
+            entries.extend(collect_buffer_words(buffer, prefix));
+        }
+    }
+
+    // Vocabulary words
+    if prefix.len() >= editor.completion.trigger_len {
+        entries.extend(collect_vocab_words(&editor.vocab, prefix));
+    }
+
+    // File paths
+    if is_path_trigger(prefix) {
+        let base_dir = editor.current_buffer().and_then(|b| b.file_path.as_deref());
+        entries.extend(collect_file_paths(prefix, base_dir));
+    }
+
+    entries
+}
+
+/// Filter and score completion entries against the given prefix.
+fn filter_and_score_entries(entries: Vec<CompletionEntry>, prefix: &str) -> Vec<CompletionEntry> {
+    let prefix_lower = prefix.to_lowercase();
+
+    let mut filtered: Vec<CompletionEntry> = entries
+        .into_iter()
+        .filter(|item| {
+            prefix_lower.is_empty() || item.text.to_lowercase().starts_with(&prefix_lower)
+        })
+        .map(|mut item| {
+            item.score = compute_score(&item.text, &prefix_lower)
+                + if item.source == CompletionSource::Lsp {
+                    10.0
+                } else {
+                    0.0
+                };
+            item
+        })
+        .collect();
+
+    // Sort by score descending first, then deduplicate keeping highest score
+    filtered.sort_by(|a, b| {
+        let a_exact = a.text.to_lowercase().starts_with(&prefix_lower);
+        let b_exact = b.text.to_lowercase().starts_with(&prefix_lower);
+        match (a_exact, b_exact) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => b
+                .score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal),
+        }
+    });
+
+    let mut seen = std::collections::HashSet::new();
+    filtered.retain(|item| seen.insert(item.text.to_lowercase()));
+
+    filtered
+}
+/// Extract cursor context from the editor for completion.
+pub fn extract_cursor_context(editor: &Editor) -> CursorContext {
+    let window = match editor.windows.active_window() {
+        Some(w) => w,
+        None => return CursorContext::default(),
+    };
+
+    let buffer = match editor.current_buffer() {
+        Some(b) => b,
+        None => return CursorContext::default(),
+    };
+
+    let pos = window.cursor.position;
+    let line = match buffer.line_text(pos.line) {
+        Some(l) => l,
+        None => return CursorContext::default(),
+    };
+
+    let col = pos.col;
+    let graphemes: Vec<&str> = line.graphemes(true).collect();
+
+    // Scan back to find word start
+    let mut word_start = col;
+    while word_start > 0 {
+        if let Some(g) = graphemes.get(word_start - 1) {
+            if is_identifier_char(g) {
+                word_start -= 1;
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+
+    let word_prefix: String = graphemes[word_start..col].join("");
+
+    let trigger_char = if word_start > 0 {
+        graphemes
+            .get(word_start.saturating_sub(1))
+            .and_then(|g| g.chars().next())
+    } else {
+        None
+    };
+
+    let is_after_trigger = matches!(trigger_char, Some('.') | Some(':'));
+    let post_trigger_prefix = word_prefix.clone();
+
+    CursorContext {
+        word_prefix,
+        start_col: word_start,
+        trigger_char,
+        post_trigger_prefix,
+        is_after_trigger,
+    }
+}
+
+pub fn fuzzy_match(text: &str, query: &str) -> bool {
+    let mut text_chars = text.chars();
+    for q_char in query.chars() {
+        if text_chars.find(|&c| c == q_char).is_none() {
+            return false;
+        }
+    }
+    true
 }

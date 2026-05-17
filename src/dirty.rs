@@ -38,6 +38,13 @@ pub struct DirtyState {
     // ── Cursor ──
     pub cursor: bool,
 
+    // ── Single-line update ──
+    /// If set, only this specific buffer line (0-based) needs re-rendering.
+    /// Used when the completion popup is active to avoid redrawing the
+    /// entire buffer (which causes flicker under the popup).
+    /// Takes priority over `windows` for the rendering pass.
+    pub single_line: Option<usize>,
+
     // ── Overlay cleanup ──
     /// Previously occupied popup region that needs editor content restored.
     pub restore_rect: Option<Rect>,
@@ -64,6 +71,7 @@ impl DirtyState {
         self.mark_list = false;
         self.restore_rect = None;
         self.function_list = false;
+        self.single_line = None;
     }
 
     pub fn mark_all(&mut self) {
@@ -83,6 +91,8 @@ impl DirtyState {
         self.mru = true;
         self.mark_list = true;
         self.function_list = true;
+        // Full redraw supersedes single-line optimization
+        self.single_line = None;
     }
 
     /// Typical insert-mode keystroke: buffer changed, cursor moved.
@@ -90,6 +100,8 @@ impl DirtyState {
         self.windows = true;
         self.status = true;
         self.cursor = true;
+        // Standard insert supersedes single-line
+        self.single_line = None;
     }
 
     /// Only the completion selection scrolled (Ctrl-N/P).
@@ -101,6 +113,19 @@ impl DirtyState {
     /// Completion content changed (new trigger / filtered list).
     pub fn mark_completion_update(&mut self) {
         self.completion = true;
+    }
+
+    /// Mark only the current line as dirty (used when popup is active).
+    /// Prevents full window redraw which would flash under the popup.
+    pub fn mark_single_line(&mut self, line: usize) {
+        self.single_line = Some(line);
+        self.cursor = true;
+        // Do NOT set self.windows = true — that causes full redraw
+    }
+
+    /// Clear the single-line flag (e.g. after rendering it).
+    pub fn clear_single_line(&mut self) {
+        self.single_line = None;
     }
 
     /// A popup was dismissed — restore the underlying editor content.
@@ -125,6 +150,7 @@ impl DirtyState {
             || self.diff
             || self.cursor
             || self.restore_rect.is_some()
+            || self.single_line.is_some()
     }
 }
 

@@ -43,6 +43,7 @@ mod tags;
 mod terminal;
 mod terminal_sanitize;
 mod undo;
+mod vocab;
 mod window;
 
 use crate::ed::FileOpsExt;

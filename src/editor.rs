@@ -51,6 +51,7 @@ use crate::misc::parse_shortcut_keys;
 use crate::popup::Scrollable;
 use crate::prompt::MiniInputPrompt;
 use crate::prompt::PromptAction;
+use crate::vocab::VocabManager;
 use std::path::PathBuf;
 
 // ── Editor modes ────────────────────────────────────────────────────
@@ -421,6 +422,11 @@ pub struct Editor {
     pub(crate) last_edit_time: Instant,
     /// Timeout (milliseconds) after which a new insert-mode keystroke starts a new undo group.
     pub(crate) undo_break_timeout_ms: u64,
+    /// Local vocabulary manager for custom wordlists.
+    pub vocab: VocabManager,
+
+    pub completion_debounce_timer: Option<Instant>,
+    pub completion_debounce_ms: u64,
 
     // ==================== State & Quit ====================
     /// Status message (displayed in the status bar).
@@ -442,7 +448,6 @@ pub struct Editor {
     /// Whether a paste operation is in progress (suppresses per-char LSP/completion).
     pub paste_in_progress: bool,
     /// Whether the editor should auto-start LSP.
-    auto_start_lsp: bool,
 
     /// In-memory buffer positions for session-only buffer switching.
     /// Maps BufferId → (cursor_position, scroll_line).
@@ -564,6 +569,8 @@ impl Editor {
     /// A fully initialized `Editor` instance ready to run.
     pub fn new(config: Config) -> Self {
         let leader = config.leader;
+        let completion_trigger_len = config.completion_trigger_len;
+        let enable_lsp = config.enable_lsp;
         let mut keybinds = KeyBindManager::new();
         keybinds.register_keymap("normal", default_normal_keymap());
         keybinds.register_keymap("insert", default_insert_keymap());
@@ -600,8 +607,7 @@ impl Editor {
             .build()
             .expect("Failed to create tokio runtime for LLM");
 
-        // Now create LspManager and spawn it on the runtime
-        let lsp_tx = {
+        let lsp_tx = if enable_lsp {
             let tx_for_lsp = app_tx.clone();
             let mut lsp_manager = crate::lsp::LspManager::new(tx_for_lsp);
             let sender = lsp_manager.get_sender();
@@ -611,6 +617,11 @@ impl Editor {
             });
 
             sender
+        } else {
+            // Dummy channel — receiver is dropped immediately, so
+            // is_closed() returns true and lsp_send() silently no-ops.
+            let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+            tx
         };
 
         let (llm_response_tx, llm_response_rx) =
@@ -771,11 +782,21 @@ impl Editor {
             llm_single_shot: false,
 
             // Completion
-            completion: CompletionEngine::new(2),
+            completion: CompletionEngine::new(completion_trigger_len),
             command_completion,
+            completion_debounce_timer: None,
+            completion_debounce_ms: 50,
             last_edit_time: Instant::now(),
             undo_break_timeout_ms: 2000,
-
+            vocab: {
+                let mut v = VocabManager::new(
+                    Config::config_dir()
+                        .unwrap_or_else(|_| PathBuf::from("."))
+                        .join("vocab.json"),
+                );
+                v.load(); // ← make sure this is called
+                v
+            },
             // State & Quit
             status_message: None,
             error_message: None,
@@ -789,7 +810,6 @@ impl Editor {
             block_insert: None,
             replace_char_pending: false,
             paste_in_progress: false,
-            auto_start_lsp: true,
 
             // Command System
             command_registry,
@@ -994,7 +1014,18 @@ impl Editor {
             CommandResult::ContentChanged => {
                 self.search_matches_dirty = true;
                 self.fn_name_needs_update = true;
-                self.dirty.mark_insert();
+                if self.completion.active {
+                    // Only mark the current line as dirty — skip full window redraw
+                    // This prevents the popup from flashing
+                    let cursor_line = self
+                        .windows
+                        .active_window()
+                        .map(|w| w.cursor.position.line)
+                        .unwrap_or(0);
+                    self.dirty.mark_single_line(cursor_line);
+                } else {
+                    self.dirty.mark_insert();
+                }
                 // Dismiss infobar warnings once the user starts editing
                 if self.infobar_message.is_some() {
                     self.infobar_message = None;
@@ -2660,12 +2691,28 @@ impl Editor {
                     if let Key::Char(c) = raw_key {
                         self.ensure_undo_group();
                         self.insert_char_at_cursor(c);
+                        // TODO ghost_text later
+                        // self.request_ghost_text();
+
+                        // ── Completion: only update for trigger chars or when popup
+                        //    is already active.  Calling unconditionally would hit
+                        //    the auto-trigger path (Case 3) on every keystroke and
+                        //    cause duplicate LSP requests in the log.
+                        if c == '.' || c == ':' || self.completion.active {
+                            self.maybe_update_completion();
+                        }
+
                         return CommandResult::ContentChanged;
                     }
                 } else if self.mode == Mode::Replace {
                     if let Key::Char(c) = raw_key {
                         self.ensure_undo_group();
                         self.overwrite_char_at_cursor(c);
+
+                        if c == '.' || c == ':' || self.completion.active {
+                            self.maybe_update_completion();
+                        }
+
                         return CommandResult::ContentChanged;
                     }
                 }
@@ -3678,6 +3725,19 @@ impl Editor {
         self.validate_ghost_text();
         self.poll_app_messages();
         self.update_function_name_cache();
+
+        // ── Deferred syntax reparse (only when popup is NOT active) ──
+        let popup_active = self.completion.active;
+
+        if let Some(window) = self.windows.active_window() {
+            let buffer_id = window.buffer_id;
+            if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
+                if buffer.tree_dirty && !popup_active {
+                    buffer.reparse_if_dirty();
+                    self.dirty.windows = true;
+                }
+            }
+        }
     }
     /// Poll for Codeium server startup result and show feedback.
     fn tick_codeium_startup(&mut self) {
@@ -3957,5 +4017,21 @@ impl Editor {
 
         self.float_popup = Some(FloatPopup::new(title, lines));
         self.dirty.mark_all();
+    }
+    /// Handle the `:vocab <word>` command.
+    pub fn vocab_handle(&mut self, word: &str) -> CommandResult {
+        let word = word.trim();
+        if word.is_empty() {
+            return CommandResult::Error("Usage: :vocab <word>".into());
+        }
+
+        if self.vocab.add(word) {
+            if let Err(e) = self.vocab.save() {
+                return CommandResult::Error(format!("Failed to save vocabulary: {}", e));
+            }
+            CommandResult::Message(format!("Added '{}' to vocabulary", word))
+        } else {
+            CommandResult::Message(format!("'{}' already in vocabulary", word))
+        }
     }
 } // end of imp editor
