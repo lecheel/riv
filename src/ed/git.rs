@@ -299,7 +299,9 @@ impl GitExt for Editor {
         // Show the diff popup for the new hunk
         let diff_hunk_clone = self.cached_diff_hunks.get(idx).cloned();
         if let Some(hunk) = diff_hunk_clone {
-            self.show_hunk_popup(&hunk);
+            if self.config.display_hunk {
+                self.show_hunk_popup(&hunk);
+            }
         }
 
         let msg = format!(
@@ -381,7 +383,9 @@ impl GitExt for Editor {
 
         let diff_hunk_clone = self.cached_diff_hunks.get(idx).cloned();
         if let Some(hunk) = diff_hunk_clone {
-            self.show_hunk_popup(&hunk);
+            if self.config.display_hunk {
+                self.show_hunk_popup(&hunk);
+            }
         }
 
         let msg = format!(

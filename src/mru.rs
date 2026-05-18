@@ -1,6 +1,8 @@
+//--+ mru.rs
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MruEntry {
@@ -8,6 +10,45 @@ pub struct MruEntry {
     pub display_name: String,
     pub line: usize,
     pub col: usize,
+
+    /// How many times this file has been opened.
+    #[serde(default)]
+    pub open_count: usize,
+
+    /// Timestamp of the last time this file was opened.
+    #[serde(default = "default_last_opened")]
+    pub last_opened: Option<SystemTime>,
+}
+
+fn default_last_opened() -> Option<SystemTime> {
+    None
+}
+
+impl MruEntry {
+    /// Return a human‑readable relative‑time string like "3m ago" or "2d ago".
+    pub fn relative_time(&self) -> String {
+        match self.last_opened {
+            None => "never".to_string(),
+            Some(then) => {
+                let now = SystemTime::now();
+                match now.duration_since(then) {
+                    Ok(dur) => {
+                        let secs = dur.as_secs();
+                        if secs < 60 {
+                            "just now".to_string()
+                        } else if secs < 3600 {
+                            format!("{}m ago", secs / 60)
+                        } else if secs < 86400 {
+                            format!("{}h ago", secs / 3600)
+                        } else {
+                            format!("{}d ago", secs / 86400)
+                        }
+                    }
+                    Err(_) => "—".to_string(),
+                }
+            }
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -80,13 +121,15 @@ impl MruManager {
             std::env::current_dir().unwrap_or_default().join(&path)
         };
 
-        // let display_name = resolved_path
-        // .file_name()
-        // .and_then(|n| n.to_str())
-        // .unwrap_or("?")
-        // .to_string();
-
         let display_name = resolved_path.to_string_lossy().to_string();
+
+        // Preserve open_count from existing entry (if any), then increment.
+        let existing_count = self
+            .entries
+            .iter()
+            .find(|e| e.path == resolved_path)
+            .map(|e| e.open_count)
+            .unwrap_or(0);
 
         self.entries.retain(|e| e.path != resolved_path);
 
@@ -95,6 +138,8 @@ impl MruManager {
             display_name,
             line,
             col,
+            open_count: existing_count + 1,
+            last_opened: Some(SystemTime::now()),
         });
 
         while self.entries.len() > self.max_entries {
@@ -102,14 +147,7 @@ impl MruManager {
         }
     }
 
-    pub fn get_entries(&self) -> Vec<MruEntry> {
-        self.entries.iter().cloned().collect()
-    }
-
-    pub fn get_by_index(&self, index: usize) -> Option<MruEntry> {
-        self.entries.get(index).cloned()
-    }
-
+    /// Update only the cursor position (no count/timestamp bump).
     pub fn update_position(&mut self, path: &PathBuf, line: usize, col: usize) {
         let resolved_path = if let Ok(canonical) = std::fs::canonicalize(path) {
             canonical
@@ -123,5 +161,20 @@ impl MruManager {
             entry.line = line;
             entry.col = col;
         }
+    }
+
+    pub fn get_entries(&self) -> Vec<MruEntry> {
+        self.entries.iter().cloned().collect()
+    }
+
+    pub fn get_by_index(&self, index: usize) -> Option<MruEntry> {
+        self.entries.get(index).cloned()
+    }
+
+    /// Return entries sorted by open count (descending).
+    pub fn entries_by_frequency(&self) -> Vec<MruEntry> {
+        let mut v: Vec<MruEntry> = self.entries.iter().cloned().collect();
+        v.sort_by(|a, b| b.open_count.cmp(&a.open_count));
+        v
     }
 }

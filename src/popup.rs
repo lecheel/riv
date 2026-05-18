@@ -5,370 +5,16 @@
 //! shared `move_up`, `move_down`, and `clamp_scroll` logic so there is no
 //! duplication across popup types.
 
+pub use crate::popup_ext::{
+    render_buffer_list_popup, render_help_popup, render_keymap_popup, render_mark_list_popup,
+    render_tag_list_popup, BufferListEntry, BufferListPopup, FunctionEntry, FunctionListPopup,
+    HelpPopup, KeymapEntry, KeymapPopup, MarkEntry, MarkListPopup, TagListPopup,
+};
 use crate::rounded_box::*;
-use crate::tags::TagEntry;
 use crossterm::cursor::MoveTo;
 use crossterm::execute;
 use crossterm::style::{Print, ResetColor, SetBackgroundColor, SetForegroundColor};
 use std::path::{Path, PathBuf};
-
-/// Popup for selecting among multiple tag/definition matches.
-/// Shown when `gd` (or ctags tag_under_cursor) finds multiple definitions.
-#[derive(Debug, Clone)]
-pub struct TagListPopup {
-    pub entries: Vec<TagListEntry>,
-    pub selected: usize,
-    pub scroll: usize, // renamed from scroll_offset
-    pub title: String,
-    pub word: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct TagListEntry {
-    pub name: String,
-    pub file: String,
-    pub line: usize,
-    /// Excerpt of the line content for context
-    pub preview: String,
-}
-
-impl TagListPopup {
-    pub fn new(word: &str, matches: &[TagEntry], project_root: &std::path::Path) -> Self {
-        let entries: Vec<TagListEntry> = matches
-            .iter()
-            .map(|tag| {
-                let relative = tag
-                    .file
-                    .strip_prefix(project_root)
-                    .unwrap_or(&tag.file)
-                    .to_string_lossy()
-                    .to_string();
-                TagListEntry {
-                    name: tag.name.clone(),
-                    file: relative,
-                    line: tag.line,
-                    preview: String::new(),
-                }
-            })
-            .collect();
-
-        TagListPopup {
-            entries,
-            selected: 0,
-            scroll: 0,
-            title: format!("Tags: {}", word),
-            word: word.to_string(),
-        }
-    }
-
-    /// Create from LSP Location results.
-    pub fn from_lsp_locations(word: &str, locations: &[crate::lsp::Location]) -> Self {
-        let entries: Vec<TagListEntry> = locations
-            .iter()
-            .map(|loc| {
-                // loc.uri is a String — handle file:// prefix or plain path
-                let file_path = if loc.uri.starts_with("file:///") {
-                    loc.uri[7..].to_string()
-                } else if loc.uri.starts_with("file://") {
-                    loc.uri[7..].to_string()
-                } else {
-                    loc.uri.clone()
-                };
-                TagListEntry {
-                    name: word.to_string(),
-                    file: file_path,
-                    line: loc.range.start.line as usize + 1,
-                    preview: String::new(),
-                }
-            })
-            .collect();
-
-        TagListPopup {
-            entries,
-            selected: 0,
-            scroll: 0,
-            title: format!("Definitions: {}", word),
-            word: word.to_string(),
-        }
-    }
-
-    pub fn selected_entry(&self) -> Option<&TagListEntry> {
-        self.entries.get(self.selected)
-    }
-}
-
-impl Scrollable for TagListPopup {
-    fn selected(&self) -> usize {
-        self.selected
-    }
-    fn selected_mut(&mut self) -> &mut usize {
-        &mut self.selected
-    }
-    fn scroll_mut(&mut self) -> &mut usize {
-        &mut self.scroll
-    }
-    fn len(&self) -> usize {
-        self.entries.len()
-    }
-    fn visible_rows(&self) -> usize {
-        15
-    }
-}
-pub fn render_tag_list_popup(
-    popup: &TagListPopup,
-    stdout: &mut std::io::Stdout,
-    term_width: u16,
-    term_height: u16,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let status_h = 6u16;
-    let edit_h = term_height.saturating_sub(status_h);
-    let popup_width = clamp_width(80, term_width, 4);
-    let content_rows = clamp_height(15, edit_h.saturating_sub(4), 5) as usize;
-    let popup_height = content_rows as u16 + 2;
-
-    let (x, y) = centered_in_edit(popup_width, popup_height, term_width, term_height, status_h);
-    clear_rect(stdout, x, y, popup_width, popup_height, catppuccin::MANTLE)?;
-
-    // ── Title bar ──
-    let title = format!(
-        " {} {} ",
-        popup.title,
-        if popup.entries.is_empty() {
-            "(empty)".to_string()
-        } else {
-            format!("({})", popup.entries.len())
-        }
-    );
-    let title_style = BoxStyle::default()
-        .with_title(title)
-        .with_bg(catppuccin::MANTLE);
-    draw_top_border(stdout, x, y, popup_width, &title_style)?;
-
-    // ── Content rows ──
-    let file_name_width: usize = 40;
-    let scroll = popup.scroll;
-
-    for i in 0..content_rows {
-        let row_y = y + 1 + i as u16;
-        let entry_idx = scroll + i;
-
-        if entry_idx < popup.entries.len() {
-            let entry = &popup.entries[entry_idx];
-            let is_selected = entry_idx == popup.selected;
-            let row_style = if is_selected {
-                RowStyle::selected()
-                    .with_border(catppuccin::SURFACE2)
-                    .with_bg(catppuccin::SURFACE0)
-            } else {
-                RowStyle::normal()
-                    .with_border(catppuccin::SURFACE2)
-                    .with_bg(catppuccin::MANTLE)
-            };
-
-            let idx_str = format!("{:>2}", entry_idx + 1);
-            let file_line = format!("{}:{}", entry.file, entry.line);
-            let file_display = if str_width(&file_line) > file_name_width {
-                let truncated = truncate_to_width(&file_line, file_name_width.saturating_sub(1));
-                format!("{}…", truncated)
-            } else {
-                file_line
-            };
-
-            let file_color = if is_selected {
-                catppuccin::TEXT
-            } else {
-                catppuccin::BLUE
-            };
-
-            let mut segments = Vec::new();
-            segments.push(Segment::new(&idx_str, catppuccin::OVERLAY0));
-            segments.push(Segment::new("  ", catppuccin::SURFACE1));
-            segments.push(Segment::new(&file_display, file_color));
-
-            let displayed_w = str_width(&file_display);
-            let padding = file_name_width.saturating_sub(displayed_w);
-            let pad_str = if padding > 0 {
-                " ".repeat(padding)
-            } else {
-                String::new()
-            };
-            if !pad_str.is_empty() {
-                segments.push(Segment::new(&pad_str, catppuccin::SURFACE1));
-            }
-
-            segments.push(Segment::new("  ", catppuccin::SURFACE1));
-
-            segments.push(Segment::new(
-                &entry.name,
-                if is_selected {
-                    catppuccin::TEXT
-                } else {
-                    catppuccin::MAUVE
-                },
-            ));
-
-            if !entry.preview.is_empty() {
-                segments.push(Segment::new("  ", catppuccin::SURFACE1));
-                segments.push(Segment::new(&entry.preview, catppuccin::OVERLAY0));
-            }
-
-            draw_row(stdout, x, row_y, popup_width, &segments, &row_style)?;
-        } else {
-            let empty_style = RowStyle::normal().with_border(catppuccin::SURFACE2);
-            draw_empty_row(stdout, x, row_y, popup_width, &empty_style)?;
-        }
-    }
-
-    // ── Bottom border ──
-    let bottom_y = y + 1 + content_rows as u16;
-    let footer = format!(
-        "[Enter] jump  [Esc] close  {}/{}",
-        if popup.entries.is_empty() {
-            0
-        } else {
-            popup.selected + 1
-        },
-        popup.entries.len(),
-    );
-    let footer_style = BoxStyle::default()
-        .with_footer(footer)
-        .with_bg(catppuccin::MANTLE);
-    draw_bottom_border(stdout, x, bottom_y, popup_width, &footer_style)?;
-
-    execute!(stdout, ResetColor)?;
-    Ok(())
-}
-
-/// A single function/method entry found in the buffer.
-#[derive(Debug, Clone)]
-pub struct FunctionEntry {
-    /// Short keyword prefix: "fn", "pub fn", "async fn", "def", "function", etc.
-    pub kind: String,
-    /// Function/method name.
-    pub name: String,
-    /// Brief signature snippet (args + return) for the popup detail column.
-    pub signature: String,
-    /// 0-indexed line where the function begins.
-    pub line: usize,
-}
-
-/// Popup that lists all functions/methods in the current buffer for quick
-/// navigation.  Modeled after `BufferListPopup` / `MruPopup`.
-#[derive(Debug, Clone)]
-pub struct FunctionListPopup {
-    pub all_entries: Vec<FunctionEntry>,
-    pub filtered: Vec<usize>,
-    pub selected: usize,
-    pub scroll: usize,
-    pub filter: String,
-}
-
-impl FunctionListPopup {
-    pub fn new(entries: Vec<FunctionEntry>) -> Self {
-        let filtered: Vec<usize> = (0..entries.len()).collect();
-        Self {
-            all_entries: entries,
-            filtered,
-            selected: 0,
-            scroll: 0,
-            filter: String::new(),
-        }
-    }
-
-    pub fn selected_entry(&self) -> Option<&FunctionEntry> {
-        self.filtered
-            .get(self.selected)
-            .and_then(|&i| self.all_entries.get(i))
-    }
-
-    fn apply_filter(&mut self) {
-        self.filtered.clear();
-        let query = self.filter.to_lowercase();
-        for (i, entry) in self.all_entries.iter().enumerate() {
-            if query.is_empty()
-                || entry.name.to_lowercase().contains(&query)
-                || entry.kind.to_lowercase().contains(&query)
-                || entry.signature.to_lowercase().contains(&query)
-            {
-                self.filtered.push(i);
-            }
-        }
-        if self.selected >= self.filtered.len() && !self.filtered.is_empty() {
-            self.selected = self.filtered.len() - 1;
-        }
-        self.clamp_scroll(15);
-    }
-
-    pub fn filter_push(&mut self, c: char) {
-        self.filter.push(c);
-        self.selected = 0;
-        self.scroll = 0;
-        self.apply_filter();
-    }
-
-    pub fn filter_pop(&mut self) {
-        self.filter.pop();
-        self.selected = 0;
-        self.scroll = 0;
-        self.apply_filter();
-    }
-
-    pub fn filter_clear(&mut self) {
-        self.filter.clear();
-        self.selected = 0;
-        self.scroll = 0;
-        self.apply_filter();
-    }
-
-    pub fn filter_is_empty(&self) -> bool {
-        self.filter.is_empty()
-    }
-
-    pub fn clamp_scroll(&mut self, visible_height: usize) {
-        if self.scroll > self.selected {
-            self.scroll = self.selected;
-        }
-        if self.selected >= self.scroll + visible_height {
-            self.scroll = self.selected - visible_height + 1;
-        }
-    }
-
-    pub fn move_up(&mut self) {
-        if self.selected > 0 {
-            self.selected -= 1;
-            self.clamp_scroll(15);
-        }
-    }
-
-    pub fn move_down(&mut self) {
-        if self.selected + 1 < self.filtered.len() {
-            self.selected += 1;
-            self.clamp_scroll(15);
-        }
-    }
-}
-
-impl Scrollable for FunctionListPopup {
-    fn selected(&self) -> usize {
-        self.selected
-    }
-
-    fn selected_mut(&mut self) -> &mut usize {
-        &mut self.selected
-    }
-
-    fn scroll_mut(&mut self) -> &mut usize {
-        &mut self.scroll
-    }
-
-    fn len(&self) -> usize {
-        self.filtered.len()
-    }
-
-    fn visible_rows(&self) -> usize {
-        15
-    }
-}
 
 // ════════════════════════════════════════════════════════════════════════
 // SHARED SCROLLABLE TRAIT
@@ -438,6 +84,8 @@ pub struct MruPopup {
     pub selected: usize,
     pub scroll: usize,
     pub filter: String,
+    /// When true, entries are sorted by open_count descending instead of recency.
+    pub sort_by_frequency: bool,
 }
 
 impl MruPopup {
@@ -449,6 +97,7 @@ impl MruPopup {
             selected: 0,
             scroll: 0,
             filter: String::new(),
+            sort_by_frequency: false,
         }
     }
 
@@ -508,6 +157,21 @@ impl MruPopup {
             self.apply_filter();
         }
     }
+
+    /// Toggle between recency and frequency sort order.
+    /// Returns `true` if now sorting by frequency.
+    pub fn toggle_sort(&mut self, mru: &crate::mru::MruManager) -> bool {
+        self.sort_by_frequency = !self.sort_by_frequency;
+        if self.sort_by_frequency {
+            self.entries = mru.entries_by_frequency();
+        } else {
+            self.entries = mru.get_entries();
+        }
+        self.selected = 0;
+        self.scroll = 0;
+        self.apply_filter();
+        self.sort_by_frequency
+    }
 }
 
 impl Scrollable for MruPopup {
@@ -536,7 +200,7 @@ pub fn render_mru_popup(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let status_h = 6u16;
     let edit_h = term_height.saturating_sub(status_h);
-    let popup_width = clamp_width(90, term_width, 4);
+    let popup_width = clamp_width(100, term_width, 4);
     let content_rows = clamp_height(20, edit_h.saturating_sub(4), 5) as usize;
     let popup_height = content_rows as u16 + 2;
 
@@ -544,8 +208,14 @@ pub fn render_mru_popup(
     clear_rect(stdout, x, y, popup_width, popup_height, catppuccin::MANTLE)?;
 
     // ── Title bar ──────────────────────────────────────────────────────
+    let sort_label = if popup.sort_by_frequency {
+        "by freq"
+    } else {
+        "recent"
+    };
     let title = format!(
-        " Recent Files {} ",
+        " Recent Files ({}) {} ",
+        sort_label,
         if popup.filtered.is_empty() {
             "(no match)".to_string()
         } else {
@@ -587,6 +257,18 @@ pub fn render_mru_popup(
     let inner_width = popup_width.saturating_sub(2) as usize;
     let file_name_width: usize = 25;
 
+    // Fixed column display widths for right-aligned metadata
+    let pos_w = 8;
+    let count_w = 5;
+    let time_w = 9;
+
+    // Fixed-width zones (display-columns):
+    //   left:  [2] idx + [2] gap + [file_name_width] name + [2] gap
+    //   right: [1] sep + [pos_w] pos + [1] sep + [count_w] cnt + [1] sep + [time_w] time
+    let left_w = 2 + 2 + file_name_width + 2;
+    let meta_right_w = 1 + pos_w + 1 + count_w + 1 + time_w;
+    let dir_field_w = inner_width.saturating_sub(left_w + meta_right_w);
+
     let mut scroll = popup.scroll;
     if !popup.filtered.is_empty() && popup.selected >= scroll + content_rows {
         scroll = popup.selected - content_rows + 1;
@@ -616,29 +298,36 @@ pub fn render_mru_popup(
                 .unwrap_or("?")
                 .to_string();
 
-            let displayed_name = if str_width(&file_stem_raw) > file_name_width {
-                let suffix: String = file_stem_raw
-                    .chars()
-                    .rev()
-                    .take(2)
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .rev()
-                    .collect();
-                let suffix_w = str_width(&suffix);
-                let prefix_max_w = file_name_width.saturating_sub(3).saturating_sub(suffix_w);
-                let prefix = truncate_to_width(&file_stem_raw, prefix_max_w);
-                format!("{}...{}", prefix, suffix)
+            // Truncate filename if too long, adding '…'
+            let displayed_name_raw = if str_width(&file_stem_raw) > file_name_width {
+                let mut s = truncate_to_width(&file_stem_raw, file_name_width.saturating_sub(1))
+                    .to_string();
+                s.push('…');
+                s
             } else {
                 file_stem_raw.clone()
             };
 
             let idx_str = format!("{:>2}", entry_idx + 1);
-            let pos_str = format!("{}:{}", entry.line + 1, entry.col + 1);
 
-            let fixed_len = 4 + file_name_width + 2 + pos_str.len() + 1;
-            let dir_avail = inner_width.saturating_sub(fixed_len);
+            // ── Metadata: all right-aligned within their fixed-width columns ──
+            let pos_raw = format!("{}:{}", entry.line + 1, entry.col + 1);
+            let pos_pad = " ".repeat(pos_w.saturating_sub(str_width(&pos_raw)));
+            let pos_col = format!("{}{}", pos_pad, pos_raw); // right-align: pad then value
 
+            let count_raw = if entry.open_count > 1 {
+                format!("×{}", entry.open_count)
+            } else {
+                String::new()
+            };
+            let count_pad = " ".repeat(count_w.saturating_sub(str_width(&count_raw)));
+            let count_col = format!("{}{}", count_pad, count_raw); // right-align
+
+            let time_raw = entry.relative_time();
+            let time_pad = " ".repeat(time_w.saturating_sub(str_width(&time_raw)));
+            let time_col = format!("{}{}", time_pad, time_raw); // right-align
+
+            // ── Directory: compress then pad to exactly dir_field_w ──────────
             let dir_str = entry
                 .path
                 .parent()
@@ -646,43 +335,76 @@ pub fn render_mru_popup(
                 .unwrap_or("")
                 .to_string();
 
-            let dir_chars: Vec<char> = dir_str.chars().collect();
-            let dir_display = if dir_chars.len() > dir_avail {
-                let trunc_len = dir_avail.saturating_sub(3);
-                if trunc_len > 0 {
-                    let start = dir_chars.len() - trunc_len;
-                    let truncated: String = dir_chars[start..].iter().collect();
-                    format!("…{}", truncated)
+            let compressed = if str_width(&dir_str) <= dir_field_w {
+                dir_str.clone()
+            } else if dir_field_w > 0 {
+                // Fish-style compress: /opt/proj/riv/src → /o/p/r/src
+                let mut c = String::new();
+                let mut first = true;
+                for part in dir_str.split('/') {
+                    if !first {
+                        c.push('/');
+                    }
+                    first = false;
+                    if part.is_empty() {
+                        continue;
+                    }
+                    if let Some(ch) = part.chars().next() {
+                        c.push(ch);
+                    }
+                }
+                if str_width(&c) <= dir_field_w {
+                    c
                 } else {
-                    String::new()
+                    // Still too wide — truncate from the left
+                    let trunc = dir_field_w.saturating_sub(1);
+                    if trunc == 0 {
+                        String::new()
+                    } else {
+                        let chars: Vec<char> = c.chars().collect();
+                        let start = chars.len().saturating_sub(trunc);
+                        format!("…{}", chars[start..].iter().collect::<String>())
+                    }
                 }
             } else {
-                dir_str.clone()
+                String::new()
             };
 
+            // Pad dir to full field width so metadata is always right-anchored
+            let dir_w = str_width(&compressed);
+            let dir_display = if dir_w < dir_field_w {
+                format!("{}{}", compressed, " ".repeat(dir_field_w - dir_w))
+            } else {
+                compressed
+            };
+
+            // ── Match highlighting in filename ────────────────────────────────
             let name_color = if is_selected {
                 catppuccin::TEXT
             } else {
                 catppuccin::BLUE
             };
 
-            let mut segments = Vec::new();
-            segments.push(Segment::new(&idx_str, catppuccin::OVERLAY0));
-            segments.push(Segment::new("  ", catppuccin::SURFACE1));
-
-            // File name with match highlighting (Unicode-safe)
-            let (prefix, matched, suffix) = if !popup.filter.is_empty() {
-                if let Some((start, end)) = case_insensitive_find(&displayed_name, &popup.filter) {
-                    let p = displayed_name[..start].to_string();
-                    let m = displayed_name[start..end].to_string();
-                    let s = displayed_name[end..].to_string();
-                    (p, m, s)
+            let (prefix, matched, suffix): (String, String, String) = if !popup.filter.is_empty() {
+                if let Some((start, end)) =
+                    case_insensitive_find(&displayed_name_raw, &popup.filter)
+                {
+                    (
+                        displayed_name_raw[..start].to_string(),
+                        displayed_name_raw[start..end].to_string(),
+                        displayed_name_raw[end..].to_string(),
+                    )
                 } else {
-                    (displayed_name.clone(), String::new(), String::new())
+                    (displayed_name_raw.clone(), String::new(), String::new())
                 }
             } else {
-                (displayed_name.clone(), String::new(), String::new())
+                (displayed_name_raw.clone(), String::new(), String::new())
             };
+
+            // ── Assemble row segments ─────────────────────────────────────────
+            let mut segments: Vec<Segment> = Vec::new();
+            segments.push(Segment::new(&idx_str, catppuccin::OVERLAY0));
+            segments.push(Segment::new("  ", catppuccin::SURFACE1));
 
             if !prefix.is_empty() {
                 segments.push(Segment::new(&prefix, name_color));
@@ -694,21 +416,23 @@ pub fn render_mru_popup(
                 segments.push(Segment::new(&suffix, name_color));
             }
 
-            // Padding to fill file_name_width
-            let displayed_w = str_width(&displayed_name);
-            let padding = if displayed_w < file_name_width {
-                " ".repeat(file_name_width.saturating_sub(displayed_w))
-            } else {
-                String::new()
-            };
-            if !padding.is_empty() {
-                segments.push(Segment::new(&padding, catppuccin::SURFACE1));
+            // Pad filename to exactly file_name_width
+            let displayed_w = str_width(&displayed_name_raw);
+            let name_pad = " ".repeat(file_name_width.saturating_sub(displayed_w));
+            if !name_pad.is_empty() {
+                segments.push(Segment::new(&name_pad, catppuccin::SURFACE1));
             }
 
-            segments.push(Segment::new("  ", catppuccin::SURFACE1));
-            segments.push(Segment::new(&dir_display, catppuccin::OVERLAY0));
+            segments.push(Segment::new("  ", catppuccin::SURFACE1)); // gap after name
+            segments.push(Segment::new(&dir_display, catppuccin::OVERLAY0)); // already padded to dir_field_w
+
+            // Single separator then right-anchored metadata columns
             segments.push(Segment::new(" ", catppuccin::SURFACE1));
-            segments.push(Segment::new(&pos_str, catppuccin::YELLOW));
+            segments.push(Segment::new(&pos_col, catppuccin::YELLOW));
+            segments.push(Segment::new(" ", catppuccin::SURFACE1));
+            segments.push(Segment::new(&count_col, catppuccin::PEACH));
+            segments.push(Segment::new(" ", catppuccin::SURFACE1));
+            segments.push(Segment::new(&time_col, catppuccin::OVERLAY0));
 
             draw_row(stdout, x, row_y, popup_width, &segments, &row_style)?;
         } else {
@@ -719,7 +443,12 @@ pub fn render_mru_popup(
     // ── Bottom border with status ──────────────────────────────────────
     let bottom_y = filter_y + 1 + content_rows as u16;
     let footer = format!(
-        "[Del] Remove  [Enter] open  [Esc]{}close  {}/{}",
+        "[Home] {}  [Del] remove  [Enter] open  [Esc]{}close  {}/{}",
+        if popup.sort_by_frequency {
+            "recency"
+        } else {
+            "freq"
+        },
         if popup.filter.is_empty() {
             " "
         } else {
@@ -740,885 +469,6 @@ pub fn render_mru_popup(
     execute!(stdout, ResetColor)?;
     Ok(())
 }
-// ════════════════════════════════════════════════════════════════════════
-// HELP POPUP
-// ════════════════════════════════════════════════════════════════════════
-
-#[derive(Debug)]
-pub struct HelpPopup {
-    pub title: String,
-    pub lines: Vec<String>,
-    pub selected: usize,
-    pub scroll: usize,
-    pub width: u16,
-    /// Total box height (including top and bottom borders).
-    pub height: u16,
-}
-
-impl HelpPopup {
-    pub fn new(lines: Vec<String>, term_width: u16, term_height: u16) -> Self {
-        let status_h = 6u16;
-        let edit_h = term_height.saturating_sub(status_h);
-        let width = clamp_width(80, term_width, 4);
-        let max_content = edit_h.saturating_sub(2);
-        let content_rows = (lines.len() as u16).min(max_content).max(3);
-        let height = content_rows + 2;
-        HelpPopup {
-            title: "Help".to_string(),
-            lines,
-            selected: 0,
-            scroll: 0,
-            width,
-            height,
-        }
-    }
-
-    /// Create a help popup with a custom title and pre-formatted lines.
-    pub fn new_with_lines(title: String, lines: Vec<String>) -> Self {
-        let width = 80u16;
-        let content_rows = (lines.len() as u16).max(3).min(30);
-        let height = content_rows + 2;
-        HelpPopup {
-            title,
-            lines,
-            selected: 0,
-            scroll: 0,
-            width,
-            height,
-        }
-    }
-
-    /// Re-calculate dimensions based on terminal size (call before render).
-    pub fn resize(&mut self, term_width: u16, term_height: u16) {
-        let status_h = 6u16;
-        let edit_h = term_height.saturating_sub(status_h);
-        self.width = clamp_width(80, term_width, 4);
-        let max_content = edit_h.saturating_sub(2);
-        let content_rows = (self.lines.len() as u16).min(max_content).max(3);
-        self.height = content_rows + 2;
-        // Re-clamp after height change via shared trait.
-        <Self as Scrollable>::clamp_scroll(self);
-    }
-}
-
-/// `visible_rows` reads `self.height` so `resize()` keeps it in sync
-/// automatically — no separate `clamp_scroll(visible)` overload needed.
-impl Scrollable for HelpPopup {
-    fn selected(&self) -> usize {
-        self.selected
-    }
-    fn selected_mut(&mut self) -> &mut usize {
-        &mut self.selected
-    }
-    fn scroll_mut(&mut self) -> &mut usize {
-        &mut self.scroll
-    }
-    fn len(&self) -> usize {
-        self.lines.len()
-    }
-    fn visible_rows(&self) -> usize {
-        self.height.saturating_sub(2) as usize
-    }
-}
-
-pub fn render_help_popup(
-    popup: &HelpPopup,
-    stdout: &mut std::io::Stdout,
-    term_width: u16,
-    term_height: u16,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let status_h = 6u16;
-    let (x, y) = centered_in_edit(popup.width, popup.height, term_width, term_height, status_h);
-
-    clear_rect(stdout, x, y, popup.width, popup.height, catppuccin::MANTLE)?;
-
-    let border_style = BoxStyle::default()
-        .with_title(format!(" {} ", popup.title))
-        .with_border(catppuccin::SURFACE0)
-        .with_bg(catppuccin::MANTLE);
-    draw_border(stdout, x, y, popup.width, popup.height, &border_style)?;
-
-    let visible_content = popup.height.saturating_sub(2) as usize;
-
-    let scroll = popup.scroll;
-
-    for i in 0..visible_content {
-        let row_y = y + 1 + i as u16;
-        let line_idx = scroll + i;
-
-        if line_idx < popup.lines.len() {
-            let line = &popup.lines[line_idx];
-            let is_selected = line_idx == popup.selected;
-            let row_style = if is_selected {
-                RowStyle::selected()
-                    .with_border(catppuccin::SURFACE0)
-                    .with_text(catppuccin::BLUE)
-            } else {
-                RowStyle::normal()
-                    .with_border(catppuccin::SURFACE0)
-                    .with_text(catppuccin::TEXT)
-            };
-            draw_row_text(stdout, x, row_y, popup.width, line, &row_style)?;
-        } else {
-            let empty_style = RowStyle::normal().with_border(catppuccin::SURFACE0);
-            draw_empty_row(stdout, x, row_y, popup.width, &empty_style)?;
-        }
-    }
-
-    execute!(stdout, ResetColor)?;
-    Ok(())
-}
-
-// ════════════════════════════════════════════════════════════════════════
-// BUFFER LIST POPUP
-// ════════════════════════════════════════════════════════════════════════
-
-// ════════════════════════════════════════════════════════════════════════
-// BUFFER LIST POPUP
-// ════════════════════════════════════════════════════════════════════════
-
-#[derive(Debug, Clone)]
-pub struct BufferListEntry {
-    pub id: u64,
-    pub name: String,
-    pub dirty: bool,
-    pub active: bool,
-}
-
-#[derive(Debug)]
-pub struct BufferListPopup {
-    pub entries: Vec<BufferListEntry>,
-    pub filtered: Vec<usize>,
-    pub selected: usize,
-    pub scroll: usize,
-    pub filter: String,
-}
-
-impl BufferListPopup {
-    pub fn new(entries: Vec<BufferListEntry>) -> Self {
-        let filtered: Vec<usize> = (0..entries.len()).collect();
-        let selected = entries.iter().position(|e| e.active).unwrap_or(0);
-        BufferListPopup {
-            entries,
-            filtered,
-            selected,
-            scroll: 0,
-            filter: String::new(),
-        }
-    }
-
-    pub fn selected_buffer_id(&self) -> Option<u64> {
-        self.filtered
-            .get(self.selected)
-            .and_then(|&idx| self.entries.get(idx))
-            .map(|e| e.id)
-    }
-
-    pub fn apply_filter(&mut self) {
-        self.filtered.clear();
-        let query = self.filter.to_lowercase();
-        for (i, entry) in self.entries.iter().enumerate() {
-            if query.is_empty() || entry.name.to_lowercase().contains(&query) {
-                self.filtered.push(i);
-            }
-        }
-        if self.selected >= self.filtered.len() && !self.filtered.is_empty() {
-            self.selected = self.filtered.len() - 1;
-        }
-        <Self as Scrollable>::clamp_scroll(self);
-    }
-
-    pub fn filter_push(&mut self, c: char) {
-        self.filter.push(c);
-        self.selected = 0;
-        self.scroll = 0;
-        self.apply_filter();
-    }
-
-    pub fn filter_pop(&mut self) {
-        self.filter.pop();
-        self.selected = 0;
-        self.scroll = 0;
-        self.apply_filter();
-    }
-}
-
-impl Scrollable for BufferListPopup {
-    fn selected(&self) -> usize {
-        self.selected
-    }
-    fn selected_mut(&mut self) -> &mut usize {
-        &mut self.selected
-    }
-    fn scroll_mut(&mut self) -> &mut usize {
-        &mut self.scroll
-    }
-    fn len(&self) -> usize {
-        self.filtered.len()
-    }
-    fn visible_rows(&self) -> usize {
-        12
-    }
-}
-
-pub fn render_buffer_list_popup(
-    popup: &BufferListPopup,
-    stdout: &mut std::io::Stdout,
-    term_width: u16,
-    term_height: u16,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let status_h = 6u16;
-    let edit_h = term_height.saturating_sub(status_h);
-    let popup_width = clamp_width(70, term_width, 4);
-    let visible_rows = clamp_height(12, edit_h.saturating_sub(4), 3) as usize;
-    let popup_height = visible_rows as u16 + 4; // title + filter + content + footer
-
-    let (x, y) = centered_in_edit(popup_width, popup_height, term_width, term_height, status_h);
-    clear_rect(stdout, x, y, popup_width, popup_height, catppuccin::MANTLE)?;
-
-    // ── Title bar ──────────────────────────────────────────────────────
-    let title = format!(
-        " Buffers {} ",
-        if popup.filtered.is_empty() {
-            "(no match)".to_string()
-        } else {
-            format!("({}/{})", popup.filtered.len(), popup.entries.len())
-        }
-    );
-    let title_style = BoxStyle::default()
-        .with_title(title)
-        .with_bg(catppuccin::MANTLE);
-    draw_top_border(stdout, x, y, popup_width, &title_style)?;
-
-    // ── Filter row ─────────────────────────────────────────────────────
-    let filter_y = y + 1;
-    {
-        let filter_style = RowStyle::normal().with_bg(catppuccin::CRUST).no_padding();
-        let prompt_w = str_width(">");
-        let max_filter_len = content_width(popup_width, &filter_style).saturating_sub(prompt_w + 1);
-        let filter_display = truncate_to_width(&popup.filter, max_filter_len);
-
-        let segments = [
-            Segment::new(">", catppuccin::PEACH),
-            Segment::new(filter_display, catppuccin::TEXT),
-        ];
-        draw_row(stdout, x, filter_y, popup_width, &segments, &filter_style)?;
-
-        // Block cursor after the filter text
-        let cursor_x = x as usize + 1 + prompt_w + str_width(filter_display);
-        if (cursor_x as u16) < x + popup_width.saturating_sub(1) {
-            execute!(stdout, MoveTo(cursor_x as u16, filter_y))?;
-            execute!(
-                stdout,
-                SetBackgroundColor(catppuccin::TEXT),
-                SetForegroundColor(catppuccin::CRUST),
-                Print(" ")
-            )?;
-        }
-    }
-
-    // ── Content rows ───────────────────────────────────────────────────
-    let scroll = popup.scroll;
-    for i in 0..visible_rows {
-        let row_y = filter_y + 1 + i as u16;
-        let entry_idx = scroll + i;
-
-        if entry_idx < popup.filtered.len() {
-            let real_idx = popup.filtered[entry_idx];
-            let entry = &popup.entries[real_idx];
-            let is_selected = entry_idx == popup.selected;
-            let row_style = if is_selected {
-                RowStyle::selected()
-            } else {
-                RowStyle::normal()
-            };
-
-            let id_str = format!("{:>4}", entry.id);
-
-            let mut segments = Vec::new();
-            segments.push(Segment::new(
-                if entry.dirty { "+" } else { " " },
-                catppuccin::RED,
-            ));
-            segments.push(Segment::new(
-                if entry.active { "%" } else { " " },
-                catppuccin::GREEN,
-            ));
-            segments.push(Segment::new(" ", catppuccin::SURFACE1));
-            segments.push(Segment::new(&id_str, catppuccin::YELLOW));
-            segments.push(Segment::new("  ", catppuccin::SURFACE1));
-
-            // Name with match highlighting when filter is active
-            if !popup.filter.is_empty() {
-                if let Some((match_start, match_end)) =
-                    case_insensitive_find(&entry.name, &popup.filter)
-                {
-                    if match_start > 0 {
-                        segments.push(Segment::new(
-                            &entry.name[..match_start],
-                            if is_selected {
-                                catppuccin::TEXT
-                            } else {
-                                catppuccin::SUBTEXT
-                            },
-                        ));
-                    }
-                    segments.push(Segment::new(
-                        &entry.name[match_start..match_end],
-                        catppuccin::PEACH,
-                    ));
-                    if match_end < entry.name.len() {
-                        segments.push(Segment::new(
-                            &entry.name[match_end..],
-                            if is_selected {
-                                catppuccin::TEXT
-                            } else {
-                                catppuccin::SUBTEXT
-                            },
-                        ));
-                    }
-                } else {
-                    segments.push(Segment::new(
-                        &entry.name,
-                        if is_selected {
-                            catppuccin::TEXT
-                        } else {
-                            catppuccin::SUBTEXT
-                        },
-                    ));
-                }
-            } else {
-                segments.push(Segment::new(
-                    &entry.name,
-                    if is_selected {
-                        catppuccin::TEXT
-                    } else {
-                        catppuccin::SUBTEXT
-                    },
-                ));
-            }
-
-            draw_row(stdout, x, row_y, popup_width, &segments, &row_style)?;
-        } else {
-            draw_empty_row(stdout, x, row_y, popup_width, &RowStyle::normal())?;
-        }
-    }
-
-    // ── Bottom border with status ──────────────────────────────────────
-    let bottom_y = filter_y + 1 + visible_rows as u16;
-    let footer = format!(
-        "[Enter] switch  [Esc] close  {}/{}",
-        if popup.filtered.is_empty() {
-            0
-        } else {
-            popup.selected + 1
-        },
-        popup.filtered.len(),
-    );
-    let bottom_style = BoxStyle::default()
-        .with_border(catppuccin::SURFACE0)
-        .with_footer(footer);
-    draw_bottom_border(stdout, x, bottom_y, popup_width, &bottom_style)?;
-
-    execute!(stdout, ResetColor)?;
-    Ok(())
-}
-
-// ════════════════════════════════════════════════════════════════════════
-// KEYMAP POPUP
-// ════════════════════════════════════════════════════════════════════════
-
-use crate::keybind::HelpEntry;
-
-#[derive(Debug, Clone)]
-pub struct KeymapEntry {
-    pub keys: String,
-    pub action: String,
-    pub is_header: bool,
-}
-
-#[derive(Debug)]
-pub struct KeymapPopup {
-    pub mode_name: String,
-    pub entries: Vec<KeymapEntry>,
-    pub selected: usize,
-    pub scroll: usize,
-}
-
-impl KeymapPopup {
-    pub fn new(mode_name: String, help_entries: Vec<HelpEntry>) -> Self {
-        let mut entries = Vec::new();
-        let mut last_category: Option<String> = None;
-
-        for entry in &help_entries {
-            let cat_label = format!("{:?}", entry.category);
-            if last_category.as_ref() != Some(&cat_label) {
-                entries.push(KeymapEntry {
-                    keys: String::new(),
-                    action: cat_label.clone(),
-                    is_header: true,
-                });
-                last_category = Some(cat_label);
-            }
-            entries.push(KeymapEntry {
-                keys: entry.keys.clone(),
-                action: entry.description.clone(),
-                is_header: false,
-            });
-        }
-
-        let selected = entries.iter().position(|e| !e.is_header).unwrap_or(0);
-        KeymapPopup {
-            mode_name,
-            entries,
-            selected,
-            scroll: 0,
-        }
-    }
-
-    pub fn total_bindings(&self) -> usize {
-        self.entries.iter().filter(|e| !e.is_header).count()
-    }
-
-    /// Override: skip header rows while navigating up.
-    pub fn move_up(&mut self) {
-        if self.selected == 0 {
-            return;
-        }
-        self.selected -= 1;
-        while self.selected > 0 && self.entries[self.selected].is_header {
-            self.selected -= 1;
-        }
-        <Self as Scrollable>::clamp_scroll(self);
-    }
-
-    /// Override: skip header rows while navigating down.
-    pub fn move_down(&mut self) {
-        if self.selected + 1 >= self.entries.len() {
-            return;
-        }
-        self.selected += 1;
-        while self.selected + 1 < self.entries.len() && self.entries[self.selected].is_header {
-            self.selected += 1;
-        }
-        <Self as Scrollable>::clamp_scroll(self);
-    }
-}
-
-impl Scrollable for KeymapPopup {
-    fn selected(&self) -> usize {
-        self.selected
-    }
-    fn selected_mut(&mut self) -> &mut usize {
-        &mut self.selected
-    }
-    fn scroll_mut(&mut self) -> &mut usize {
-        &mut self.scroll
-    }
-    fn len(&self) -> usize {
-        self.entries.len()
-    }
-    fn visible_rows(&self) -> usize {
-        20
-    }
-}
-
-pub fn render_keymap_popup(
-    popup: &KeymapPopup,
-    stdout: &mut std::io::Stdout,
-    term_width: u16,
-    term_height: u16,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let status_h = 6u16;
-    let edit_h = term_height.saturating_sub(status_h);
-    let popup_width = clamp_width(78, term_width, 4);
-    let visible_rows = clamp_height(20, edit_h.saturating_sub(2), 3) as usize;
-    let popup_height = visible_rows as u16 + 2;
-
-    let (x, y) = centered_in_edit(popup_width, popup_height, term_width, term_height, status_h);
-    clear_rect(stdout, x, y, popup_width, popup_height, catppuccin::MANTLE)?;
-
-    let total = popup.total_bindings();
-    let title = format!(
-        " {} Keymap ({} bindings) ",
-        popup.mode_name.to_uppercase(),
-        total
-    );
-    let border_style = BoxStyle::default()
-        .with_title(title)
-        .with_border(catppuccin::SURFACE0)
-        .with_bg(catppuccin::MANTLE)
-        .with_footer("[Esc] close");
-    draw_border(stdout, x, y, popup_width, popup_height, &border_style)?;
-
-    let key_col_width: usize = 20;
-
-    let scroll = popup.scroll;
-    for i in 0..visible_rows {
-        let row_y = y + 1 + i as u16;
-        let entry_idx = scroll + i;
-
-        if entry_idx < popup.entries.len() {
-            let entry = &popup.entries[entry_idx];
-            let is_selected = entry_idx == popup.selected;
-
-            if entry.is_header {
-                let row_style = RowStyle::normal()
-                    .with_border(catppuccin::SURFACE0)
-                    .with_bg(catppuccin::CRUST)
-                    .with_text(catppuccin::MAUVE)
-                    .no_padding();
-                let header_text = format!(
-                    "  ── {} ──{}",
-                    entry.action,
-                    "─".repeat((popup_width as usize).saturating_sub(entry.action.len() + 8))
-                );
-                draw_row_text(stdout, x, row_y, popup_width, &header_text, &row_style)?;
-            } else {
-                let row_style = if is_selected {
-                    RowStyle::selected()
-                        .with_border(catppuccin::SURFACE0)
-                        .with_bg(catppuccin::SURFACE0)
-                        .with_text(catppuccin::TEXT)
-                } else {
-                    RowStyle::normal()
-                        .with_border(catppuccin::SURFACE0)
-                        .with_bg(catppuccin::MANTLE)
-                        .with_text(catppuccin::TEXT)
-                };
-
-                let key_display = if entry.keys.chars().count() > key_col_width {
-                    let trunc: String = entry.keys.chars().take(key_col_width - 1).collect();
-                    format!("{:<width$} ", trunc, width = key_col_width - 1)
-                } else {
-                    format!("{:<width$}", entry.keys, width = key_col_width)
-                };
-
-                let segments = [
-                    Segment::new(
-                        &key_display,
-                        if is_selected {
-                            catppuccin::GREEN
-                        } else {
-                            catppuccin::LAVENDER
-                        },
-                    ),
-                    Segment::new("  ", catppuccin::SURFACE1),
-                    Segment::new(
-                        &entry.action,
-                        if is_selected {
-                            catppuccin::TEXT
-                        } else {
-                            catppuccin::SUBTEXT
-                        },
-                    ),
-                ];
-                draw_row(stdout, x, row_y, popup_width, &segments, &row_style)?;
-            }
-        } else {
-            let empty_style = RowStyle::normal().with_border(catppuccin::SURFACE0);
-            draw_empty_row(stdout, x, row_y, popup_width, &empty_style)?;
-        }
-    }
-
-    execute!(stdout, ResetColor)?;
-    Ok(())
-}
-
-// ════════════════════════════════════════════════════════════════════════
-// MARK LIST POPUP
-// ════════════════════════════════════════════════════════════════════════
-
-/// A single mark entry for the marks popup.
-#[derive(Debug, Clone)]
-pub struct MarkEntry {
-    /// Mark character (a-z).
-    pub name: char,
-    /// Buffer ID where the mark is set.
-    pub buffer_id: u64,
-    /// Display name of the file (or "[closed]" if buffer was dropped).
-    pub file_name: String,
-    /// 0-indexed line number.
-    pub line: usize,
-    /// 0-indexed column number.
-    pub col: usize,
-    /// Preview of the marked line content (trimmed).
-    pub line_preview: String,
-}
-
-/// Popup that lists all set marks (a-z) for quick navigation.
-#[derive(Debug, Clone)]
-pub struct MarkListPopup {
-    pub entries: Vec<MarkEntry>,
-    pub filtered: Vec<usize>,
-    pub selected: usize,
-    pub scroll: usize,
-    pub filter: String,
-}
-
-impl MarkListPopup {
-    pub fn new(entries: Vec<MarkEntry>) -> Self {
-        let filtered: Vec<usize> = (0..entries.len()).collect();
-        Self {
-            entries,
-            filtered,
-            selected: 0,
-            scroll: 0,
-            filter: String::new(),
-        }
-    }
-
-    pub fn selected_entry(&self) -> Option<&MarkEntry> {
-        self.filtered
-            .get(self.selected)
-            .and_then(|&i| self.entries.get(i))
-    }
-
-    fn apply_filter(&mut self) {
-        self.filtered.clear();
-        let query = self.filter.to_lowercase();
-        for (i, entry) in self.entries.iter().enumerate() {
-            if query.is_empty()
-                || entry.name.to_string().contains(&query)
-                || entry.file_name.to_lowercase().contains(&query)
-                || entry.line_preview.to_lowercase().contains(&query)
-            {
-                self.filtered.push(i);
-            }
-        }
-        if self.selected >= self.filtered.len() && !self.filtered.is_empty() {
-            self.selected = self.filtered.len() - 1;
-        }
-        <Self as Scrollable>::clamp_scroll(self);
-    }
-
-    pub fn filter_push(&mut self, c: char) {
-        self.filter.push(c);
-        self.selected = 0;
-        self.scroll = 0;
-        self.apply_filter();
-    }
-
-    pub fn filter_pop(&mut self) {
-        self.filter.pop();
-        self.selected = 0;
-        self.scroll = 0;
-        self.apply_filter();
-    }
-
-    pub fn remove_selected(&mut self) {
-        if let Some(&real_idx) = self.filtered.get(self.selected) {
-            self.entries.remove(real_idx);
-            self.apply_filter();
-        }
-    }
-}
-
-impl Scrollable for MarkListPopup {
-    fn selected(&self) -> usize {
-        self.selected
-    }
-    fn selected_mut(&mut self) -> &mut usize {
-        &mut self.selected
-    }
-    fn scroll_mut(&mut self) -> &mut usize {
-        &mut self.scroll
-    }
-    fn len(&self) -> usize {
-        self.filtered.len()
-    }
-    fn visible_rows(&self) -> usize {
-        15
-    }
-}
-
-pub fn render_mark_list_popup(
-    popup: &MarkListPopup,
-    stdout: &mut std::io::Stdout,
-    term_width: u16,
-    term_height: u16,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let status_h = 6u16;
-    let edit_h = term_height.saturating_sub(status_h);
-    let popup_width = clamp_width(80, term_width, 4);
-    let content_rows = clamp_height(15, edit_h.saturating_sub(4), 5) as usize;
-    let popup_height = content_rows as u16 + 4; // title + filter + content + footer
-
-    let (x, y) = centered_in_edit(popup_width, popup_height, term_width, term_height, status_h);
-    clear_rect(stdout, x, y, popup_width, popup_height, catppuccin::MANTLE)?;
-
-    // ── Title bar ──────────────────────────────────────────────────────
-    let title = format!(
-        " Marks {} ",
-        if popup.filtered.is_empty() {
-            "(no match)".to_string()
-        } else {
-            format!("({}/{})", popup.filtered.len(), popup.entries.len())
-        }
-    );
-    let title_style = BoxStyle::default()
-        .with_title(title)
-        .with_bg(catppuccin::MANTLE);
-    draw_top_border(stdout, x, y, popup_width, &title_style)?;
-
-    // ── Filter row ─────────────────────────────────────────────────────
-    let filter_y = y + 1;
-    {
-        let filter_style = RowStyle::normal().with_bg(catppuccin::CRUST).no_padding();
-        let prompt_w = str_width(">");
-        let max_filter_len = content_width(popup_width, &filter_style).saturating_sub(prompt_w + 1);
-        let filter_display = truncate_to_width(&popup.filter, max_filter_len);
-
-        let segments = [
-            Segment::new(">", catppuccin::PEACH),
-            Segment::new(filter_display, catppuccin::TEXT),
-        ];
-        draw_row(stdout, x, filter_y, popup_width, &segments, &filter_style)?;
-
-        // Block cursor after the filter text
-        let cursor_x = x as usize + 1 + prompt_w + str_width(filter_display);
-        if (cursor_x as u16) < x + popup_width.saturating_sub(1) {
-            execute!(stdout, MoveTo(cursor_x as u16, filter_y))?;
-            execute!(
-                stdout,
-                SetBackgroundColor(catppuccin::TEXT),
-                SetForegroundColor(catppuccin::CRUST),
-                Print(" ")
-            )?;
-        }
-    }
-
-    // ── Content rows ───────────────────────────────────────────────────
-    let file_name_width: usize = 24;
-    let scroll = popup.scroll;
-
-    for i in 0..content_rows {
-        let row_y = filter_y + 1 + i as u16;
-        let entry_idx = scroll + i;
-
-        if entry_idx < popup.filtered.len() {
-            let real_idx = popup.filtered[entry_idx];
-            let entry = &popup.entries[real_idx];
-            let is_selected = entry_idx == popup.selected;
-            let row_style = if is_selected {
-                RowStyle::selected()
-            } else {
-                RowStyle::normal()
-            };
-
-            let is_closed = entry.file_name == "[closed]";
-
-            // Mark name: " a "
-            let name_str = format!(" {} ", entry.name);
-            let name_color = if is_closed {
-                catppuccin::OVERLAY0
-            } else {
-                catppuccin::MAUVE
-            };
-
-            // File name (truncated to column width)
-            let displayed_name: String = if str_width(&entry.file_name) > file_name_width {
-                let truncated =
-                    truncate_to_width(&entry.file_name, file_name_width.saturating_sub(1));
-                format!("{}…", truncated)
-            } else {
-                entry.file_name.clone()
-            };
-
-            let file_color = if is_closed {
-                catppuccin::OVERLAY0
-            } else if is_selected {
-                catppuccin::TEXT
-            } else {
-                catppuccin::BLUE
-            };
-
-            // Position
-            let pos_str = format!("{}:{}", entry.line + 1, entry.col + 1);
-
-            let mut segments = Vec::new();
-            segments.push(Segment::new(&name_str, name_color));
-
-            // File name with optional match highlighting
-            if !popup.filter.is_empty() && !is_closed {
-                if let Some((match_start, match_end)) =
-                    case_insensitive_find(&displayed_name, &popup.filter)
-                {
-                    if match_start > 0 {
-                        segments.push(Segment::new(&displayed_name[..match_start], file_color));
-                    }
-                    segments.push(Segment::new(
-                        &displayed_name[match_start..match_end],
-                        catppuccin::PEACH,
-                    ));
-                    if match_end < displayed_name.len() {
-                        segments.push(Segment::new(&displayed_name[match_end..], file_color));
-                    }
-                } else {
-                    segments.push(Segment::new(&displayed_name, file_color));
-                }
-            } else {
-                segments.push(Segment::new(&displayed_name, file_color));
-            }
-
-            // Padding to fill file_name_width
-            let displayed_w = str_width(&displayed_name);
-            let padding = file_name_width.saturating_sub(displayed_w);
-            let pad = if padding > 0 {
-                " ".repeat(padding)
-            } else {
-                String::new()
-            };
-            if !pad.is_empty() {
-                segments.push(Segment::new(&pad, catppuccin::SURFACE1));
-            }
-            segments.push(Segment::new("  ", catppuccin::SURFACE1));
-            segments.push(Segment::new(&pos_str, catppuccin::YELLOW));
-            segments.push(Segment::new(" ", catppuccin::SURFACE1));
-
-            // Line preview (dimmed)
-            if !entry.line_preview.is_empty() {
-                let preview_color = if is_closed {
-                    catppuccin::OVERLAY0
-                } else if is_selected {
-                    catppuccin::SUBTEXT
-                } else {
-                    catppuccin::OVERLAY0
-                };
-                segments.push(Segment::new(&entry.line_preview, preview_color));
-            }
-
-            draw_row(stdout, x, row_y, popup_width, &segments, &row_style)?;
-        } else {
-            draw_empty_row(stdout, x, row_y, popup_width, &RowStyle::normal())?;
-        }
-    }
-
-    // ── Bottom border with status ──────────────────────────────────────
-    let bottom_y = filter_y + 1 + content_rows as u16;
-    let footer = format!(
-        "[Enter] jump  [Del] remove  [Esc]{}close  {}/{}",
-        if popup.filter.is_empty() {
-            " "
-        } else {
-            " clear "
-        },
-        if popup.filtered.is_empty() {
-            0
-        } else {
-            popup.selected + 1
-        },
-        popup.filtered.len(),
-    );
-    let footer_style = BoxStyle::default()
-        .with_footer(footer)
-        .with_bg(catppuccin::MANTLE);
-    draw_bottom_border(stdout, x, bottom_y, popup_width, &footer_style)?;
-
-    execute!(stdout, ResetColor)?;
-    Ok(())
-}
-
 // ════════════════════════════════════════════════════════════════════════
 // FILE PICKER
 // ════════════════════════════════════════════════════════════════════════

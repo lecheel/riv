@@ -519,6 +519,9 @@ impl Editor {
             // ── Notify LSP that this file is now open ──
             self.lsp_did_open(path);
 
+            // ── MRU: record this file as recently used ──
+            self.mru.touch(path.to_path_buf(), 0, 0);
+
             self.set_status(format!("Opened {:?}", path));
             self.restore_cursor_position();
             self.ensure_cursor_visible_all();

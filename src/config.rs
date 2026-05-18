@@ -244,6 +244,7 @@ pub struct Config {
 
     /// Enable git integration.
     pub enable_git: bool,
+    pub display_hunk: bool,
 
     /// Enable auto-completion.
     pub enable_completion: bool,
@@ -297,6 +298,7 @@ impl Default for Config {
             incremental_search: true,
             enable_lsp: true,
             enable_git: true,
+            display_hunk: false,
             enable_completion: true,
             completion_trigger_len: 2,
             statusbar_style: "mode-filename-modified".to_string(),

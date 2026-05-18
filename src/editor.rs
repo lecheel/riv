@@ -2086,6 +2086,16 @@ impl Editor {
                     self.dirty.cursor = true;
                     return CommandResult::NoOp;
                 }
+
+                Key::Home => {
+                    // Toggle between recency and frequency sort
+                    if let Some(popup) = &mut self.mru_popup {
+                        popup.toggle_sort(&self.mru);
+                    }
+                    self.dirty.mru = true;
+                    self.dirty.cursor = true;
+                    return CommandResult::NoOp;
+                }
                 Key::Backspace => {
                     popup.filter_pop();
                     self.dirty.mru = true;
