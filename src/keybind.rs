@@ -1143,6 +1143,7 @@ pub fn parse_action_str(s: &str) -> Option<Action> {
         SearchWordBackward | "#",
         ReplaceMode,
         ReplaceAll,
+        EnterJumpMode,
 
         // ── File operations ────────────────────────────────
         Save | "w" | "ctrl-s",

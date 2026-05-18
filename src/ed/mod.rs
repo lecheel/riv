@@ -17,6 +17,7 @@ pub mod goto_def;
 mod llm_ext;
 mod lsp;
 pub mod marks;
+pub mod motion;
 mod movement;
 mod repeat;
 mod replace;

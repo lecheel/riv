@@ -213,6 +213,7 @@ pub struct Config {
 
     /// Tab width (in spaces).
     pub tab_width: u8,
+    pub indent_guides: bool,
 
     /// Whether to use actual tab characters.
     pub use_tabs: bool,
@@ -285,6 +286,7 @@ impl Default for Config {
             line_numbers: true,
             relative_line_numbers: false,
             tab_width: 4,
+            indent_guides: true,
             use_tabs: false,
             show_whitespace: false,
             word_wrap: false,

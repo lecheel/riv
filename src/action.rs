@@ -132,6 +132,7 @@ pub enum Action {
     EnterVisualBlockMode,
     EnterCommandMode,
     EnterOperatorPending(String),
+    EnterJumpMode,
 
     // ── Yank / Paste ───────────────────────────────────────
     YankSelection,
@@ -294,6 +295,7 @@ impl Action {
             | Self::MoveFileEnd
             | Self::MoveToLine(_)
             | Self::MoveToPosition { .. }
+            | Self::EnterJumpMode
             | Self::MatchBracket => ActionCategory::Movement,
 
             // Scrolling

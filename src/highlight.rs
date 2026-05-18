@@ -927,6 +927,11 @@ fn byte_to_char_offset(text: &str, byte_offset: usize) -> usize {
 /// Takes a slice of the line text (already sliced for wrap/scroll) and the
 /// corresponding highlight spans (adjusted for the slice offset).
 ///
+/// `guide_cols` is an optional set of grapheme-index columns where an indent
+/// guide `|` should be drawn inline, replacing the space that is there.
+/// Guides are rendered with a dim foreground while preserving the current
+/// background (including the cursor-line DarkGrey).
+///
 /// ## Cursor-line background design
 ///
 /// When `is_cursor_line` is true, `SetBackgroundColor(DarkGrey)` is set once
@@ -939,95 +944,87 @@ pub fn render_highlighted_line<W: std::io::Write>(
     text: &str,
     spans: &[HighlightSpan],
     is_cursor_line: bool,
-    fg_override: Option<HighlightStyle>,
+    guide_cols: Option<&std::collections::HashSet<usize>>,
 ) -> std::io::Result<()> {
     use crossterm::execute;
     use crossterm::style::{Color, Print, ResetColor, SetBackgroundColor, SetForegroundColor};
 
+    const GUIDE_FG: Color = Color::Rgb {
+        r: 40,
+        g: 40,
+        b: 58,
+    };
+    let cursor_bg = Color::DarkGrey;
+
     // Set cursor-line background FIRST — it stays active for the whole line.
     if is_cursor_line {
-        execute!(writer, SetBackgroundColor(Color::DarkGrey))?;
+        execute!(writer, SetBackgroundColor(cursor_bg))?;
     }
 
     let chars: Vec<_> = text.graphemes(true).collect();
     let total_chars = chars.len();
 
-    if spans.is_empty() {
-        // No highlights — just print plain text.
-        if let Some(style) = fg_override {
-            let (r, g, b) = style.fg_rgb();
-            execute!(writer, SetForegroundColor(Color::Rgb { r, g, b }))?;
+    // Build a flat per-grapheme style map from spans.
+    // None means "no span covers this grapheme" (plain/default fg).
+    let mut fg_map: Vec<Option<HighlightStyle>> = vec![None; total_chars];
+    for span in spans {
+        let start = span.start.min(total_chars);
+        let end = span.end.min(total_chars);
+        for i in start..end {
+            fg_map[i] = Some(span.style);
         }
-        execute!(writer, Print(text))?;
-        // On cursor line: reset fg only, preserving background.
-        if is_cursor_line {
-            execute!(writer, SetForegroundColor(Color::Reset))?;
-        } else if fg_override.is_some() {
-            execute!(writer, ResetColor)?;
-        }
-        return Ok(());
     }
 
-    let mut char_idx = 0usize;
-    for span in spans {
-        // Skip spans that end before our current position
-        if span.end <= char_idx {
-            continue;
-        }
-        let start = span.start.max(char_idx).min(total_chars);
-        let end = span.end.min(total_chars);
+    // Walk every grapheme in order, emitting color escapes only when the
+    // active style changes. This is a single pass — no overlay needed.
+    let mut current_fg: Option<Color> = None; // None = terminal default
 
-        // Print gap (unhighlighted text) before this span — whitespace, plain
-        // identifiers, etc. The cursor-line background is still active.
-        if start > char_idx {
-            execute!(writer, Print(&chars[char_idx..start].join("")))?;
-        }
-
-        if start >= end {
-            char_idx = end;
-            continue;
-        }
-
-        // Emit the text for this span with its foreground color.
-        let style = fg_override.unwrap_or(span.style);
-        let (r, g, b) = style.fg_rgb();
-
-        // Only set foreground if it's not Plain (avoid unnecessary escapes).
-        // Plain inherits the terminal default fg, which works on top of
-        // the cursor-line DarkGrey background.
-        if style != HighlightStyle::Plain {
-            execute!(writer, SetForegroundColor(Color::Rgb { r, g, b }))?;
-        }
-
-        let segment: String = chars[start..end].join("");
-        execute!(writer, Print(&segment))?;
-
-        // After a colored span, reset ONLY the foreground so syntax spans
-        // don't leak color. The cursor-line background is preserved.
-        if style != HighlightStyle::Plain {
-            if is_cursor_line {
-                execute!(writer, SetForegroundColor(Color::Reset))?;
-            } else {
-                execute!(writer, ResetColor)?;
+    let set_fg = |writer: &mut W, color: Option<Color>| -> std::io::Result<()> {
+        match color {
+            Some(c) => execute!(writer, SetForegroundColor(c)),
+            None => {
+                if is_cursor_line {
+                    // Foreground-only reset: preserves the DarkGrey background.
+                    execute!(writer, SetForegroundColor(Color::Reset))
+                } else {
+                    execute!(writer, ResetColor)
+                }
             }
         }
+    };
 
-        char_idx = end;
-    }
+    for (i, g) in chars.iter().enumerate() {
+        let is_guide = guide_cols.map_or(false, |gc| gc.contains(&i));
 
-    // Print any remaining characters after the last span.
-    if char_idx < total_chars {
-        execute!(writer, Print(&chars[char_idx..].join("")))?;
+        let (wanted_fg, ch): (Option<Color>, &str) = if is_guide && *g == " " {
+            (Some(GUIDE_FG), "|")
+        } else {
+            let wanted = match fg_map[i] {
+                Some(style) if style != HighlightStyle::Plain => {
+                    let (r, gb, b) = style.fg_rgb();
+                    Some(Color::Rgb { r, g: gb, b })
+                }
+                _ => None,
+            };
+            (wanted, g)
+        };
+
+        if wanted_fg != current_fg {
+            set_fg(writer, wanted_fg)?;
+            if is_guide && *g == " " && is_cursor_line {
+                execute!(writer, SetBackgroundColor(cursor_bg))?;
+            }
+            current_fg = wanted_fg;
+        }
+
+        execute!(writer, Print(ch))?;
     }
 
     // Final reset: restore both fg and bg to terminal defaults.
-    if is_cursor_line {
-        execute!(writer, ResetColor)?;
-    }
+    execute!(writer, ResetColor)?;
 
     Ok(())
 }
-
 impl Default for Highlighter {
     fn default() -> Self {
         Self::new()

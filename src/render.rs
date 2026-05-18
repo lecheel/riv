@@ -473,14 +473,25 @@ fn render_window(
                 }
             };
 
-            // Print line content with syntax highlighting
+            // Print line content with syntax highlighting + inline indent guides
+            let guide_cols = if editor.config.indent_guides && wrap_row == 0 {
+                guide_cols_for_line(editor, buffer, line_idx, wrap_start_grapheme, scroll_col)
+            } else {
+                std::collections::HashSet::new()
+            };
+            let guide_cols_opt = if guide_cols.is_empty() {
+                None
+            } else {
+                Some(&guide_cols)
+            };
+
             if wrap_row == 0 {
                 crate::highlight::render_highlighted_line(
                     stdout,
                     &display,
                     &line_spans,
                     is_cursor_line,
-                    None,
+                    guide_cols_opt,
                 )?;
             } else {
                 let offset_spans: Vec<crate::highlight::HighlightSpan> = line_spans
@@ -503,7 +514,7 @@ fn render_window(
                     &display,
                     &offset_spans,
                     is_cursor_line,
-                    None,
+                    None, // guides only on wrap_row == 0
                 )?;
             }
 
@@ -622,6 +633,129 @@ fn render_window(
                                         MoveTo(sel_start_x as u16, y),
                                         SetBackgroundColor(sel_bg),
                                         SetForegroundColor(sel_fg),
+                                        Print(&actual_sel_text),
+                                        ResetColor
+                                    )?;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── Jump mode overlay (EasyMotion) ─────────────────────────
+            if editor.jump.active && !editor.jump.targets.is_empty() {
+                let is_active_phase = editor.jump.phase == crate::editor::JumpPhase::Active;
+
+                for (t_idx, target) in editor.jump.targets.iter().enumerate() {
+                    if target.line != line_idx {
+                        continue;
+                    }
+
+                    let (vis_left, vis_right, overlay_text, bg_col, fg_col) = if is_active_phase {
+                        // Active phase: draw the single-char label (a, b, c...)
+                        if let Some(label) = editor
+                            .jump
+                            .labels
+                            .iter()
+                            .find(|(idx, _)| *idx == t_idx)
+                            .map(|(_, l)| l.clone())
+                        {
+                            (
+                                target.col,
+                                target.col + 1,
+                                label,
+                                catppuccin::SURFACE0,
+                                catppuccin::GREEN,
+                            )
+                        } else {
+                            continue;
+                        }
+                    } else {
+                        // PendingChar2 phase: highlight the 2-char pattern (like search highlight)
+                        let len = editor.jump.input.chars().count();
+                        (
+                            target.col,
+                            target.col + len,
+                            editor.jump.input.clone(),
+                            catppuccin::SURFACE0,
+                            catppuccin::TEXT,
+                        )
+                    };
+
+                    let vis_left = vis_left.min(graphemes.len());
+                    let vis_right = vis_right.min(graphemes.len());
+
+                    if vis_left < vis_right {
+                        let clip_left = vis_left.max(wrap_start_grapheme);
+                        let wrap_end_grapheme =
+                            wrap_start_grapheme + display.graphemes(true).count();
+                        let clip_right = vis_right.min(wrap_end_grapheme);
+
+                        if clip_left < clip_right {
+                            let sel_graphemes: Vec<_> =
+                                graphemes[clip_left..clip_right].iter().collect();
+                            let sel_text: String =
+                                sel_graphemes.iter().map(|g| g.to_string()).collect();
+                            let sel_display_w = UnicodeWidthStr::width(sel_text.as_str());
+                            let content_start_x =
+                                x_offset + gutter_width + mark_gutter_width + git_gutter_width;
+
+                            let mut sel_start_screen_col = 0usize;
+                            for gi in 0..clip_left {
+                                sel_start_screen_col += UnicodeWidthStr::width(graphemes[gi]);
+                            }
+                            if !editor.config.word_wrap {
+                                sel_start_screen_col =
+                                    sel_start_screen_col.saturating_sub(line_scroll_offset_w);
+                            }
+
+                            let sel_start_x = content_start_x as usize + sel_start_screen_col;
+
+                            if sel_start_x < content_start_x as usize + content_width
+                                && sel_display_w > 0
+                                && sel_start_x >= content_start_x as usize
+                            {
+                                let max_sel_w =
+                                    content_start_x as usize + content_width - sel_start_x;
+
+                                // If the label (1 char) is shorter than the match (2 chars), pad it
+                                // so the background highlight covers the entire match cleanly.
+                                let actual_sel_text = if UnicodeWidthStr::width(
+                                    overlay_text.as_str(),
+                                ) < sel_display_w
+                                {
+                                    format!(
+                                        "{}{}",
+                                        overlay_text,
+                                        " ".repeat(
+                                            sel_display_w
+                                                - UnicodeWidthStr::width(overlay_text.as_str())
+                                        )
+                                    )
+                                } else if UnicodeWidthStr::width(overlay_text.as_str()) > max_sel_w
+                                {
+                                    let mut truncated = String::new();
+                                    let mut w = 0usize;
+                                    for g in overlay_text.graphemes(true) {
+                                        let gw = UnicodeWidthStr::width(g);
+                                        if w + gw > max_sel_w {
+                                            break;
+                                        }
+                                        truncated.push_str(g);
+                                        w += gw;
+                                    }
+                                    truncated
+                                } else {
+                                    overlay_text.clone()
+                                };
+
+                                if !actual_sel_text.is_empty() {
+                                    execute!(
+                                        stdout,
+                                        MoveTo(sel_start_x as u16, y),
+                                        SetBackgroundColor(bg_col),
+                                        SetForegroundColor(fg_col),
                                         Print(&actual_sel_text),
                                         ResetColor
                                     )?;
@@ -1600,7 +1734,7 @@ fn render_separators(
                         stdout,
                         MoveTo(sep.x, sep.y),
                         SetForegroundColor(Color::DarkGrey),
-                        Print("\u{2500}".repeat(sep.length as usize)),
+                        Print(":".repeat(sep.length as usize)),
                         ResetColor
                     )?;
                 }
@@ -1613,7 +1747,7 @@ fn render_separators(
                             stdout,
                             MoveTo(sep.x, sy),
                             SetForegroundColor(Color::DarkGrey),
-                            Print("\u{2502}"),
+                            Print(":"),
                             ResetColor
                         )?;
                     }
@@ -3430,4 +3564,67 @@ fn render_infobar(
 
     execute!(stdout, ResetColor)?;
     Ok(())
+}
+
+/// Compute the set of grapheme-column indices where indent guides should
+/// appear for a given line, taking soft-wrap offset into account.
+fn guide_cols_for_line(
+    editor: &Editor,
+    buffer: &crate::buffer::Buffer,
+    line_idx: usize,
+    wrap_start_grapheme: usize,
+    scroll_col: usize,
+) -> std::collections::HashSet<usize> {
+    let tab_width = editor.config.tab_width.max(1) as usize;
+    let line_text = buffer.line_text(line_idx).unwrap_or_default();
+    let line_text = line_text.trim_end_matches('\n');
+
+    let curr_depth = indent_depth(line_text, tab_width);
+    let prev_depth = buffer
+        .line_text(line_idx.saturating_sub(1))
+        .map(|t| indent_depth(t.trim_end_matches('\n'), tab_width))
+        .unwrap_or(0);
+    let next_depth = buffer
+        .line_text(line_idx + 1)
+        .map(|t| indent_depth(t.trim_end_matches('\n'), tab_width))
+        .unwrap_or(0);
+
+    let max_depth = curr_depth.max(prev_depth).max(next_depth);
+
+    (1..=max_depth)
+        .filter(|&d| {
+            (curr_depth >= d && (prev_depth >= d || next_depth >= d))
+                || (curr_depth < d && prev_depth >= d && next_depth >= d)
+        })
+        .filter_map(|d| {
+            let abs_col = (d - 1) * tab_width; // last space of the indent band
+                                               // translate to display-grapheme index within the current wrap slice
+            if editor.config.word_wrap {
+                if abs_col >= wrap_start_grapheme {
+                    Some(abs_col - wrap_start_grapheme)
+                } else {
+                    None
+                }
+            } else {
+                if abs_col >= scroll_col {
+                    Some(abs_col - scroll_col)
+                } else {
+                    None
+                }
+            }
+        })
+        .collect()
+}
+
+/// Calculate the indentation depth of a line.
+fn indent_depth(line_text: &str, tab_width: usize) -> usize {
+    let mut depth = 0;
+    for c in line_text.chars() {
+        match c {
+            ' ' => depth += 1,
+            '\t' => depth += tab_width,
+            _ => break,
+        }
+    }
+    depth / tab_width.max(1)
 }

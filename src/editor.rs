@@ -54,6 +54,34 @@ use crate::window::WindowManager;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JumpPhase {
+    PendingChar1,
+    PendingChar2,
+    Active,
+}
+
+impl Default for JumpPhase {
+    fn default() -> Self {
+        Self::PendingChar1
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct JumpTarget {
+    pub line: usize,
+    pub col: usize,
+}
+
+#[derive(Debug, Default)]
+pub struct JumpState {
+    pub active: bool,
+    pub phase: JumpPhase,
+    pub input: String,
+    pub targets: Vec<JumpTarget>,
+    pub labels: Vec<(usize, String)>,
+}
+
 // ── Editor modes ────────────────────────────────────────────────────
 
 /// Editor modes, analogous to Vim modes.
@@ -246,6 +274,10 @@ pub struct Editor {
     pub which_key_debounce_timer: Option<Instant>,
     /// Whether we're waiting for a register in command mode.
     pub cmd_waiting_register: bool,
+
+    // ==================== Jump Mode ====================
+    /// State for 2-char EasyMotion/AceJump style jumping.
+    pub jump: JumpState,
 
     // ==================== Search & Navigation ====================
     /// Current search direction (forward/backward).
@@ -708,6 +740,7 @@ impl Editor {
             search_history_idx: search_history_len,
             substitute_confirm: None,
             replace_count: 1,
+            jump: JumpState::default(),
 
             marks: std::collections::HashMap::new(),
             last_jump_mark: None,
@@ -1252,6 +1285,32 @@ impl Editor {
                 }
                 _ => {
                     return CommandResult::NoOp;
+                }
+            }
+        }
+
+        // ── Jump mode (EasyMotion / AceJump) ──
+        if self.jump.active {
+            match key {
+                Key::Escape | Key::Ctrl('c') => {
+                    crate::ed::motion::cancel_jump(self);
+                    self.dirty.mark_all();
+                    return CommandResult::ViewChanged;
+                }
+                Key::Char(c) => {
+                    let stay_in_jump = crate::ed::motion::handle_jump_key(self, c);
+                    self.dirty.mark_all();
+                    return if stay_in_jump {
+                        CommandResult::NoOp
+                    } else {
+                        CommandResult::ViewChanged
+                    };
+                }
+                _ => {
+                    // Any other key cancels the jump
+                    crate::ed::motion::cancel_jump(self);
+                    self.dirty.mark_all();
+                    return CommandResult::ViewChanged;
                 }
             }
         }
@@ -3628,6 +3687,11 @@ impl Editor {
             }
             Action::ShowShortcuts => {
                 self.show_shortcuts();
+                CommandResult::ViewChanged
+            }
+            Action::EnterJumpMode => {
+                crate::ed::motion::enter_jump_mode(self);
+                self.dirty.mark_all();
                 CommandResult::ViewChanged
             }
             Action::RunBuild => self.run_build(),

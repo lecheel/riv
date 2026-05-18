@@ -1277,6 +1277,22 @@ pub fn build_command_registry() -> CommandRegistry {
     reg.alias("Clist", "clist");
     reg.alias("Copen", "clist");
 
+    // In build_command_registry()
+    reg.register_handler(
+        "indentguides!",
+        |editor, _args| {
+            editor.config.indent_guides = !editor.config.indent_guides;
+            editor.dirty.mark_all();
+            let state = if editor.config.indent_guides {
+                "on"
+            } else {
+                "off"
+            };
+            CommandResult::Message(format!("Indent guides: {}", state))
+        },
+        "Toggle indent guides on/off",
+    );
+
     // Formatting
     reg.register_handler("fmt", fmt_handler, "Format buffer with external formatter");
     reg.alias("format", "fmt");
