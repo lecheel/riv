@@ -5,41 +5,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use unicode_segmentation::UnicodeSegmentation;
 
-// ── Git root detection ──────────────────────────────────────────────
-
-/// Find the git repository root by walking up from the given path.
-pub fn find_git_root(start_path: &Path) -> PathBuf {
-    let absolute_path = if start_path.is_relative() {
-        match std::env::current_dir() {
-            Ok(cwd) => {
-                let full_path = cwd.join(start_path);
-                full_path.canonicalize().unwrap_or(full_path)
-            }
-            Err(_) => start_path.to_path_buf(),
-        }
-    } else {
-        start_path.to_path_buf()
-    };
-
-    let start_dir = if absolute_path.is_file() {
-        absolute_path.parent()
-    } else {
-        Some(absolute_path.as_path())
-    };
-
-    let mut current = start_dir.map(|p| p.to_path_buf());
-
-    while let Some(dir) = current {
-        let git_marker = dir.join(".git");
-        if git_marker.exists() {
-            return dir;
-        }
-        current = dir.parent().map(|p| p.to_path_buf());
-    }
-
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-}
-
 // ── Ripgrep result ──────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

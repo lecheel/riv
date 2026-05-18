@@ -599,6 +599,88 @@ fn vocab_handler(e: &mut Editor, args: &str) -> CommandResult {
     e.vocab_handle(args)
 }
 
+pub fn guide_handler(e: &mut Editor, args: &str) -> CommandResult {
+    let arg = args.trim();
+
+    // ── :guide update ── Scan current buffer for markers ──
+    if arg == "update" {
+        let mut guide = if let Some(g) = e.guide_popup.take() {
+            g
+        } else {
+            crate::guide::Guide::load() // Loads empty if file missing
+        };
+
+        // Get current buffer's file path and in-memory source text
+        let (file_path, source) = if let Some(buffer) = e.current_buffer() {
+            let path = match buffer.file_path.as_ref() {
+                Some(p) => p.clone(),
+                None => {
+                    e.guide_popup = Some(guide);
+                    e.dirty.guide = true;
+                    return CommandResult::Error("Current buffer has no file path".into());
+                }
+            };
+            let text = buffer.rope.to_string();
+            (path, text)
+        } else {
+            e.guide_popup = Some(guide);
+            e.dirty.guide = true;
+            return CommandResult::Error("No active buffer".into());
+        };
+
+        match guide.sync_from_buffer(&file_path, &source) {
+            Ok(result) => {
+                e.guide_popup = Some(guide);
+                e.dirty.guide = true;
+                if result.added > 0 || result.updated > 0 {
+                    CommandResult::Message(format!(
+                        "Guide updated: +{} added, {} updated",
+                        result.added, result.updated
+                    ))
+                } else {
+                    CommandResult::Message("No guide markers found in current buffer".into())
+                }
+            }
+            Err(err) => {
+                e.guide_popup = Some(guide);
+                e.dirty.guide = true;
+                CommandResult::Error(err)
+            }
+        }
+    } else {
+        // ── :guide (no args) ── Open the popup ──
+        let mut guide = crate::guide::Guide::load();
+        guide.apply_filter();
+
+        // Allow opening even if empty (user might run :guide update next)
+        if !guide.entries.is_empty() {
+            // Pre-select the entry matching the current file
+            let current_file = e
+                .current_buffer()
+                .and_then(|b| b.file_path.as_ref())
+                .and_then(|p| p.canonicalize().ok())
+                .and_then(|p| p.to_str().map(|s| s.to_string()))
+                .unwrap_or_default();
+
+            if let Some(pos) = guide.filtered.iter().position(|&idx| {
+                let entry_path = guide.root.join(&guide.entries[idx].file);
+                let entry_canonical = entry_path.canonicalize().ok();
+                current_file
+                    == entry_canonical
+                        .and_then(|p| p.to_str().map(|s| s.to_string()))
+                        .unwrap_or_default()
+                    || current_file.ends_with(&guide.entries[idx].file)
+            }) {
+                guide.selected = pos;
+            }
+        }
+
+        e.guide_popup = Some(guide);
+        e.dirty.mark_all();
+        CommandResult::ViewChanged
+    }
+}
+
 // ── Ripgrep handlers ───────────────────────────────────────────────
 
 /// `:rg <pattern>` — Search the project with ripgrep.
@@ -624,7 +706,7 @@ fn rg_handler(e: &mut Editor, args: &str) -> CommandResult {
     let root_dir = e
         .current_buffer()
         .and_then(|b| b.file_path.as_ref())
-        .map(|p| crate::ripgrep::find_git_root(p))
+        .and_then(|p| crate::misc::find_git_root(p)) // flattens Option<Option> -> Option<PathBuf>
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
     e.set_status(format!("Searching for '{}'...", pattern));
@@ -1266,6 +1348,12 @@ pub fn build_command_registry() -> CommandRegistry {
         "vocab",
         vocab_handler,
         "Add word to local vocabulary completion (:vocab <word>)",
+    );
+
+    reg.register_handler(
+        "guide",
+        guide_handler,
+        "Open code architecture guide (use 'update' to sync from current buffer)",
     );
 
     reg.register_handler(

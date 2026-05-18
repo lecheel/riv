@@ -34,6 +34,7 @@ pub struct DirtyState {
     pub diff: bool,
     pub mru: bool,
     pub mark_list: bool,
+    pub guide: bool,
 
     // ── Cursor ──
     pub cursor: bool,

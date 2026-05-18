@@ -1020,6 +1020,41 @@ pub fn render_highlighted_line<W: std::io::Write>(
         execute!(writer, Print(ch))?;
     }
 
+    // ── Indent guides beyond text length ─────────────────────────
+    // Empty or short lines between indented blocks should still
+    // display indent guides.  The main loop above only replaces
+    // existing space characters; this section adds virtual spaces
+    // + `|` at guide columns that fall past the end of the text.
+    if let Some(gc) = guide_cols {
+        let mut beyond: Vec<usize> = gc.iter().filter(|&&c| c >= total_chars).copied().collect();
+        beyond.sort_unstable();
+
+        let mut pos = total_chars;
+        for col in beyond {
+            // Pad with spaces up to the guide column
+            if col > pos {
+                if current_fg.is_some() {
+                    set_fg(writer, None)?;
+                    current_fg = None;
+                }
+                execute!(writer, Print(&" ".repeat(col - pos)))?;
+            }
+            // Draw the guide character
+            if current_fg != Some(GUIDE_FG) {
+                set_fg(writer, Some(GUIDE_FG))?;
+                if is_cursor_line {
+                    execute!(writer, SetBackgroundColor(cursor_bg))?;
+                }
+                current_fg = Some(GUIDE_FG);
+            }
+            execute!(writer, Print("|"))?;
+            pos = col + 1;
+        }
+    }
+
+    // Final reset: restore both fg and bg to terminal defaults.
+    execute!(writer, ResetColor)?;
+
     // Final reset: restore both fg and bg to terminal defaults.
     execute!(writer, ResetColor)?;
 

@@ -396,10 +396,11 @@ impl Editor {
             }
         }
 
-        // 2. Fallback: check git root (which might be a workspace root)
-        let git_root = crate::ripgrep::find_git_root(&start_path);
-        if git_root.join("Cargo.toml").exists() {
-            return git_root;
+        // 2. Fallback: check git root
+        if let Some(git_root) = crate::misc::find_git_root(&start_path) {
+            if git_root.join("Cargo.toml").exists() {
+                return git_root;
+            }
         }
 
         // 3. Ultimate fallback: return the start_dir and let cargo print its own error

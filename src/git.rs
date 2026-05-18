@@ -736,36 +736,6 @@ fn parse_log(output: &str) -> Result<Vec<GitCommit>, GitError> {
 
     Ok(commits)
 }
-
-pub fn find_git_root(start_dir: &Path) -> Option<PathBuf> {
-    let effective_dir = if !start_dir.exists() {
-        start_dir
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| Path::new(".").to_path_buf())
-    } else if start_dir.is_file() {
-        start_dir.parent()?.to_path_buf()
-    } else {
-        start_dir.to_path_buf()
-    };
-
-    std::process::Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .current_dir(effective_dir)
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .and_then(|output| {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if path.is_empty() {
-                None
-            } else {
-                Some(PathBuf::from(path))
-            }
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

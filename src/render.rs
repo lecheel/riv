@@ -518,9 +518,13 @@ fn render_window(
                 )?;
             }
 
-            // Clear rest of line
+            // Clear rest of line — account for indent guides rendered
+            // beyond the text boundary (e.g. on empty lines).
             let display_w = UnicodeWidthStr::width(display.as_str());
-            let remaining = content_width.saturating_sub(display_w);
+            let max_guide_col = guide_cols.iter().max().map(|&c| c + 1).unwrap_or(0);
+            let effective_w = display_w.max(max_guide_col);
+            let remaining = content_width.saturating_sub(effective_w);
+
             if is_cursor_line {
                 execute!(stdout, SetBackgroundColor(Color::DarkGrey))?;
             }
@@ -530,7 +534,6 @@ fn render_window(
             if is_cursor_line {
                 execute!(stdout, ResetColor)?;
             }
-
             // ── Visual selection overlay ─────────────────────────────
             if let Some((sel_top, sel_bot, sel_left, sel_right)) = selection_rect {
                 // Determine if this line is in the selection.
@@ -599,9 +602,7 @@ fn render_window(
                                 sel_start_screen_col =
                                     sel_start_screen_col.saturating_sub(line_scroll_offset_w);
                             }
-
                             let sel_start_x = content_start_x as usize + sel_start_screen_col;
-
                             // Only draw if the selection is within the visible content area
                             if sel_start_x < content_start_x as usize + content_width
                                 && sel_display_w > 0
@@ -788,9 +789,9 @@ fn render_status(
     use crossterm::cursor::MoveTo;
     use crossterm::execute;
     use crossterm::style::{Print, ResetColor, SetBackgroundColor, SetForegroundColor};
-    use unicode_width::UnicodeWidthStr;
 
     use crate::powerline::{self, glyphs};
+    use unicode_width::UnicodeWidthStr;
 
     let _base = powerline::crossterm_colors::BASE;
     let surface0 = powerline::crossterm_colors::SURFACE0;
@@ -808,7 +809,6 @@ fn render_status(
     let powerline_y = term_height.saturating_sub(3);
     let cmdline_y = term_height.saturating_sub(2);
     let infobar_y = term_height.saturating_sub(1);
-
     execute!(stdout, MoveTo(0, powerline_y))?;
 
     let (mode_fg, mode_bg) = powerline::get_mode_colors_crossterm(editor);
@@ -1083,7 +1083,6 @@ fn render_float_popup(
     draw_border(stdout, x, y, pw, total_height, &border_style)?;
 
     // ── Render each line with shortcut hints if in shortcut mode ──
-
     for (i, line) in display_lines.iter().enumerate() {
         let row_y = y + 1 + i as u16;
 
@@ -1734,7 +1733,7 @@ fn render_separators(
                         stdout,
                         MoveTo(sep.x, sep.y),
                         SetForegroundColor(Color::DarkGrey),
-                        Print(":".repeat(sep.length as usize)),
+                        Print("\u{2500}".repeat(sep.length as usize)),
                         ResetColor
                     )?;
                 }
@@ -1747,7 +1746,7 @@ fn render_separators(
                             stdout,
                             MoveTo(sep.x, sy),
                             SetForegroundColor(Color::DarkGrey),
-                            Print(":"),
+                            Print("\u{2502}"),
                             ResetColor
                         )?;
                     }
@@ -2474,6 +2473,13 @@ pub fn render(
         }
     }
 
+    // Guide popup
+    if must_draw_all_popups || editor.dirty.guide {
+        if let Some(popup) = &editor.guide_popup {
+            render_guide_popup(editor, stdout, popup, term_width, term_height)?;
+        }
+    }
+
     // Function list popup
     if must_draw_all_popups || editor.dirty.function_list {
         if let Some(_popup) = &editor.function_list_popup {
@@ -2511,6 +2517,377 @@ fn restore_region(
 
         render_window(editor, stdout, window, wx, wy, ww, wh, highlighter)?;
     }
+    Ok(())
+}
+
+fn render_guide_popup(
+    _editor: &Editor,
+    stdout: &mut std::io::Stdout,
+    popup: &crate::guide::Guide,
+    term_width: u16,
+    term_height: u16,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::rounded_box::*;
+
+    let status_height = 3;
+    let max_visible = 24usize;
+    let visible_count = popup.filtered.len().min(max_visible);
+
+    // Compute column widths
+    let mut max_kind = 8usize;
+    let mut max_label = 20usize;
+    let mut max_file = 20usize;
+    for &idx in popup.filtered.iter() {
+        if let Some(entry) = popup.entries.get(idx) {
+            max_kind = max_kind.max(entry.kind.len());
+            max_label = max_label.max(entry.label.len());
+            let short_file = entry
+                .file
+                .rsplit_once('/')
+                .map(|(_, f)| f)
+                .unwrap_or(&entry.file);
+            max_file = max_file.max(short_file.len());
+        }
+    }
+
+    let calc_width = max_kind + 1 + max_label + 1 + max_file + 3 + 6 + 4;
+    let popup_width = calc_width.max(100).min(term_width as usize) as u16;
+    let popup_height = max_visible as u16 + 4; // top border + filter row + content + bottom border
+
+    let x = (term_width.saturating_sub(popup_width)) / 2;
+    let y = (term_height
+        .saturating_sub(status_height)
+        .saturating_sub(popup_height))
+        / 2;
+
+    clear_rect(stdout, x, y, popup_width, popup_height, catppuccin::MANTLE)?;
+
+    // ── Title bar ──
+    let count_text = if popup.filtered.is_empty() {
+        "(no match)".to_string()
+    } else {
+        format!("({})", popup.filtered.len())
+    };
+    let title = format!(" Guide {} ", count_text);
+    let title_style = BoxStyle::default()
+        .with_title(title)
+        .with_bg(catppuccin::MANTLE);
+    draw_top_border(stdout, x, y, popup_width, &title_style)?;
+
+    // ── Filter row ──
+    let filter_y = y + 1;
+    {
+        let filter_style = RowStyle::normal().with_bg(catppuccin::CRUST).no_padding();
+        let prompt_w = str_width(">");
+        let max_filter_len = content_width(popup_width, &filter_style).saturating_sub(prompt_w + 1);
+        let filter_display = truncate_to_width(&popup.filter, max_filter_len);
+
+        let segments = [
+            Segment::new(">", catppuccin::PEACH),
+            Segment::new(filter_display, catppuccin::TEXT),
+        ];
+        draw_row(stdout, x, filter_y, popup_width, &segments, &filter_style)?;
+
+        // Block cursor after filter text
+        let cursor_x = x as usize + 1 + prompt_w + str_width(filter_display);
+        if (cursor_x as u16) < x + popup_width.saturating_sub(1) {
+            execute!(stdout, MoveTo(cursor_x as u16, filter_y))?;
+            execute!(
+                stdout,
+                SetBackgroundColor(catppuccin::TEXT),
+                SetForegroundColor(catppuccin::CRUST),
+                Print(" ")
+            )?;
+        }
+    }
+
+    // ── Content rows ──
+    let scroll = popup.scroll;
+
+    for i in 0..max_visible {
+        let row_y = filter_y + 1 + i as u16;
+        if row_y >= y + popup_height - 1 {
+            break;
+        }
+        let entry_idx = scroll + i;
+
+        if entry_idx < popup.filtered.len() {
+            let real_idx = popup.filtered[entry_idx];
+            let entry = match popup.entries.get(real_idx) {
+                Some(e) => e,
+                None => {
+                    let empty_style = RowStyle::normal().with_border(catppuccin::SURFACE2);
+                    draw_empty_row(stdout, x, row_y, popup_width, &empty_style)?;
+                    continue;
+                }
+            };
+            let is_selected = entry_idx == popup.selected;
+
+            let kind_str = format!("{:>width$} ", entry.kind, width = max_kind);
+            let short_file = entry
+                .file
+                .rsplit_once('/')
+                .map(|(_, f)| f)
+                .unwrap_or(&entry.file);
+
+            let mut segments = Vec::new();
+
+            // Kind badge
+            let kind_color = match entry.kind.as_str() {
+                "struct" | "enum" | "type" => catppuccin::YELLOW,
+                "fn" | "impl" => catppuccin::BLUE,
+                "trait" => catppuccin::TEAL,
+                "section" => catppuccin::MAUVE,
+                "match" => catppuccin::PEACH,
+                "const" | "macro" | "field" => catppuccin::GREEN,
+                _ => catppuccin::SUBTEXT,
+            };
+            segments.push(Segment::new(&kind_str, kind_color));
+
+            // Label — highlight matching substring
+            if !popup.filter.is_empty() {
+                let lower_label = entry.label.to_lowercase();
+                let lower_query = popup.filter.to_lowercase();
+                if let Some(match_start) = lower_label.find(&lower_query) {
+                    let match_end = match_start + lower_query.len();
+                    if match_start > 0 {
+                        segments.push(Segment::new(
+                            &entry.label[..match_start],
+                            if is_selected {
+                                catppuccin::TEXT
+                            } else {
+                                catppuccin::BLUE
+                            },
+                        ));
+                    }
+                    segments.push(Segment::new(
+                        &entry.label[match_start..match_end.min(entry.label.len())],
+                        catppuccin::PEACH,
+                    ));
+                    if match_end < entry.label.len() {
+                        segments.push(Segment::new(
+                            &entry.label[match_end..],
+                            if is_selected {
+                                catppuccin::TEXT
+                            } else {
+                                catppuccin::BLUE
+                            },
+                        ));
+                    }
+                } else {
+                    segments.push(Segment::new(
+                        &entry.label,
+                        if is_selected {
+                            catppuccin::TEXT
+                        } else {
+                            catppuccin::BLUE
+                        },
+                    ));
+                }
+            } else {
+                segments.push(Segment::new(
+                    &entry.label,
+                    if is_selected {
+                        catppuccin::TEXT
+                    } else {
+                        catppuccin::BLUE
+                    },
+                ));
+            }
+
+            // File name (dimmed)
+            let file_with_spaces = format!("  {}", short_file);
+            segments.push(Segment::new(&file_with_spaces, catppuccin::OVERLAY0));
+
+            // Description (truncated)
+            segments.push(Segment::new("  ", catppuccin::SURFACE1));
+            let remaining = popup_width as usize
+                - segments.iter().map(|s| str_width(s.text)).sum::<usize>()
+                - 4; // borders
+            let desc_display = truncate_to_width(&entry.desc, remaining);
+            segments.push(Segment::new(
+                desc_display,
+                if is_selected {
+                    catppuccin::SUBTEXT
+                } else {
+                    catppuccin::OVERLAY0
+                },
+            ));
+
+            let row_style = if is_selected {
+                RowStyle::selected()
+                    .with_border(catppuccin::SURFACE2)
+                    .with_bg(catppuccin::SURFACE0)
+            } else {
+                RowStyle::normal()
+                    .with_border(catppuccin::SURFACE2)
+                    .with_bg(catppuccin::MANTLE)
+            };
+            draw_row(stdout, x, row_y, popup_width, &segments, &row_style)?;
+        } else {
+            let empty_style = RowStyle::normal().with_border(catppuccin::SURFACE2);
+            draw_empty_row(stdout, x, row_y, popup_width, &empty_style)?;
+        }
+    }
+
+    // ── Bottom border with status ──
+    let bottom_y = filter_y + 1 + max_visible as u16;
+    let footer = format!(
+        "[Enter] jump  [Esc] close  {}/{}",
+        if popup.filtered.is_empty() {
+            0
+        } else {
+            popup.selected + 1
+        },
+        popup.filtered.len(),
+    );
+    let bottom_style = BoxStyle::default()
+        .with_border(catppuccin::SURFACE2)
+        .with_footer(footer);
+    draw_bottom_border(stdout, x, bottom_y, popup_width, &bottom_style)?;
+
+    // ── Hint popup for selected entry ──
+    if let Some(entry) = popup.selected_entry() {
+        if entry.hint.is_some() || !entry.desc.is_empty() {
+            render_guide_doc_popup(
+                entry,
+                stdout,
+                x,
+                y,
+                popup_width,
+                popup_height,
+                term_width,
+                term_height,
+            )?;
+        }
+    }
+
+    execute!(stdout, ResetColor)?;
+    Ok(())
+}
+
+/// Render a documentation/hint popup for the selected guide entry
+/// (same positioning logic as render_completion_doc_popup).
+fn render_guide_doc_popup(
+    entry: &crate::guide::GuideEntry,
+    stdout: &mut std::io::Stdout,
+    comp_x: u16,
+    comp_y: u16,
+    comp_width: u16,
+    comp_height: u16,
+    term_width: u16,
+    term_height: u16,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::rounded_box::*;
+
+    let doc_max_width: u16 = 70;
+    let gap: u16 = 1;
+
+    let available_right = term_width.saturating_sub(comp_x + comp_width + gap);
+    let available_left = comp_x.saturating_sub(gap);
+
+    let (doc_width, x): (u16, u16) = if available_right >= 40 {
+        let w = doc_max_width.min(available_right);
+        (w, comp_x + comp_width + gap)
+    } else if available_left >= 40 {
+        let w = doc_max_width.min(available_left);
+        (w, comp_x.saturating_sub(w + gap))
+    } else {
+        return Ok(());
+    };
+
+    let content_width = doc_width.saturating_sub(2) as usize;
+    if content_width == 0 {
+        return Ok(());
+    }
+
+    // Build doc lines
+    let mut doc_lines: Vec<String> = Vec::new();
+
+    // File path
+    doc_lines.push(format!("📄 {}", entry.file));
+    doc_lines.push(format!("🔍 {}", entry.anchor));
+    doc_lines.push(String::new());
+
+    // Description (word-wrapped)
+    if !entry.desc.is_empty() {
+        doc_lines.extend(word_wrap(&entry.desc, content_width));
+        doc_lines.push(String::new());
+    }
+
+    // Tags
+    if !entry.tags.is_empty() {
+        doc_lines.push(format!("tags: {}", entry.tags.join(", ")));
+        doc_lines.push(String::new());
+    }
+
+    // Implementation hint
+    if let Some(ref hint) = entry.hint {
+        doc_lines.push("💡 Implementation hint:".to_string());
+        doc_lines.extend(word_wrap(hint, content_width));
+    }
+
+    if doc_lines.is_empty() {
+        return Ok(());
+    }
+
+    let max_visible_rows = comp_height.saturating_sub(2) as usize;
+    let visible_rows = doc_lines.len().min(max_visible_rows).max(1);
+    let doc_height = visible_rows as u16 + 2;
+
+    let edit_height = term_height.saturating_sub(3);
+    let doc_height = doc_height.min(edit_height.saturating_sub(comp_y));
+    if doc_height < 3 {
+        return Ok(());
+    }
+
+    let visible_rows = (doc_height.saturating_sub(2)) as usize;
+
+    clear_rect(stdout, x, comp_y, doc_width, doc_height, catppuccin::MANTLE)?;
+
+    // Title
+    let title = format!(" {} {} ", entry.kind, entry.label);
+    let title_style = BoxStyle::default()
+        .with_title(title)
+        .with_border(catppuccin::SURFACE2)
+        .with_bg(catppuccin::MANTLE);
+    draw_top_border(stdout, x, comp_y, doc_width, &title_style)?;
+
+    // Content rows
+    for (i, line) in doc_lines.iter().take(visible_rows).enumerate() {
+        let row_y = comp_y + 1 + i as u16;
+        let row_style = RowStyle::normal()
+            .with_border(catppuccin::SURFACE2)
+            .with_bg(catppuccin::MANTLE);
+
+        if line.is_empty() {
+            draw_empty_row(stdout, x, row_y, doc_width, &row_style)?;
+        } else {
+            let color = if line.starts_with("📄") || line.starts_with("🔍") {
+                catppuccin::OVERLAY0
+            } else if line.starts_with("💡") || line.starts_with("tags:") {
+                catppuccin::PEACH
+            } else {
+                catppuccin::SUBTEXT
+            };
+            let segments = [Segment::new(line, color)];
+            draw_row(stdout, x, row_y, doc_width, &segments, &row_style)?;
+        }
+    }
+
+    // Bottom border
+    let bottom_y = comp_y + 1 + visible_rows as u16;
+    let more = doc_lines.len() > visible_rows;
+    let footer = if more {
+        format!("↓ {}/{}", visible_rows, doc_lines.len())
+    } else {
+        String::new()
+    };
+    let bottom_style = BoxStyle::default()
+        .with_border(catppuccin::SURFACE2)
+        .with_footer(footer);
+    draw_bottom_border(stdout, x, bottom_y, doc_width, &bottom_style)?;
+
     Ok(())
 }
 
@@ -3568,6 +3945,8 @@ fn render_infobar(
 
 /// Compute the set of grapheme-column indices where indent guides should
 /// appear for a given line, taking soft-wrap offset into account.
+/// Compute the set of grapheme-column indices where indent guides should
+/// appear for a given line, taking soft-wrap offset into account.
 fn guide_cols_for_line(
     editor: &Editor,
     buffer: &crate::buffer::Buffer,
@@ -3580,24 +3959,42 @@ fn guide_cols_for_line(
     let line_text = line_text.trim_end_matches('\n');
 
     let curr_depth = indent_depth(line_text, tab_width);
-    let prev_depth = buffer
-        .line_text(line_idx.saturating_sub(1))
-        .map(|t| indent_depth(t.trim_end_matches('\n'), tab_width))
-        .unwrap_or(0);
-    let next_depth = buffer
-        .line_text(line_idx + 1)
-        .map(|t| indent_depth(t.trim_end_matches('\n'), tab_width))
-        .unwrap_or(0);
 
-    let max_depth = curr_depth.max(prev_depth).max(next_depth);
+    // Find the depth of the nearest non-empty line above (skip whitespace-only lines)
+    let mut prev_real_depth = 0;
+    let scan_limit = 100;
+    for i in (line_idx.saturating_sub(scan_limit)..line_idx).rev() {
+        if let Some(t) = buffer.line_text(i) {
+            let t = t.trim_end_matches('\n');
+            if !t.trim().is_empty() {
+                prev_real_depth = indent_depth(t, tab_width);
+                break;
+            }
+        }
+    }
+
+    // Find the depth of the nearest non-empty line below (skip whitespace-only lines)
+    let mut next_real_depth = 0;
+    for i in (line_idx + 1)..(line_idx + scan_limit + 1).min(buffer.line_count()) {
+        if let Some(t) = buffer.line_text(i) {
+            let t = t.trim_end_matches('\n');
+            if !t.trim().is_empty() {
+                next_real_depth = indent_depth(t, tab_width);
+                break;
+            }
+        }
+    }
+
+    let max_depth = curr_depth.max(prev_real_depth).max(next_real_depth);
 
     (1..=max_depth)
         .filter(|&d| {
-            (curr_depth >= d && (prev_depth >= d || next_depth >= d))
-                || (curr_depth < d && prev_depth >= d && next_depth >= d)
+            // Draw the guide if the current line has this depth, OR if it's
+            // sandwiched between two non-empty lines that both have this depth.
+            curr_depth >= d || (curr_depth < d && prev_real_depth >= d && next_real_depth >= d)
         })
         .filter_map(|d| {
-            let abs_col = (d - 1) * tab_width; // last space of the indent band
+            let abs_col = (d - 1) * tab_width; // first space of the indent band
                                                // translate to display-grapheme index within the current wrap slice
             if editor.config.word_wrap {
                 if abs_col >= wrap_start_grapheme {
@@ -3615,7 +4012,6 @@ fn guide_cols_for_line(
         })
         .collect()
 }
-
 /// Calculate the indentation depth of a line.
 fn indent_depth(line_text: &str, tab_width: usize) -> usize {
     let mut depth = 0;

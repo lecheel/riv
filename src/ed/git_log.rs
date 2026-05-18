@@ -31,8 +31,8 @@ use crate::buffer::BufferKind;
 use crate::buffer::Language;
 use crate::ed::FileOpsExt;
 use crate::editor::{CommandResult, Editor, FloatPopup};
-use crate::git::find_git_root;
 use crate::git::GitProvider;
+use crate::misc::find_git_root;
 use ropey::Rope;
 use std::path::{Path, PathBuf};
 

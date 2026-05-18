@@ -1,7 +1,9 @@
 use crate::buffer::Language;
 use crate::rounded_box::truncate_to_width;
+use std::path::Path;
+use std::path::PathBuf;
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr; // Add this dependency
+use unicode_width::UnicodeWidthStr;
 
 // ── Helper: word character check ───────────────────────────────────
 /// Check if a tree-sitter node kind is a string or comment
@@ -238,4 +240,65 @@ pub fn grapheme_col_to_char_offset(rope: &ropey::Rope, line: usize, grapheme_col
         g_count += 1;
     }
     offset
+}
+
+pub fn levenshtein_distance(a: &str, b: &str) -> usize {
+    let a_chars: Vec<char> = a.chars().collect();
+    let b_chars: Vec<char> = b.chars().collect();
+    let len_a = a_chars.len();
+    let len_b = b_chars.len();
+
+    // Distance matrix: (len_a + 1) x (len_b + 1)
+    let mut dist = vec![vec![0; len_b + 1]; len_a + 1];
+
+    for i in 0..=len_a {
+        dist[i][0] = i;
+    }
+    for j in 0..=len_b {
+        dist[0][j] = j;
+    }
+
+    for i in 1..=len_a {
+        for j in 1..=len_b {
+            let cost = if a_chars[i - 1] == b_chars[j - 1] {
+                0
+            } else {
+                1
+            };
+            dist[i][j] = (dist[i - 1][j] + 1) // deletion
+                .min(dist[i][j - 1] + 1) // insertion
+                .min(dist[i - 1][j - 1] + cost); // substitution
+        }
+    }
+
+    dist[len_a][len_b]
+}
+
+pub fn find_git_root(start_dir: &Path) -> Option<PathBuf> {
+    let effective_dir = if !start_dir.exists() {
+        start_dir
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| Path::new(".").to_path_buf())
+    } else if start_dir.is_file() {
+        start_dir.parent()?.to_path_buf()
+    } else {
+        start_dir.to_path_buf()
+    };
+
+    std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(effective_dir)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if path.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(path))
+            }
+        })
 }

@@ -246,7 +246,6 @@ pub struct Editor {
     pub config: Config,
     /// Index of the active buffer in the buffers collection.
     pub active_buffer_idx: usize,
-
     // ==================== Input & Keybindings ====================
     /// Keybinding manager.
     pub keybinds: KeyBindManager,
@@ -278,6 +277,8 @@ pub struct Editor {
     // ==================== Jump Mode ====================
     /// State for 2-char EasyMotion/AceJump style jumping.
     pub jump: JumpState,
+    /// Code architecture guide popup (if active).
+    pub guide_popup: Option<crate::guide::Guide>,
 
     // ==================== Search & Navigation ====================
     /// Current search direction (forward/backward).
@@ -499,6 +500,7 @@ pub struct Editor {
     pub llm_prompt: MiniInputPrompt,
 
     // ==================== Repeat & History ====================
+    //-- struct Editor step 1 (anchor dont remove) --//
     /// Last action for dot repeat
     pub last_action: LastAction,
     /// Whether the last action is repeatable
@@ -712,6 +714,7 @@ impl Editor {
             active_buffer_idx: 0,
             keybinds,
 
+            //-- impl Editor fn new() step 2 (anchor dont remove) --//
             // Input & Keybindings
             pending_operator: None,
             pending_motion: None,
@@ -741,6 +744,7 @@ impl Editor {
             substitute_confirm: None,
             replace_count: 1,
             jump: JumpState::default(),
+            guide_popup: None,
 
             marks: std::collections::HashMap::new(),
             last_jump_mark: None,
@@ -1544,8 +1548,8 @@ impl Editor {
                 }
             }
         }
-
-        // ── Git status buffer special keys ── GIT STATUS
+        //-- process_key popup_active (anchor dont remove) --//
+        // ── Git status buffer special keys ── GIT STATUlS
         if self.mode == Mode::Normal && !popup_active {
             if let Some(window) = self.windows.active_window() {
                 if let Some(buffer) = self.buffers.get(&window.buffer_id) {
@@ -2142,6 +2146,99 @@ impl Editor {
                     return CommandResult::ViewChanged;
                 }
                 _ => {}
+            }
+        }
+
+        // ── Guide popup navigation ── GUIDE
+        if let Some(popup) = &mut self.guide_popup {
+            match key {
+                Key::Escape | Key::Ctrl('c') => {
+                    self.guide_popup = None;
+                    self.dirty.mark_all(); // Closing popup — must redraw underlying windows
+                    return CommandResult::NoOp;
+                }
+                Key::Up | Key::PageUp => {
+                    popup.move_up();
+                    self.dirty.guide = true;
+                    self.dirty.cursor = true;
+                    return CommandResult::NoOp;
+                }
+                Key::Down | Key::PageDown => {
+                    popup.move_down();
+                    self.dirty.guide = true;
+                    self.dirty.cursor = true;
+                    return CommandResult::NoOp;
+                }
+                Key::Enter => {
+                    if let Some(entry) = popup.selected_entry().cloned() {
+                        let file_path = popup.root.join(&entry.file);
+
+                        // Open the file
+                        let open_result = self.open_file(&file_path);
+                        if let Err(e) = open_result {
+                            self.guide_popup = None;
+                            self.dirty.mark_all();
+                            return CommandResult::Error(format!(
+                                "Cannot open {}: {}",
+                                entry.file, e
+                            ));
+                        }
+
+                        // Search for the anchor string in the buffer
+                        if let Some(window) = self.windows.active_window() {
+                            let buffer_id = window.buffer_id;
+                            if let Some(buffer) = self.buffers.get(&buffer_id) {
+                                let source: String = buffer.rope.to_string();
+                                if let Some(line) =
+                                    crate::guide::Guide::find_anchor_line(&source, &entry.anchor)
+                                {
+                                    let max_line = buffer.line_count().saturating_sub(1);
+                                    if let Some(w) = self.windows.active_window_mut() {
+                                        w.cursor.position.line = line.min(max_line);
+                                        w.cursor.position.col = 0;
+                                        w.cursor.desired_col = None;
+                                        let bid = w.buffer_id;
+                                        self.ensure_cursor_visible(&bid);
+                                    }
+                                    self.set_status(format!(
+                                        "→ {} ({})",
+                                        entry.label, entry.anchor
+                                    ));
+                                } else {
+                                    self.set_status(format!(
+                                        "Anchor not found: '{}' in {}",
+                                        entry.anchor, entry.file
+                                    ));
+                                }
+                            }
+                        }
+                        self.scroll_center();
+                        self.guide_popup = None;
+                        self.dirty.mark_all(); // Closing + buffer change — full redraw
+                        return CommandResult::ViewChanged;
+                    }
+                    self.guide_popup = None;
+                    self.dirty.mark_all();
+                    return CommandResult::NoOp;
+                }
+                Key::Backspace => {
+                    popup.filter_pop();
+                    self.dirty.guide = true;
+                    self.dirty.cursor = true;
+                    return CommandResult::NoOp;
+                }
+                Key::Char(c) => {
+                    popup.filter_push(c);
+                    self.dirty.guide = true;
+                    self.dirty.cursor = true;
+                    return CommandResult::NoOp;
+                }
+                _ => {
+                    // Any other key dismisses the popup
+                    self.guide_popup = None;
+                    self.dirty.mark_all(); // Closing — full redraw
+                    return CommandResult::NoOp;
+                }
             }
         }
 
@@ -3689,6 +3786,10 @@ impl Editor {
                 self.show_shortcuts();
                 CommandResult::ViewChanged
             }
+            Action::Guide => {
+                crate::command_registry::guide_handler(self, "");
+                CommandResult::ViewChanged
+            }
             Action::EnterJumpMode => {
                 crate::ed::motion::enter_jump_mode(self);
                 self.dirty.mark_all();
@@ -3789,6 +3890,8 @@ impl Editor {
                     Err(err) => CommandResult::Error(err),
                 }
             }
+
+            //-- process_action Action::RipgrepLast (anchor dont remove) --//
             Action::ToggleWhitespace => {
                 self.config.show_whitespace = !self.config.show_whitespace;
                 self.dirty.mark_all();

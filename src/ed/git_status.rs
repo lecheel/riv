@@ -4,8 +4,8 @@
 use crate::buffer::BufferKind;
 use crate::ed::FileOpsExt;
 use crate::editor::{CommandResult, Editor};
-use crate::git::find_git_root;
 use crate::git::{FileStatus, GitProvider, GitStatusEntry};
+use crate::misc::find_git_root;
 use ropey::Rope;
 use std::path::PathBuf;
 

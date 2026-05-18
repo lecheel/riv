@@ -1247,6 +1247,7 @@ pub fn parse_action_str(s: &str) -> Option<Action> {
         ForceQuit | "q!",
         ShowHelp,
         RunBuild,
+        Guide,
         ToggleLineNumbers | "set nu",
         ToggleWhitespace,
         ShowShortcuts,

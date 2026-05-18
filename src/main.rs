@@ -19,6 +19,7 @@ pub mod ed;
 mod editor;
 mod ghost_text;
 mod git;
+mod guide;
 mod health;
 mod highlight;
 mod jsonrpc;

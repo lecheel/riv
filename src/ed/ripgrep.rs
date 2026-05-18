@@ -12,6 +12,7 @@ use crate::ed::build::BuildExt;
 use crate::ed::file_ops::FileOpsExt;
 use crate::ed::movement::MovementExt;
 use crate::editor::{CommandResult, Editor, Mode};
+use crate::misc::find_git_root;
 use crate::ripgrep;
 use crate::ripgrep::RipgrepOutput;
 use crate::window::Viewport;
@@ -90,7 +91,7 @@ impl RipgrepExt for Editor {
                 let dir = buffer
                     .file_path
                     .as_ref()
-                    .map(|p| ripgrep::find_git_root(p))
+                    .and_then(|p| find_git_root(p))
                     .unwrap_or_else(|| {
                         std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
                     });
@@ -103,7 +104,7 @@ impl RipgrepExt for Editor {
                 let dir = buffer
                     .file_path
                     .as_ref()
-                    .map(|p| ripgrep::find_git_root(p))
+                    .and_then(|p| find_git_root(p))
                     .unwrap_or_else(|| {
                         std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
                     });
