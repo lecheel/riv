@@ -103,10 +103,9 @@ impl LlmExt for Editor {
         }
 
         if !self.config.llm.enabled {
-            self.llm.buffer.add_message(
-                LlmRole::Error,
-                "LLM is not enabled. Set `llm.enabled = true` in config.toml",
-            );
+            self.llm
+                .buffer
+                .add_message(LlmRole::Error, "LLM is not enabled. Set `llm.enabled = true` in config.toml");
             self.sync_llm_to_buffer();
             self.dirty.mark_all();
             return CommandResult::Error("LLM not enabled".to_string());
@@ -212,8 +211,7 @@ impl LlmExt for Editor {
             Err(e) => {
                 self.llm.single_shot = false;
                 self.llm.infobar_response = false;
-                self.llm.buffer
-                    .set_infobar_message(format!("Failed to create LLM client: {}", e));
+                self.llm.buffer.set_infobar_message(format!("Failed to create LLM client: {}", e));
                 self.sync_llm_to_buffer();
                 self.dirty.mark_all();
                 return CommandResult::Error("LLM client error".to_string());
@@ -275,9 +273,7 @@ impl LlmExt for Editor {
 
                     // ── Single-shot path: popup display ──
                     if self.llm.infobar_response || self.llm.single_shot {
-                        let preset_label = self.llm.active_preset
-                            .map(|p| format!("{}", p))
-                            .unwrap_or_default();
+                        let preset_label = self.llm.active_preset.map(|p| format!("{}", p)).unwrap_or_default();
 
                         // Reset all single-shot flags
                         self.llm.infobar_response = false;
@@ -296,8 +292,7 @@ impl LlmExt for Editor {
                         self.llm.infobar_accumulator = response.clone();
 
                         // Show in register-style popup (multiline)
-                        let popup_lines: Vec<String> =
-                            response.lines().map(|l| l.to_string()).collect();
+                        let popup_lines: Vec<String> = response.lines().map(|l| l.to_string()).collect();
                         self.popup.register = if popup_lines.is_empty() {
                             Some(vec!["(empty response)".to_string()])
                         } else {
@@ -319,7 +314,9 @@ impl LlmExt for Editor {
                         self.llm.buffer.finish_streaming();
                     }
 
-                    let last_is_assistant = self.llm.buffer
+                    let last_is_assistant = self
+                        .llm
+                        .buffer
                         .messages()
                         .last()
                         .map(|m| m.role == LlmRole::Assistant)
@@ -332,8 +329,7 @@ impl LlmExt for Editor {
                     self.auto_save_session();
                     self.sync_llm_to_buffer();
 
-                    let viewing_llm =
-                        self.windows.active_window().map(|w| w.buffer_id) == self.llm.buffer_id;
+                    let viewing_llm = self.windows.active_window().map(|w| w.buffer_id) == self.llm.buffer_id;
 
                     if viewing_llm {
                         self.set_status(format!("✓ [{}]", self.llm.buffer.session_name()));
@@ -399,11 +395,7 @@ impl LlmExt for Editor {
 
     fn llm_session_save(&mut self) -> CommandResult {
         let mgr = self.session_manager();
-        match mgr.save(
-            self.llm.buffer.session_name(),
-            self.llm.buffer.preset(),
-            self.llm.buffer.messages(),
-        ) {
+        match mgr.save(self.llm.buffer.session_name(), self.llm.buffer.preset(), self.llm.buffer.messages()) {
             Ok(()) => {
                 self.set_status(format!("Saved session: {}", self.llm.buffer.session_name()));
                 CommandResult::Message(format!("Saved: {}", self.llm.buffer.session_name()))
@@ -445,10 +437,7 @@ impl LlmExt for Editor {
         for s in &sessions {
             let marker = if s.name == current { " ●" } else { "  " };
             let preset_str = s.preset.map(|p| format!(" [{p}]")).unwrap_or_default();
-            lines.push(format!(
-                "{} {}{} ({} msgs)",
-                marker, s.name, preset_str, s.message_count
-            ));
+            lines.push(format!("{} {}{} ({} msgs)", marker, s.name, preset_str, s.message_count));
         }
 
         let msg = lines.join("\n");
@@ -520,11 +509,7 @@ impl LlmExt for Editor {
         }
 
         let mgr = self.session_manager();
-        if let Err(_e) = mgr.save(
-            self.llm.buffer.session_name(),
-            self.llm.buffer.preset(),
-            self.llm.buffer.messages(),
-        ) {}
+        if let Err(_e) = mgr.save(self.llm.buffer.session_name(), self.llm.buffer.preset(), self.llm.buffer.messages()) {}
     }
 
     fn auto_load_session(&mut self) {
@@ -611,11 +596,7 @@ impl LlmExt for Editor {
         let content = format!("## TODO / Instructions:\n\n{}", initial_text);
 
         // Find existing LlmInput buffer ID FIRST (immutable borrow)
-        let existing_input_id = self
-            .buffers
-            .iter()
-            .find(|b| b.kind == BufferKind::LlmInput)
-            .map(|b| b.id);
+        let existing_input_id = self.buffers.iter().find(|b| b.kind == BufferKind::LlmInput).map(|b| b.id);
 
         let input_id = if let Some(id) = existing_input_id {
             // Now we can mutate without the immutable borrow alive
@@ -700,22 +681,13 @@ impl LlmExt for Editor {
     /// infobar (and register matching the preset). Does NOT enter LlmPrompt
     /// mode — the user stays in their current mode and sees the result inline.
     fn llm_quick_action(&mut self, preset: LlmPreset, status_msg: &str) -> CommandResult {
-        let was_visual = matches!(
-            self.mode,
-            Mode::Visual | Mode::VisualLine | Mode::VisualBlock
-        );
+        let was_visual = matches!(self.mode, Mode::Visual | Mode::VisualLine | Mode::VisualBlock);
 
         // ── 1. Grab text: stashed → live visual → current line ──
         let text = self
             .shortcut_visual_context
             .take()
-            .or_else(|| {
-                if was_visual {
-                    self.get_selection_text()
-                } else {
-                    None
-                }
-            })
+            .or_else(|| if was_visual { self.get_selection_text() } else { None })
             .unwrap_or_else(|| self.current_line_content());
 
         // ── 2. Clean up visual state once ──
@@ -747,10 +719,7 @@ impl LlmExt for Editor {
         self.llm.todo_prefix = false;
 
         let system_prompt = preset.system_prompt().to_string();
-        let messages = vec![
-            ("system".to_string(), system_prompt),
-            ("user".to_string(), text),
-        ];
+        let messages = vec![("system".to_string(), system_prompt), ("user".to_string(), text)];
 
         self.set_status(format!("{}…", status_msg));
         self.dirty.status_infobar = true;
@@ -776,12 +745,7 @@ impl LlmExt for Editor {
                 if self.mode == Mode::LlmPrompt && buffer.kind != BufferKind::Normal {
                     // fall through to search other windows below
                 } else if line_idx < buffer.line_count() {
-                    return buffer
-                        .rope
-                        .line(line_idx)
-                        .to_string()
-                        .trim_end()
-                        .to_string();
+                    return buffer.rope.line(line_idx).to_string().trim_end().to_string();
                 }
             }
         }
@@ -793,12 +757,7 @@ impl LlmExt for Editor {
                     if buffer.kind == BufferKind::Normal {
                         let line_idx = w.cursor.position.line;
                         if line_idx < buffer.line_count() {
-                            return buffer
-                                .rope
-                                .line(line_idx)
-                                .to_string()
-                                .trim_end()
-                                .to_string();
+                            return buffer.rope.line(line_idx).to_string().trim_end().to_string();
                         }
                     }
                 }
@@ -812,27 +771,16 @@ impl LlmExt for Editor {
 /// Helper for generating short timestamps
 impl Editor {
     fn session_manager(&self) -> SessionManager {
-        let config_dir = dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("riv");
+        let config_dir = dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join("riv");
         SessionManager::new(&config_dir)
     }
 
     fn timestamp_short() -> String {
         use std::time::{SystemTime, UNIX_EPOCH};
-        let secs = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
+        let secs = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         let days = (secs / 86400) % 365;
         let hours = (secs / 3600) % 24;
         let mins = (secs / 60) % 60;
-        format!(
-            "{:02}{:02}_{:02}{:02}",
-            days % 30 + 1,
-            (days / 30) + 1,
-            hours,
-            mins
-        )
+        format!("{:02}{:02}_{:02}{:02}", days % 30 + 1, (days / 30) + 1, hours, mins)
     }
 }

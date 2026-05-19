@@ -78,11 +78,7 @@ impl BufferOpsExt for Editor {
         self.ensure_cursor_visible_all();
 
         self.dirty.mark_all();
-        let buf_name = self
-            .buffers
-            .get(&next_id)
-            .map(|b| b.display_name())
-            .unwrap_or_else(|| "?".into());
+        let buf_name = self.buffers.get(&next_id).map(|b| b.display_name()).unwrap_or_else(|| "?".into());
         CommandResult::Message(format!("Switched to buffer: {}", buf_name))
     }
 
@@ -102,11 +98,7 @@ impl BufferOpsExt for Editor {
         ids.sort();
 
         let pos = ids.iter().position(|&id| id == current_id).unwrap_or(0);
-        let prev_id = if pos == 0 {
-            ids[ids.len() - 1]
-        } else {
-            ids[pos - 1]
-        };
+        let prev_id = if pos == 0 { ids[ids.len() - 1] } else { ids[pos - 1] };
 
         if let Some(window) = self.windows.active_window_mut() {
             window.set_buffer(prev_id);
@@ -118,11 +110,7 @@ impl BufferOpsExt for Editor {
         self.ensure_cursor_visible_all();
 
         self.dirty.mark_all();
-        let buf_name = self
-            .buffers
-            .get(&prev_id)
-            .map(|b| b.display_name())
-            .unwrap_or_else(|| "?".into());
+        let buf_name = self.buffers.get(&prev_id).map(|b| b.display_name()).unwrap_or_else(|| "?".into());
         CommandResult::Message(format!("Switched to buffer: {}", buf_name))
     }
 
@@ -150,22 +138,14 @@ impl BufferOpsExt for Editor {
         };
 
         // Gather info about the current buffer before any mutation
-        let (is_dirty, is_ephemeral, has_file_path, buf_name) = match self.buffers.get(&current_id)
-        {
-            Some(b) => (
-                b.dirty,
-                b.kind.is_ephemeral(),
-                b.file_path.is_some(),
-                b.display_name(),
-            ),
+        let (is_dirty, is_ephemeral, has_file_path, buf_name) = match self.buffers.get(&current_id) {
+            Some(b) => (b.dirty, b.kind.is_ephemeral(), b.file_path.is_some(), b.display_name()),
             None => return CommandResult::Error("Buffer not found.".into()),
         };
 
         // Check for unsaved changes — ephemeral buffers bypass this check
         if !is_ephemeral && is_dirty && !force {
-            return CommandResult::Error(
-                "Buffer has unsaved changes! Use :bd! to force delete.".into(),
-            );
+            return CommandResult::Error("Buffer has unsaved changes! Use :bd! to force delete.".into());
         }
 
         // Collect sorted buffer IDs to determine the replacement buffer
@@ -180,11 +160,7 @@ impl BufferOpsExt for Editor {
             let preferred = self
                 .buffers
                 .iter()
-                .find(|b| {
-                    b.id != current_id
-                        && b.kind == crate::buffer::BufferKind::Normal
-                        && b.file_path.is_some()
-                })
+                .find(|b| b.id != current_id && b.kind == crate::buffer::BufferKind::Normal && b.file_path.is_some())
                 .or_else(|| {
                     self.buffers
                         .iter()
@@ -222,10 +198,7 @@ impl BufferOpsExt for Editor {
             .map(|b| b.display_name())
             .unwrap_or_else(|| "[No Name]".into());
 
-        CommandResult::Message(format!(
-            "Deleted buffer '{}'. Switched to: {}",
-            buf_name, next_name
-        ))
+        CommandResult::Message(format!("Deleted buffer '{}'. Switched to: {}", buf_name, next_name))
     }
     /// Open the MRU (Most Recently Used) popup.
     fn open_mru(&mut self) -> CommandResult {

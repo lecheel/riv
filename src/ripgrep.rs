@@ -37,11 +37,7 @@ impl RipgrepOutput {
     /// then each matching line with its line number.
     pub fn format_for_buffer(&self) -> String {
         if self.results.is_empty() {
-            return format!(
-                "  No results found for: '{}'\n  in: {}\n",
-                self.pattern,
-                self.root_dir.display()
-            );
+            return format!("  No results found for: '{}'\n  in: {}\n", self.pattern, self.root_dir.display());
         }
 
         let mut output = String::new();
@@ -58,16 +54,10 @@ impl RipgrepOutput {
                 current_file = Some(&result.file_path);
                 file_count += 1;
             }
-            output.push_str(&format!(
-                "{}: {}\n",
-                result.line_number, result.line_content
-            ));
+            output.push_str(&format!("{}: {}\n", result.line_number, result.line_content));
         }
 
-        let mut header = format!(
-            "  [RG] '{}' — {} matches in {} files\n",
-            self.pattern, match_count, file_count
-        );
+        let mut header = format!("  [RG] '{}' — {} matches in {} files\n", self.pattern, match_count, file_count);
         header.push_str(&format!("  {}\n\n", "─".repeat(40)));
         header.push_str(&output);
 
@@ -209,10 +199,7 @@ pub fn word_under_cursor(line: &str, col: usize) -> String {
 }
 
 fn is_word_char(g: &str) -> bool {
-    g.chars()
-        .next()
-        .map(|c| c.is_alphanumeric() || c == '_')
-        .unwrap_or(false)
+    g.chars().next().map(|c| c.is_alphanumeric() || c == '_').unwrap_or(false)
 }
 
 /// Escape special regex characters for a literal search.
@@ -220,8 +207,7 @@ pub fn escape_regex(pattern: &str) -> String {
     let mut escaped = String::with_capacity(pattern.len() * 2);
     for c in pattern.chars() {
         match c {
-            '.' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '\\' | '^' | '$'
-            | '-' => {
+            '.' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '\\' | '^' | '$' | '-' => {
                 escaped.push('\\');
                 escaped.push(c);
             }

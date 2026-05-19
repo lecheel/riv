@@ -1,6 +1,6 @@
 [package]
 name = "riv-core"
-version = "0.9.4"
+version = "0.9.5"
 edition = "2021"
 license = "MIT"
 description = "A high-performance, modal text editor core written in Rust"

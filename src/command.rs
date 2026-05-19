@@ -73,12 +73,7 @@ impl CommandRegistry {
     ///
     /// **Note**: `handler` must be a `fn` pointer – closures or other callables
     /// are not accepted because they may capture state and are not `Copy`.
-    pub fn register_handler(
-        &mut self,
-        name: &str,
-        handler: fn(&mut Editor, &str) -> CommandResult,
-        desc: &str,
-    ) {
+    pub fn register_handler(&mut self, name: &str, handler: fn(&mut Editor, &str) -> CommandResult, desc: &str) {
         self.commands.insert(
             name.to_string(),
             CommandEntry {

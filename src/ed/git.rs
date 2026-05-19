@@ -81,10 +81,7 @@ impl GitExt for Editor {
         }
 
         let file_path = match self.windows.active_window() {
-            Some(w) => self
-                .buffers
-                .get(&w.buffer_id)
-                .and_then(|b| b.file_path.clone()),
+            Some(w) => self.buffers.get(&w.buffer_id).and_then(|b| b.file_path.clone()),
             None => {
                 self.clear_git_gutter_state();
                 return false;
@@ -136,12 +133,7 @@ impl GitExt for Editor {
         let needs_update = self
             .windows
             .active_window()
-            .map(|w| {
-                self.buffers
-                    .get(&w.buffer_id)
-                    .map(|b| !b.git_gutter.is_computed())
-                    .unwrap_or(true)
-            })
+            .map(|w| self.buffers.get(&w.buffer_id).map(|b| !b.git_gutter.is_computed()).unwrap_or(true))
             .unwrap_or(true);
 
         if !needs_update {
@@ -225,11 +217,7 @@ impl GitExt for Editor {
             return CommandResult::Message("No git diff available.".to_string());
         }
 
-        let cursor_line = self
-            .windows
-            .active_window()
-            .map(|w| w.cursor.position.line)
-            .unwrap_or(0);
+        let cursor_line = self.windows.active_window().map(|w| w.cursor.position.line).unwrap_or(0);
 
         let buffer_id = match self.windows.active_window() {
             Some(w) => w.buffer_id,
@@ -240,18 +228,12 @@ impl GitExt for Editor {
         let hunk_info = {
             let hunks = &self.git.cached_diff_hunks;
 
-            let next_idx = hunks
-                .iter()
-                .enumerate()
-                .find(|(_, h)| h.start > cursor_line)
-                .map(|(i, _)| i);
+            let next_idx = hunks.iter().enumerate().find(|(_, h)| h.start > cursor_line).map(|(i, _)| i);
 
             match next_idx {
                 Some(idx) => {
                     let editor_hunk = &hunks[idx];
-                    let target_line = self
-                        .first_changed_line_in_hunk(buffer_id, editor_hunk)
-                        .unwrap_or(editor_hunk.start);
+                    let target_line = self.first_changed_line_in_hunk(buffer_id, editor_hunk).unwrap_or(editor_hunk.start);
 
                     Some((
                         idx,
@@ -307,11 +289,7 @@ impl GitExt for Editor {
             return CommandResult::Message("No git diff available.".to_string());
         }
 
-        let cursor_line = self
-            .windows
-            .active_window()
-            .map(|w| w.cursor.position.line)
-            .unwrap_or(0);
+        let cursor_line = self.windows.active_window().map(|w| w.cursor.position.line).unwrap_or(0);
 
         let buffer_id = match self.windows.active_window() {
             Some(w) => w.buffer_id,
@@ -322,27 +300,18 @@ impl GitExt for Editor {
         let hunk_info = {
             let hunks = &self.git.cached_diff_hunks;
 
-            let current_idx = hunks
-                .iter()
-                .position(|h| cursor_line >= h.start && cursor_line < h.end);
+            let current_idx = hunks.iter().position(|h| cursor_line >= h.start && cursor_line < h.end);
 
             let prev_idx = match current_idx {
                 Some(0) => None,
                 Some(idx) => Some(idx - 1),
-                None => hunks
-                    .iter()
-                    .enumerate()
-                    .rev()
-                    .find(|(_, h)| h.start < cursor_line)
-                    .map(|(i, _)| i),
+                None => hunks.iter().enumerate().rev().find(|(_, h)| h.start < cursor_line).map(|(i, _)| i),
             };
 
             match prev_idx {
                 Some(idx) => {
                     let editor_hunk = &hunks[idx];
-                    let target_line = self
-                        .last_changed_line_in_hunk(buffer_id, editor_hunk)
-                        .unwrap_or(editor_hunk.start);
+                    let target_line = self.last_changed_line_in_hunk(buffer_id, editor_hunk).unwrap_or(editor_hunk.start);
 
                     Some((
                         idx,
@@ -398,11 +367,7 @@ impl GitExt for Editor {
             return CommandResult::Error("No git diff available.".to_string());
         }
 
-        let cursor_line = self
-            .windows
-            .active_window()
-            .map(|w| w.cursor.position.line)
-            .unwrap_or(0);
+        let cursor_line = self.windows.active_window().map(|w| w.cursor.position.line).unwrap_or(0);
 
         let hunk = match self
             .git
@@ -530,11 +495,7 @@ impl GitExt for Editor {
 
         self.ensure_git_gutter();
 
-        let cursor_line = self
-            .windows
-            .active_window()
-            .map(|w| w.cursor.position.line)
-            .unwrap_or(usize::MAX);
+        let cursor_line = self.windows.active_window().map(|w| w.cursor.position.line).unwrap_or(usize::MAX);
 
         let buffer_id = self.windows.active_window().map(|w| w.buffer_id);
         if buffer_id.is_none() {
@@ -565,11 +526,7 @@ impl GitExt for Editor {
             return;
         }
 
-        let cursor_line = self
-            .windows
-            .active_window()
-            .map(|w| w.cursor.position.line)
-            .unwrap_or(usize::MAX);
+        let cursor_line = self.windows.active_window().map(|w| w.cursor.position.line).unwrap_or(usize::MAX);
 
         let _buffer_id = self.windows.active_window().map(|w| w.buffer_id);
 
@@ -601,9 +558,7 @@ impl GitExt for Editor {
     fn last_changed_line_in_hunk(&self, buffer_id: BufferId, hunk: &EditorHunk) -> Option<usize> {
         let buffer = self.buffers.get(&buffer_id)?;
         let end = hunk.end.min(buffer.line_count());
-        (hunk.start..end)
-            .rev()
-            .find(|&line| buffer.git_gutter.sign_at(line).is_some())
+        (hunk.start..end).rev().find(|&line| buffer.git_gutter.sign_at(line).is_some())
     }
 
     fn force_git_gutter_recompute(&mut self) {
@@ -622,8 +577,7 @@ impl GitExt for Editor {
         if let Some(w) = self.windows.active_window() {
             if let Some(buf) = self.buffers.get_mut(&w.buffer_id) {
                 buf.git_gutter.clear();
-                buf.git_gutter
-                    .update_with_diff_signs(vec![], std::collections::HashMap::new());
+                buf.git_gutter.update_with_diff_signs(vec![], std::collections::HashMap::new());
             }
         }
         self.dirty.mark_all();
@@ -712,12 +666,7 @@ fn hunk_lines_to_restore(hunk: &DiffHunk) -> Vec<String> {
     hunk.lines
         .iter()
         .filter(|dl| dl.type_ == DiffLineType::Delete)
-        .map(|dl| {
-            dl.content
-                .strip_prefix('-')
-                .unwrap_or(&dl.content)
-                .to_string()
-        })
+        .map(|dl| dl.content.strip_prefix('-').unwrap_or(&dl.content).to_string())
         .collect()
 }
 

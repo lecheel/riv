@@ -70,10 +70,7 @@ impl LlmClient {
             cleaned = &cleaned[13..];
         }
 
-        cleaned
-            .trim_matches(|c| c == '"' || c == '\'')
-            .trim()
-            .to_string()
+        cleaned.trim_matches(|c| c == '"' || c == '\'').trim().to_string()
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -81,28 +78,18 @@ impl LlmClient {
     // ═══════════════════════════════════════════════════════════════════
 
     /// Send a multi-turn chat request with the full message array.
-    pub async fn chat_with_cancel(
-        &self,
-        messages: Vec<(String, String)>,
-        cancel_flag: Arc<AtomicBool>,
-    ) -> Result<String> {
+    pub async fn chat_with_cancel(&self, messages: Vec<(String, String)>, cancel_flag: Arc<AtomicBool>) -> Result<String> {
         let (_backend_type, _endpoint, _model) = self.backend_info();
 
         let result = match &self.config.backend {
             LlmBackend::Ollama { .. } => self.chat_ollama(messages, cancel_flag).await,
-            LlmBackend::LlamaCpp { .. } | LlmBackend::OpenAi { .. } => {
-                self.chat_openai_compatible(messages, cancel_flag).await
-            }
+            LlmBackend::LlamaCpp { .. } | LlmBackend::OpenAi { .. } => self.chat_openai_compatible(messages, cancel_flag).await,
         };
 
         result
     }
 
-    async fn chat_ollama(
-        &self,
-        messages: Vec<(String, String)>,
-        cancel_flag: Arc<AtomicBool>,
-    ) -> Result<String> {
+    async fn chat_ollama(&self, messages: Vec<(String, String)>, cancel_flag: Arc<AtomicBool>) -> Result<String> {
         let (endpoint, model) = match &self.config.backend {
             LlmBackend::Ollama { endpoint, model } => (endpoint.clone(), model.clone()),
             _ => unreachable!(),
@@ -147,18 +134,10 @@ impl LlmClient {
         }
     }
 
-    async fn chat_openai_compatible(
-        &self,
-        messages: Vec<(String, String)>,
-        cancel_flag: Arc<AtomicBool>,
-    ) -> Result<String> {
+    async fn chat_openai_compatible(&self, messages: Vec<(String, String)>, cancel_flag: Arc<AtomicBool>) -> Result<String> {
         let (endpoint, model, api_key) = match &self.config.backend {
             LlmBackend::LlamaCpp { endpoint, model } => (endpoint.clone(), model.clone(), None),
-            LlmBackend::OpenAi {
-                endpoint,
-                model,
-                api_key,
-            } => (endpoint.clone(), model.clone(), Some(api_key.clone())),
+            LlmBackend::OpenAi { endpoint, model, api_key } => (endpoint.clone(), model.clone(), Some(api_key.clone())),
             _ => unreachable!(),
         };
         let url = format!("{}/v1/chat/completions", endpoint);
@@ -212,62 +191,38 @@ impl LlmClient {
     // Convenience methods for specific tasks
     // ═══════════════════════════════════════════════════════════════════
 
-    pub async fn check_english_with_cancel(
-        &self,
-        text: &str,
-        cancel_flag: Arc<AtomicBool>,
-    ) -> Result<String> {
-        let system =
-            "You are a raw text corrector. You must reply ONLY with the corrected English text. \
+    pub async fn check_english_with_cancel(&self, text: &str, cancel_flag: Arc<AtomicBool>) -> Result<String> {
+        let system = "You are a raw text corrector. You must reply ONLY with the corrected English text. \
              Do NOT wrap the text in quotes. Do NOT add prefixes like 'Correct:'. \
              Do NOT provide explanations. Just the raw string.";
 
-        let result = self
-            .raw_generate_with_cancel(text, system, cancel_flag)
-            .await?;
+        let result = self.raw_generate_with_cancel(text, system, cancel_flag).await?;
 
         Ok(Self::clean_response(result))
     }
 
-    pub async fn translate_to_chinese_with_cancel(
-        &self,
-        text: &str,
-        cancel_flag: Arc<AtomicBool>,
-    ) -> Result<String> {
+    pub async fn translate_to_chinese_with_cancel(&self, text: &str, cancel_flag: Arc<AtomicBool>) -> Result<String> {
         let system = "You are a raw translation engine. Translate the text to Simplified Chinese. \
                       Reply ONLY with the translated text. Do NOT wrap in quotes, do NOT add prefixes, \
                       and do NOT provide explanations.";
 
-        let result = self
-            .raw_generate_with_cancel(text, system, cancel_flag)
-            .await?;
+        let result = self.raw_generate_with_cancel(text, system, cancel_flag).await?;
 
         Ok(Self::clean_response(result))
     }
 
-    pub async fn translate_to_english_with_cancel(
-        &self,
-        text: &str,
-        cancel_flag: Arc<AtomicBool>,
-    ) -> Result<String> {
+    pub async fn translate_to_english_with_cancel(&self, text: &str, cancel_flag: Arc<AtomicBool>) -> Result<String> {
         let system = "You are a raw translation engine. Translate the text to English. \
                       Reply ONLY with the translated English text. Do NOT wrap in quotes, \
                       do NOT add prefixes, and do NOT provide explanations.";
 
-        let result = self
-            .raw_generate_with_cancel(text, system, cancel_flag)
-            .await?;
+        let result = self.raw_generate_with_cancel(text, system, cancel_flag).await?;
 
         Ok(Self::clean_response(result))
     }
 
     /// Core single-turn generation with cancellation
-    async fn raw_generate_with_cancel(
-        &self,
-        prompt: &str,
-        system_prompt: &str,
-        cancel_flag: Arc<AtomicBool>,
-    ) -> Result<String> {
+    async fn raw_generate_with_cancel(&self, prompt: &str, system_prompt: &str, cancel_flag: Arc<AtomicBool>) -> Result<String> {
         let messages = vec![
             ("system".to_string(), system_prompt.to_string()),
             ("user".to_string(), prompt.to_string()),

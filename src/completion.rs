@@ -283,12 +283,7 @@ impl CompletionEngine {
         }
     }
 
-    pub fn try_trigger(
-        &mut self,
-        buffer: &Buffer,
-        position: CursorPosition,
-        vocab: &crate::vocab::VocabManager,
-    ) -> bool {
+    pub fn try_trigger(&mut self, buffer: &Buffer, position: CursorPosition, vocab: &crate::vocab::VocabManager) -> bool {
         let (word, is_path) = word_or_path_before_cursor(buffer, position);
 
         let after_dot = !is_path && {
@@ -335,11 +330,7 @@ impl CompletionEngine {
             items.extend(path_items);
         }
 
-        items.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        items.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
         items.truncate(self.max_items);
 
         if items.is_empty() {
@@ -381,22 +372,14 @@ impl CompletionEngine {
 
     /// prefix matching in member-access context (after `.` or `::`).
     fn apply_filter(&mut self) {
-        let trigger_lower = self
-            .context
-            .as_ref()
-            .map(|c| c.trigger.to_lowercase())
-            .unwrap_or_default();
+        let trigger_lower = self.context.as_ref().map(|c| c.trigger.to_lowercase()).unwrap_or_default();
 
         if trigger_lower.is_empty() {
             self.items = self.base_items.clone();
             return;
         }
 
-        let after_trigger_char = self
-            .context
-            .as_ref()
-            .map(|ctx| ctx.after_trigger_char)
-            .unwrap_or(false);
+        let after_trigger_char = self.context.as_ref().map(|ctx| ctx.after_trigger_char).unwrap_or(false);
 
         let estimated = self.base_items.len();
         self.items = Vec::with_capacity(estimated);
@@ -435,18 +418,12 @@ impl CompletionEngine {
                 match (a_is_lsp, b_is_lsp) {
                     (true, false) => std::cmp::Ordering::Less,
                     (false, true) => std::cmp::Ordering::Greater,
-                    _ => b
-                        .score
-                        .partial_cmp(&a.score)
-                        .unwrap_or(std::cmp::Ordering::Equal),
+                    _ => b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal),
                 }
             });
         } else {
-            self.items.sort_by(|a, b| {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
+            self.items
+                .sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
         }
 
         self.items.truncate(self.max_items);
@@ -462,11 +439,7 @@ impl CompletionEngine {
             return;
         }
 
-        let after_trigger_char = self
-            .context
-            .as_ref()
-            .map(|ctx| ctx.after_trigger_char)
-            .unwrap_or(false);
+        let after_trigger_char = self.context.as_ref().map(|ctx| ctx.after_trigger_char).unwrap_or(false);
 
         if new_trigger.len() < self.trigger_len && !after_trigger_char {
             self.cancel();
@@ -550,11 +523,7 @@ impl CompletionEngine {
             items.extend(word_items);
         }
 
-        items.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        items.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
 
         self.items = items;
         self.selected_index = 0;
@@ -571,10 +540,7 @@ impl CompletionEngine {
     /// Unified completion update: merges local + LSP candidates.
     /// FIX: After dot, LSP items get +50.0 boost and buffer words are excluded.
     /// FIX: filter_and_score_entries preserves LSP scores (doesn't overwrite).
-    pub fn update_unified_completions(
-        editor: &mut Editor,
-        lsp_items: Option<Vec<crate::lsp::CompletionItem>>,
-    ) {
+    pub fn update_unified_completions(editor: &mut Editor, lsp_items: Option<Vec<crate::lsp::CompletionItem>>) {
         let ctx = extract_cursor_context(editor);
         let prefix = ctx.filter_prefix().to_string();
         let prefix_lower = prefix.to_lowercase();
@@ -587,12 +553,7 @@ impl CompletionEngine {
             all_entries.reserve(lsp.len());
             for item in lsp {
                 let raw_label = item.label.clone();
-                let label = raw_label
-                    .split("(use ")
-                    .next()
-                    .unwrap_or(&raw_label)
-                    .trim()
-                    .to_string();
+                let label = raw_label.split("(use ").next().unwrap_or(&raw_label).trim().to_string();
 
                 let text = item
                     .get_insert_text()
@@ -603,11 +564,10 @@ impl CompletionEngine {
                     .trim()
                     .to_string();
 
-                let doc = item.documentation.as_ref().and_then(|v| {
-                    v.as_str()
-                        .map(String::from)
-                        .or_else(|| v.get("value")?.as_str().map(String::from))
-                });
+                let doc = item
+                    .documentation
+                    .as_ref()
+                    .and_then(|v| v.as_str().map(String::from).or_else(|| v.get("value")?.as_str().map(String::from)));
 
                 // FIX: Scoring after dot — LSP items get a large boost
                 // After dot: +50.0 (always beats buffer words max ~50.0)
@@ -635,10 +595,7 @@ impl CompletionEngine {
                 };
                 score += kind_bonus;
 
-                let kind = item
-                    .kind
-                    .map(CompletionKind::from_lsp_kind)
-                    .unwrap_or(CompletionKind::Text);
+                let kind = item.kind.map(CompletionKind::from_lsp_kind).unwrap_or(CompletionKind::Text);
 
                 let lsp_detail = match &item.detail {
                     Some(d) if !d.trim().is_empty() => Some(format!("{} [lsp]", d)),
@@ -670,15 +627,8 @@ impl CompletionEngine {
             editor.completion.selected_index = 0;
             editor.completion.active = true;
 
-            let position = editor
-                .windows
-                .active_window()
-                .map(|w| w.cursor.position)
-                .unwrap_or_default();
-            let line_text = editor
-                .current_buffer()
-                .and_then(|b| b.line_text(position.line))
-                .unwrap_or_default();
+            let position = editor.windows.active_window().map(|w| w.cursor.position).unwrap_or_default();
+            let line_text = editor.current_buffer().and_then(|b| b.line_text(position.line)).unwrap_or_default();
 
             editor.completion.context = Some(CompletionContext {
                 trigger: prefix,
@@ -694,11 +644,10 @@ impl CompletionEngine {
 
     pub fn update_resolved_item(&mut self, resolved: &crate::lsp::CompletionItem) {
         let label = &resolved.label;
-        let new_doc = resolved.documentation.as_ref().and_then(|v| {
-            v.as_str()
-                .map(String::from)
-                .or_else(|| v.get("value")?.as_str().map(String::from))
-        });
+        let new_doc = resolved
+            .documentation
+            .as_ref()
+            .and_then(|v| v.as_str().map(String::from).or_else(|| v.get("value")?.as_str().map(String::from)));
         let new_detail = resolved.detail.clone();
 
         let mut found = false;
@@ -739,11 +688,7 @@ impl CompletionEngine {
             .iter()
             .map(|i| {
                 let kind_str = i.kind.as_str();
-                let kind_len = if kind_str.is_empty() {
-                    0
-                } else {
-                    kind_str.len() + 1
-                };
+                let kind_len = if kind_str.is_empty() { 0 } else { kind_str.len() + 1 };
                 kind_len + i.label.len()
             })
             .max()
@@ -928,31 +873,18 @@ pub fn collect_file_paths(trigger: &str, base_dir: Option<&Path>) -> Vec<Complet
     } else {
         let trigger_path = Path::new(trigger);
         let parent = trigger_path.parent();
-        let prefix = trigger_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
+        let prefix = trigger_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
         match parent {
-            Some(p) if !p.as_os_str().is_empty() => {
-                (base.join(p), p.to_string_lossy().to_string(), prefix)
-            }
+            Some(p) if !p.as_os_str().is_empty() => (base.join(p), p.to_string_lossy().to_string(), prefix),
             _ => (base.to_path_buf(), String::new(), prefix),
         }
     };
 
-    list_dir_completion_entries(
-        &full_dir,
-        &file_prefix,
-        &parent_str,
-        !trigger.starts_with('.'),
-    )
+    list_dir_completion_entries(&full_dir, &file_prefix, &parent_str, !trigger.starts_with('.'))
 }
 
-pub fn collect_vocab_words(
-    vocab: &crate::vocab::VocabManager,
-    prefix: &str,
-) -> Vec<CompletionEntry> {
+pub fn collect_vocab_words(vocab: &crate::vocab::VocabManager, prefix: &str) -> Vec<CompletionEntry> {
     let prefix_lower = prefix.to_lowercase();
     vocab
         .words()
@@ -997,10 +929,7 @@ fn collect_buffer_words(buffer: &Buffer, prefix: &str) -> Vec<CompletionEntry> {
                     current_word.clear();
                 }
             }
-            if !current_word.is_empty()
-                && current_word.len() > prefix.len()
-                && current_word.to_lowercase().starts_with(&prefix_lower)
-            {
+            if !current_word.is_empty() && current_word.len() > prefix.len() && current_word.to_lowercase().starts_with(&prefix_lower) {
                 words.insert(current_word);
             }
         }
@@ -1064,12 +993,7 @@ pub fn compute_score(text: &str, trigger: &str) -> f64 {
     0.0
 }
 
-fn list_dir_completion_entries(
-    dir: &Path,
-    file_prefix: &str,
-    path_prefix: &str,
-    skip_hidden: bool,
-) -> Vec<CompletionEntry> {
+fn list_dir_completion_entries(dir: &Path, file_prefix: &str, path_prefix: &str, skip_hidden: bool) -> Vec<CompletionEntry> {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return Vec::new(),
@@ -1098,17 +1022,9 @@ fn list_dir_completion_entries(
         };
 
         let is_dir = metadata.is_dir();
-        let kind = if is_dir {
-            CompletionKind::Folder
-        } else {
-            CompletionKind::File
-        };
+        let kind = if is_dir { CompletionKind::Folder } else { CompletionKind::File };
 
-        let display_name = if is_dir {
-            format!("{}/", name)
-        } else {
-            name.clone()
-        };
+        let display_name = if is_dir { format!("{}/", name) } else { name.clone() };
 
         let insert_text = if path_prefix.is_empty() {
             display_name
@@ -1158,17 +1074,11 @@ fn list_dir_completion_entries(
     items
 }
 
-pub fn collect_file_completions_for_arg(
-    prefix: &str,
-    base_dir: Option<&Path>,
-) -> Vec<CompletionEntry> {
+pub fn collect_file_completions_for_arg(prefix: &str, base_dir: Option<&Path>) -> Vec<CompletionEntry> {
     let base = if prefix.starts_with('/') {
         Path::new("/").to_path_buf()
     } else {
-        base_dir
-            .and_then(|p| p.parent())
-            .unwrap_or(Path::new("."))
-            .to_path_buf()
+        base_dir.and_then(|p| p.parent()).unwrap_or(Path::new(".")).to_path_buf()
     };
 
     if is_path_trigger(prefix) {
@@ -1185,25 +1095,15 @@ pub fn collect_file_completions_for_arg(
         } else {
             let trigger_path = Path::new(prefix);
             let parent = trigger_path.parent();
-            let file_prefix = trigger_path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
+            let file_prefix = trigger_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
             match parent {
-                Some(p) if !p.as_os_str().is_empty() => {
-                    (base.join(p), p.to_string_lossy().to_string(), file_prefix)
-                }
+                Some(p) if !p.as_os_str().is_empty() => (base.join(p), p.to_string_lossy().to_string(), file_prefix),
                 _ => (base.to_path_buf(), String::new(), file_prefix),
             }
         };
 
-        list_dir_completion_entries(
-            &full_dir,
-            file_prefix,
-            &parent_str,
-            !prefix.starts_with('.'),
-        )
+        list_dir_completion_entries(&full_dir, file_prefix, &parent_str, !prefix.starts_with('.'))
     } else {
         list_dir_completion_entries(&base, prefix, "", !prefix.starts_with('.'))
     }
@@ -1226,10 +1126,7 @@ fn collect_local_completions(editor: &Editor, ctx: &CursorContext) -> Vec<Comple
     // Buffer words (only when NOT after a trigger)
     if let Some(buffer) = editor.current_buffer() {
         if prefix.len() >= editor.completion.trigger_len {
-            let word_items = editor
-                .completion
-                .word_index
-                .collect_matching(prefix, prefix.len());
+            let word_items = editor.completion.word_index.collect_matching(prefix, prefix.len());
             entries.extend(word_items);
         }
     }
@@ -1251,10 +1148,7 @@ fn collect_local_completions(editor: &Editor, ctx: &CursorContext) -> Vec<Comple
 /// FIX: filter_and_score_entries for member-access context (after `.` or `::`).
 /// Preserves the score already assigned to LSP items (including +50.0 boost
 /// and sort_text/kind bonuses). LSP items are ALWAYS sorted above non-LSP items.
-fn filter_and_score_entries_lsp_priority(
-    entries: Vec<CompletionEntry>,
-    prefix: &str,
-) -> Vec<CompletionEntry> {
+fn filter_and_score_entries_lsp_priority(entries: Vec<CompletionEntry>, prefix: &str) -> Vec<CompletionEntry> {
     let prefix_lower = prefix.to_lowercase();
 
     let mut filtered: Vec<CompletionEntry> = entries
@@ -1281,10 +1175,7 @@ fn filter_and_score_entries_lsp_priority(
         match (a_is_lsp, b_is_lsp) {
             (true, false) => std::cmp::Ordering::Less,
             (false, true) => std::cmp::Ordering::Greater,
-            _ => b
-                .score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal),
+            _ => b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal),
         }
     });
 
@@ -1303,9 +1194,7 @@ fn filter_and_score_entries(entries: Vec<CompletionEntry>, prefix: &str) -> Vec<
 
     let mut filtered: Vec<CompletionEntry> = entries
         .into_iter()
-        .filter(|item| {
-            prefix_lower.is_empty() || item.text.to_lowercase().starts_with(&prefix_lower)
-        })
+        .filter(|item| prefix_lower.is_empty() || item.text.to_lowercase().starts_with(&prefix_lower))
         .map(|mut item| {
             // FIX: Only re-score non-LSP items
             if item.source != CompletionSource::Lsp {
@@ -1322,10 +1211,7 @@ fn filter_and_score_entries(entries: Vec<CompletionEntry>, prefix: &str) -> Vec<
         match (a_exact, b_exact) {
             (true, false) => std::cmp::Ordering::Less,
             (false, true) => std::cmp::Ordering::Greater,
-            _ => b
-                .score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal),
+            _ => b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal),
         }
     });
 

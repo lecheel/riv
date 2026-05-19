@@ -129,10 +129,7 @@ mod tests {
     #[test]
     fn preserves_normal_text() {
         let normal = "src/main.rs — 42:7";
-        assert!(matches!(
-            sanitize_for_display(normal),
-            std::borrow::Cow::Borrowed(_)
-        ));
+        assert!(matches!(sanitize_for_display(normal), std::borrow::Cow::Borrowed(_)));
     }
 
     #[test]

@@ -63,12 +63,7 @@ fn softwrap_row_offset(line_text: &str, cursor_col: usize, content_width: usize)
     row
 }
 
-fn calculate_cursor_screen_row(
-    editor: &Editor,
-    gutter_w: u16,
-    mark_gutter_w: u16,
-    git_gutter_w: u16,
-) -> u16 {
+fn calculate_cursor_screen_row(editor: &Editor, gutter_w: u16, mark_gutter_w: u16, git_gutter_w: u16) -> u16 {
     editor
         .windows
         .active_window()
@@ -122,10 +117,7 @@ fn calculate_cursor_screen_col(editor: &Editor) -> usize {
                     let graphemes: Vec<_> = line_text.graphemes(true).collect();
                     let start = scroll_col.min(graphemes.len());
                     let end = cursor_col.min(graphemes.len());
-                    graphemes[start..end]
-                        .iter()
-                        .map(|g| UnicodeWidthStr::width(*g))
-                        .sum::<usize>()
+                    graphemes[start..end].iter().map(|g| UnicodeWidthStr::width(*g)).sum::<usize>()
                 }
             } else {
                 cursor_col.saturating_sub(scroll_col)
@@ -150,20 +142,14 @@ pub fn render_completion_doc_popup(
         return Ok(());
     }
 
-    let clean_detail = item.detail.as_deref().map(|d| {
-        d.replace(" [lsp]", "")
-            .replace(" [buffer]", "")
-            .replace(" [vocab]", "")
-    });
-
-    let has_meaningful_doc = item
-        .documentation
-        .as_ref()
-        .map_or(false, |d| !d.trim().is_empty());
-
-    let has_meaningful_detail = clean_detail
+    let clean_detail = item
+        .detail
         .as_deref()
-        .map_or(false, |d| !d.trim().is_empty());
+        .map(|d| d.replace(" [lsp]", "").replace(" [buffer]", "").replace(" [vocab]", ""));
+
+    let has_meaningful_doc = item.documentation.as_ref().map_or(false, |d| !d.trim().is_empty());
+
+    let has_meaningful_detail = clean_detail.as_deref().map_or(false, |d| !d.trim().is_empty());
 
     if !has_meaningful_doc && !has_meaningful_detail {
         return Ok(());
@@ -238,9 +224,7 @@ pub fn render_completion_doc_popup(
     for (i, line) in doc_lines.iter().take(visible_rows).enumerate() {
         let row_y = comp_y + 1 + i as u16;
 
-        let row_style = RowStyle::normal()
-            .with_border(catppuccin::SURFACE2)
-            .with_bg(catppuccin::MANTLE);
+        let row_style = RowStyle::normal().with_border(catppuccin::SURFACE2).with_bg(catppuccin::MANTLE);
 
         if line.is_empty() {
             draw_empty_row(stdout, x, row_y, doc_width, &row_style)?;
@@ -281,9 +265,7 @@ pub fn render_completion_doc_popup(
     } else {
         String::new()
     };
-    let bottom_style = BoxStyle::default()
-        .with_border(catppuccin::SURFACE2)
-        .with_footer(footer);
+    let bottom_style = BoxStyle::default().with_border(catppuccin::SURFACE2).with_footer(footer);
     draw_bottom_border(stdout, x, bottom_y, doc_width, &bottom_style)?;
 
     Ok(())
@@ -302,12 +284,7 @@ pub fn render_completion_popup(
 
     let items = &editor.completion.items;
     let selected = editor.completion.selected_index;
-    let trigger = editor
-        .completion
-        .context
-        .as_ref()
-        .map(|c| c.trigger.as_str())
-        .unwrap_or("");
+    let trigger = editor.completion.context.as_ref().map(|c| c.trigger.as_str()).unwrap_or("");
 
     if items.is_empty() {
         return Ok(());
@@ -320,12 +297,7 @@ pub fn render_completion_popup(
         } else {
             crate::buffer::BufferId::default()
         };
-        if editor
-            .search
-            .marks
-            .iter()
-            .any(|(_, (bid, _))| *bid == current_bid)
-        {
+        if editor.search.marks.iter().any(|(_, (bid, _))| *bid == current_bid) {
             1u16
         } else {
             0u16
@@ -338,8 +310,7 @@ pub fn render_completion_popup(
     };
 
     // 1. Calculate initial visual position to check available space
-    let cursor_screen_row =
-        calculate_cursor_screen_row(editor, gutter_w, mark_gutter_w, git_gutter_w);
+    let cursor_screen_row = calculate_cursor_screen_row(editor, gutter_w, mark_gutter_w, git_gutter_w);
     let space_below = edit_height.saturating_sub(cursor_screen_row + 1);
 
     // 2. UX Improvement: If line is in the bottom 25% of text area, apply scroll_center
@@ -357,8 +328,7 @@ pub fn render_completion_popup(
     }
 
     // 3. Recalculate visual positions now that the viewport might have scrolled
-    let cursor_screen_row =
-        calculate_cursor_screen_row(editor, gutter_w, mark_gutter_w, git_gutter_w);
+    let cursor_screen_row = calculate_cursor_screen_row(editor, gutter_w, mark_gutter_w, git_gutter_w);
     let cursor_screen_col = calculate_cursor_screen_col(editor);
 
     // ── Strictly Position Below: shrink if not enough space, never overlap above ──
@@ -402,16 +372,11 @@ pub fn render_completion_popup(
 
     let max_left_w = rendered_items
         .iter()
-        .map(|item| {
-            max_kind_w
-                + if max_kind_w > 0 { 1 } else { 0 }
-                + UnicodeWidthStr::width(item.label.as_str())
-        })
+        .map(|item| max_kind_w + if max_kind_w > 0 { 1 } else { 0 } + UnicodeWidthStr::width(item.label.as_str()))
         .max()
         .unwrap_or(0);
     let max_item_width = max_left_w.max(UnicodeWidthStr::width(trigger));
-    let popup_content_width =
-        (max_item_width + 4).min((term_width as usize).saturating_sub(4)) as u16;
+    let popup_content_width = (max_item_width + 4).min((term_width as usize).saturating_sub(4)) as u16;
 
     let popup_width = (popup_content_width + 2).max(40);
     let popup_height = (visible_count as u16) + 2;
@@ -461,21 +426,13 @@ pub fn render_completion_popup(
 
         segments.push(Segment::new(
             &item.label,
-            if is_selected {
-                catppuccin::TEXT
-            } else {
-                catppuccin::SUBTEXT
-            },
+            if is_selected { catppuccin::TEXT } else { catppuccin::SUBTEXT },
         ));
 
         let row_style = if is_selected {
-            RowStyle::selected()
-                .with_border(catppuccin::SURFACE2)
-                .with_bg(catppuccin::SURFACE0)
+            RowStyle::selected().with_border(catppuccin::SURFACE2).with_bg(catppuccin::SURFACE0)
         } else {
-            RowStyle::normal()
-                .with_border(catppuccin::SURFACE2)
-                .with_bg(catppuccin::MANTLE)
+            RowStyle::normal().with_border(catppuccin::SURFACE2).with_bg(catppuccin::MANTLE)
         };
         draw_row(stdout, x, row_y, popup_width, &segments, &row_style)?;
     }
@@ -494,27 +451,16 @@ pub fn render_completion_popup(
             SetBackgroundColor(catppuccin::MANTLE)
         )?;
         let info_display = truncate_to_width(&info_text, popup_width as usize);
-        let pad =
-            (popup_width as usize).saturating_sub(UnicodeWidthStr::width(info_display.as_str()));
+        let pad = (popup_width as usize).saturating_sub(UnicodeWidthStr::width(info_display.as_str()));
         execute!(stdout, Print(info_display.clone()))?;
-        let pad =
-            (popup_width as usize).saturating_sub(UnicodeWidthStr::width(info_display.as_str()));
+        let pad = (popup_width as usize).saturating_sub(UnicodeWidthStr::width(info_display.as_str()));
         if pad > 0 {
             execute!(stdout, Print(&" ".repeat(pad)))?;
         }
     }
 
     if let Some(selected_item) = items.get(selected) {
-        render_completion_doc_popup(
-            selected_item,
-            stdout,
-            x,
-            y,
-            popup_width,
-            popup_height,
-            term_width,
-            term_height,
-        )?;
+        render_completion_doc_popup(selected_item, stdout, x, y, popup_width, popup_height, term_width, term_height)?;
     }
     Ok(())
 }

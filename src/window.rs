@@ -278,9 +278,7 @@ impl SplitNode {
     pub fn contains(&self, window_id: WindowId) -> bool {
         match self {
             SplitNode::Leaf(id) => *id == window_id,
-            SplitNode::Split { first, second, .. } => {
-                first.contains(window_id) || second.contains(window_id)
-            }
+            SplitNode::Split { first, second, .. } => first.contains(window_id) || second.contains(window_id),
         }
     }
 
@@ -294,8 +292,7 @@ impl SplitNode {
             }
             SplitNode::Leaf(_) => false,
             SplitNode::Split { first, second, .. } => {
-                first.replace_leaf(window_id, new_node.clone())
-                    || second.replace_leaf(window_id, new_node)
+                first.replace_leaf(window_id, new_node.clone()) || second.replace_leaf(window_id, new_node)
             }
         }
     }
@@ -441,14 +438,12 @@ impl WindowManager {
 
     /// Return a reference to the active window.
     pub fn active_window(&self) -> Option<&Window> {
-        self.active_id
-            .and_then(|id| self.windows.iter().find(|w| w.id == id))
+        self.active_id.and_then(|id| self.windows.iter().find(|w| w.id == id))
     }
 
     /// Return a mutable reference to the active window.
     pub fn active_window_mut(&mut self) -> Option<&mut Window> {
-        self.active_id
-            .and_then(|id| self.windows.iter_mut().find(|w| w.id == id))
+        self.active_id.and_then(|id| self.windows.iter_mut().find(|w| w.id == id))
     }
 
     /// Return a reference to a window by id.
@@ -571,11 +566,7 @@ impl WindowManager {
         self.windows.push(new_window);
 
         // Build the new subtree: a Split with the old leaf and new leaf.
-        let new_node = SplitNode::split(
-            direction,
-            SplitNode::leaf(active_id),
-            SplitNode::leaf(new_id),
-        );
+        let new_node = SplitNode::split(direction, SplitNode::leaf(active_id), SplitNode::leaf(new_id));
 
         // Replace the active leaf in the tree.
         if let Some(ref mut root) = self.root {
@@ -598,11 +589,7 @@ impl WindowManager {
 
     /// Split the active window and load a different buffer into the new pane.
     /// Returns `Ok(())` on success or `Err(msg)` on failure.
-    pub fn split_active_with_buffer(
-        &mut self,
-        direction: SplitDirection,
-        buffer_id: BufferId,
-    ) -> Result<(), String> {
+    pub fn split_active_with_buffer(&mut self, direction: SplitDirection, buffer_id: BufferId) -> Result<(), String> {
         let active_id = match self.active_id {
             Some(id) => id,
             None => {
@@ -648,11 +635,7 @@ impl WindowManager {
         self.windows.push(new_window);
 
         // Build the new subtree.
-        let new_node = SplitNode::split(
-            direction,
-            SplitNode::leaf(active_id),
-            SplitNode::leaf(new_id),
-        );
+        let new_node = SplitNode::split(direction, SplitNode::leaf(active_id), SplitNode::leaf(new_id));
 
         if let Some(ref mut root) = self.root {
             let replaced = root.replace_leaf(active_id, new_node);
@@ -709,11 +692,7 @@ impl WindowManager {
             Some(id) => id,
             None => return,
         };
-        let buffer_id = self
-            .windows
-            .iter()
-            .find(|w| w.id == active_id)
-            .map(|w| w.buffer_id);
+        let buffer_id = self.windows.iter().find(|w| w.id == active_id).map(|w| w.buffer_id);
 
         // Simplify to a single leaf.
         self.root = Some(SplitNode::leaf(active_id));
@@ -750,11 +729,7 @@ impl WindowManager {
         }
         let current = self.active_id.unwrap_or(self.windows[0].id);
         if let Some(idx) = self.windows.iter().position(|w| w.id == current) {
-            let prev = if idx == 0 {
-                self.windows.len() - 1
-            } else {
-                idx - 1
-            };
+            let prev = if idx == 0 { self.windows.len() - 1 } else { idx - 1 };
             self.active_id = Some(self.windows[prev].id);
         }
     }

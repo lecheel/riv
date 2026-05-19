@@ -72,8 +72,7 @@ pub fn load_api_key_from_config() -> Option<String> {
 
 /// Save API key to `~/.codeium/config.toml`.
 pub fn save_api_key_to_config(api_key: &str) -> std::io::Result<()> {
-    let home = dirs::home_dir()
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "No home directory"))?;
+    let home = dirs::home_dir().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "No home directory"))?;
     let config_dir = home.join(".codeium");
     fs::create_dir_all(&config_dir)?;
     let config_path = config_dir.join("config.toml");
@@ -108,8 +107,7 @@ pub fn exchange_token_for_api_key(token: &str) -> Result<String> {
         anyhow::bail!("Codeium API error (HTTP {}): {}", status, body);
     }
 
-    let json: serde_json::Value =
-        serde_json::from_str(&body).context("Invalid JSON response from Codeium")?;
+    let json: serde_json::Value = serde_json::from_str(&body).context("Invalid JSON response from Codeium")?;
 
     let api_key = json
         .get("api_key")
@@ -141,9 +139,7 @@ pub fn open_codeium_auth_browser() -> String {
     #[cfg(target_os = "macos")]
     let _ = std::process::Command::new("open").arg(&url).spawn();
     #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("cmd")
-        .args(["/C", "start", &url])
-        .spawn();
+    let _ = std::process::Command::new("cmd").args(["/C", "start", &url]).spawn();
 
     state
 }
@@ -251,9 +247,7 @@ impl CodeiumServer {
         // Give the server a moment to fully initialize
         std::thread::sleep(Duration::from_millis(500));
 
-        let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(10))
-            .build()?;
+        let client = reqwest::blocking::Client::builder().timeout(Duration::from_secs(10)).build()?;
 
         Ok(Self {
             _process: process,
@@ -299,13 +293,7 @@ impl CodeiumServer {
     }
 
     /// Send a GetCompletions request to the Codeium server.
-    fn get_completion(
-        &self,
-        full_text: &str,
-        cursor_offset: usize,
-        language: &str,
-        absolute_path: Option<&str>,
-    ) -> Result<Option<String>> {
+    fn get_completion(&self, full_text: &str, cursor_offset: usize, language: &str, absolute_path: Option<&str>) -> Result<Option<String>> {
         let url = format!(
             "http://127.0.0.1:{}/exa.language_server_pb.LanguageServerService/GetCompletions",
             self.port
@@ -498,9 +486,7 @@ impl CodeiumManager {
                 self.startup_rx = Some(rx);
                 None
             }
-            Err(oneshot::error::TryRecvError::Closed) => {
-                Some(Err(anyhow::anyhow!("Codeium: startup channel closed")))
-            }
+            Err(oneshot::error::TryRecvError::Closed) => Some(Err(anyhow::anyhow!("Codeium: startup channel closed"))),
         }
     }
 
@@ -510,13 +496,7 @@ impl CodeiumManager {
     /// This is **critical** — Codeium uses it to index the project and
     /// provide cross-file context. Without it, completions are single-file
     /// only and much less useful.
-    pub fn request(
-        &mut self,
-        full_text: String,
-        cursor_offset: usize,
-        language: &str,
-        absolute_path: Option<String>,
-    ) -> bool {
+    pub fn request(&mut self, full_text: String, cursor_offset: usize, language: &str, absolute_path: Option<String>) -> bool {
         let tx = match &self.request_tx {
             Some(tx) => tx.clone(),
             None => return false,
@@ -544,13 +524,7 @@ impl CodeiumManager {
     /// Force a completion request, ignoring debounce timer.
     ///
     /// Used for manual Alt+/ triggers.
-    pub fn request_force(
-        &mut self,
-        full_text: String,
-        cursor_offset: usize,
-        language: &str,
-        absolute_path: Option<String>,
-    ) -> bool {
+    pub fn request_force(&mut self, full_text: String, cursor_offset: usize, language: &str, absolute_path: Option<String>) -> bool {
         let tx = match &self.request_tx {
             Some(tx) => tx.clone(),
             None => {
@@ -639,12 +613,7 @@ fn server_loop(server: CodeiumServer, mut rx: mpsc::UnboundedReceiver<Completion
         match rx.blocking_recv() {
             Some(req) => {
                 let result = server
-                    .get_completion(
-                        &req.full_text,
-                        req.cursor_offset,
-                        &req.language,
-                        req.absolute_path.as_deref(),
-                    )
+                    .get_completion(&req.full_text, req.cursor_offset, &req.language, req.absolute_path.as_deref())
                     .map(|opt| opt.map(|text| CodeiumResult { text }));
                 let _ = req.response_tx.send(result);
             }

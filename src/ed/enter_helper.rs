@@ -39,9 +39,7 @@ impl Editor {
             | (Mode::VisualBlock, Mode::Visual)
             | (Mode::VisualBlock, Mode::VisualLine)
             | (Mode::VisualBlock, Mode::VisualBlock) => {}
-            (Mode::Visual, Mode::Normal)
-            | (Mode::VisualLine, Mode::Normal)
-            | (Mode::VisualBlock, Mode::Normal) => {
+            (Mode::Visual, Mode::Normal) | (Mode::VisualLine, Mode::Normal) | (Mode::VisualBlock, Mode::Normal) => {
                 if let Some(w) = self.windows.active_window_mut() {
                     w.selection_anchor = None;
                 }
@@ -49,10 +47,7 @@ impl Editor {
             _ => {}
         }
 
-        if (prev == Mode::Insert || prev == Mode::Replace)
-            && mode != Mode::Insert
-            && mode != Mode::Replace
-        {
+        if (prev == Mode::Insert || prev == Mode::Replace) && mode != Mode::Insert && mode != Mode::Replace {
             self.completion.cancel();
             self.close_undo_group();
             if self.block_insert.is_some() {
@@ -77,11 +72,7 @@ impl Editor {
         if let Some(window) = self.windows.active_window_mut() {
             let buffer_id = window.buffer_id;
             let pos = &mut window.cursor.position;
-            let line_len = self
-                .buffers
-                .get(&buffer_id)
-                .map(|b| b.line_len(pos.line))
-                .unwrap_or(0);
+            let line_len = self.buffers.get(&buffer_id).map(|b| b.line_len(pos.line)).unwrap_or(0);
             if pos.col < line_len {
                 pos.col += 1;
             }
@@ -96,10 +87,7 @@ impl Editor {
             let pos = &mut window.cursor.position;
             if let Some(buffer) = self.buffers.get(&buffer_id) {
                 if let Some(line_text) = buffer.line_text(pos.line) {
-                    let col = line_text
-                        .graphemes(true)
-                        .position(|g| !g.trim().is_empty())
-                        .unwrap_or(0);
+                    let col = line_text.graphemes(true).position(|g| !g.trim().is_empty()).unwrap_or(0);
                     pos.col = col;
                     window.cursor.desired_col = None;
                 }
@@ -112,11 +100,7 @@ impl Editor {
         if let Some(window) = self.windows.active_window_mut() {
             let buffer_id = window.buffer_id;
             let line = window.cursor.position.line;
-            let line_len = self
-                .buffers
-                .get(&buffer_id)
-                .map(|b| b.line_len(line))
-                .unwrap_or(0);
+            let line_len = self.buffers.get(&buffer_id).map(|b| b.line_len(line)).unwrap_or(0);
             window.cursor.position.col = line_len;
             window.cursor.desired_col = None;
         }
@@ -126,11 +110,7 @@ impl Editor {
     // ── Viewport helpers (called after movement) ─────────────────────
 
     pub fn ensure_cursor_visible(&mut self, buffer_id: &BufferId) {
-        let max_line = self
-            .buffers
-            .get(buffer_id)
-            .map(|b| b.line_count())
-            .unwrap_or(0);
+        let max_line = self.buffers.get(buffer_id).map(|b| b.line_count()).unwrap_or(0);
         if let Some(window) = self.windows.active_window_mut() {
             window.ensure_cursor_visible(max_line);
         }
@@ -151,9 +131,7 @@ impl Editor {
 
     /// Show full help popup (all modes, auto-generated from keybindings).
     pub(crate) fn show_hints(&mut self) -> CommandResult {
-        let entries = self
-            .keybinds
-            .help_entries_for_modes(&["normal", "insert", "visual", "command"]);
+        let entries = self.keybinds.help_entries_for_modes(&["normal", "insert", "visual", "command"]);
 
         let lines = render_help_entries(&entries, 76);
 
@@ -202,10 +180,7 @@ impl Editor {
             self.which_key_hints = raw;
         } else {
             let prefix = self.pending_count.clone();
-            self.which_key_hints = raw
-                .into_iter()
-                .map(|(k, desc)| (format!("{}{}", prefix, k), desc))
-                .collect();
+            self.which_key_hints = raw.into_iter().map(|(k, desc)| (format!("{}{}", prefix, k), desc)).collect();
         }
     }
 }

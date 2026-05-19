@@ -169,8 +169,7 @@ impl HighlightStyle {
             // Macros
             "function.macro" | "macro" | "macro_invocation" => HighlightStyle::Macro,
             // Keywords
-            "keyword" | "type" | "type_identifier" | "storage.type" | "storage.modifier"
-            | "storage.class" => HighlightStyle::Keyword,
+            "keyword" | "type" | "type_identifier" | "storage.type" | "storage.modifier" | "storage.class" => HighlightStyle::Keyword,
             "keyword.control"
             | "keyword.control.conditional"
             | "keyword.control.import"
@@ -183,12 +182,8 @@ impl HighlightStyle {
             // Types
             "type.definition" | "type.builtin" => HighlightStyle::Type,
             // Functions
-            "function" | "function.definition" | "function.method" | "method" => {
-                HighlightStyle::Function
-            }
-            "function.call" | "function.method.call" | "method.call" | "function.builtin" => {
-                HighlightStyle::FunctionCall
-            }
+            "function" | "function.definition" | "function.method" | "method" => HighlightStyle::Function,
+            "function.call" | "function.method.call" | "method.call" | "function.builtin" => HighlightStyle::FunctionCall,
             // Variables
             "variable" | "variable.parameter" => HighlightStyle::Variable,
             "variable.builtin" => HighlightStyle::Builtin,
@@ -480,11 +475,7 @@ impl RegexHighlighter {
                         })
                 };
 
-                spans.push(HighlightSpan {
-                    start,
-                    end: i,
-                    style,
-                });
+                spans.push(HighlightSpan { start, end: i, style });
                 continue;
             }
 
@@ -635,10 +626,7 @@ impl RegexHighlighter {
         let mut inline_start = 0;
 
         // Unordered: -, *, + followed by a space
-        if (chars[ws_end] == '-' || chars[ws_end] == '*' || chars[ws_end] == '+')
-            && ws_end + 1 < len
-            && chars[ws_end + 1] == ' '
-        {
+        if (chars[ws_end] == '-' || chars[ws_end] == '*' || chars[ws_end] == '+') && ws_end + 1 < len && chars[ws_end + 1] == ' ' {
             spans.push(HighlightSpan {
                 start: ws_end,
                 end: ws_end + 1,
@@ -649,9 +637,7 @@ impl RegexHighlighter {
             // Checkbox: [ ], [x], [X]
             if inline_start + 2 < len
                 && chars[inline_start] == '['
-                && (chars[inline_start + 1] == ' '
-                    || chars[inline_start + 1] == 'x'
-                    || chars[inline_start + 1] == 'X')
+                && (chars[inline_start + 1] == ' ' || chars[inline_start + 1] == 'x' || chars[inline_start + 1] == 'X')
                 && chars[inline_start + 2] == ']'
             {
                 let check_style = if chars[inline_start + 1] == ' ' {
@@ -677,8 +663,7 @@ impl RegexHighlighter {
             while j < len && chars[j].is_ascii_digit() {
                 j += 1;
             }
-            if j < len && (chars[j] == '.' || chars[j] == ')') && j + 1 < len && chars[j + 1] == ' '
-            {
+            if j < len && (chars[j] == '.' || chars[j] == ')') && j + 1 < len && chars[j + 1] == ' ' {
                 spans.push(HighlightSpan {
                     start: ws_end,
                     end: j + 1,
@@ -689,10 +674,7 @@ impl RegexHighlighter {
         }
 
         // ── Inline elements (code, bold, italic, links, images, …) ────
-        spans.extend(Self::highlight_md_inline(
-            &chars[inline_start..],
-            inline_start,
-        ));
+        spans.extend(Self::highlight_md_inline(&chars[inline_start..], inline_start));
         spans
     }
 
@@ -1225,10 +1207,7 @@ static HIGHLIGHT_STYLE_MAP: LazyLock<HashMap<String, HighlightStyle>> = LazyLock
         // Keywords
         ("keyword", HighlightStyle::Keyword),
         ("keyword.control", HighlightStyle::ControlKeyword),
-        (
-            "keyword.control.conditional",
-            HighlightStyle::ControlKeyword,
-        ),
+        ("keyword.control.conditional", HighlightStyle::ControlKeyword),
         ("keyword.control.import", HighlightStyle::ControlKeyword),
         ("keyword.control.export", HighlightStyle::ControlKeyword),
         ("keyword.control.return", HighlightStyle::ControlKeyword),
@@ -1371,14 +1350,9 @@ impl Highlighter {
             }
             Language::Python => {
                 let ts_lang = tree_sitter_python::LANGUAGE.into();
-                let mut config = tree_sitter_highlight::HighlightConfiguration::new(
-                    ts_lang,
-                    "python",
-                    tree_sitter_python::HIGHLIGHTS_QUERY,
-                    "",
-                    "",
-                )
-                .ok()?;
+                let mut config =
+                    tree_sitter_highlight::HighlightConfiguration::new(ts_lang, "python", tree_sitter_python::HIGHLIGHTS_QUERY, "", "")
+                        .ok()?;
                 (config.language.clone(), config)
             }
             Language::PlainText => return None,
@@ -1416,11 +1390,7 @@ impl Highlighter {
     /// Highlight an entire document using tree-sitter.
     /// Returns a Vec of highlight spans for the entire document.
     #[cfg(feature = "static-grammars")]
-    pub fn highlight_document(
-        &mut self,
-        source: &str,
-        language: Option<Language>,
-    ) -> Vec<HighlightSpan> {
+    pub fn highlight_document(&mut self, source: &str, language: Option<Language>) -> Vec<HighlightSpan> {
         let lang = language.unwrap_or(Language::PlainText);
         let config = match self.get_ts_config(lang) {
             Some(c) => c,
@@ -1482,11 +1452,7 @@ impl Highlighter {
     }
 
     #[cfg(not(feature = "static-grammars"))]
-    pub fn highlight_document(
-        &mut self,
-        _source: &str,
-        _language: Option<Language>,
-    ) -> Vec<HighlightSpan> {
+    pub fn highlight_document(&mut self, _source: &str, _language: Option<Language>) -> Vec<HighlightSpan> {
         Vec::new()
     }
 
@@ -1568,11 +1534,7 @@ pub fn render_highlighted_line<W: std::io::Write>(
     use crossterm::execute;
     use crossterm::style::{Color, Print, ResetColor, SetBackgroundColor, SetForegroundColor};
 
-    const GUIDE_FG: Color = Color::Rgb {
-        r: 40,
-        g: 40,
-        b: 58,
-    };
+    const GUIDE_FG: Color = Color::Rgb { r: 40, g: 40, b: 58 };
     let cursor_bg = Color::DarkGrey;
 
     // Set cursor-line background FIRST — it stays active for the whole line.

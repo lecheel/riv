@@ -56,11 +56,7 @@ impl MovementExt for Editor {
             if let Some(buffer) = self.buffers.get(&buffer_id) {
                 let col = buffer
                     .line_text(line)
-                    .map(|text| {
-                        text.graphemes(true)
-                            .position(|g| !g.trim().is_empty())
-                            .unwrap_or(0)
-                    })
+                    .map(|text| text.graphemes(true).position(|g| !g.trim().is_empty()).unwrap_or(0))
                     .unwrap_or(0);
                 window.cursor.position = CursorPosition::new(line, col);
                 window.cursor.desired_col = None;
@@ -75,11 +71,7 @@ impl MovementExt for Editor {
                 pos.col -= 1;
             } else if pos.line > 0 {
                 pos.line -= 1;
-                pos.col = self
-                    .buffers
-                    .get(&buffer_id)
-                    .map(|b| b.line_len(pos.line))
-                    .unwrap_or(0);
+                pos.col = self.buffers.get(&buffer_id).map(|b| b.line_len(pos.line)).unwrap_or(0);
             }
             window.cursor.desired_col = None;
         }
@@ -90,21 +82,11 @@ impl MovementExt for Editor {
         if let Some(window) = self.windows.active_window_mut() {
             let buffer_id = window.buffer_id;
             let pos = &mut window.cursor.position;
-            let line_len = self
-                .buffers
-                .get(&buffer_id)
-                .map(|b| b.line_len(pos.line))
-                .unwrap_or(0);
+            let line_len = self.buffers.get(&buffer_id).map(|b| b.line_len(pos.line)).unwrap_or(0);
 
             if pos.col < line_len {
                 pos.col += 1;
-            } else if pos.line + 1
-                < self
-                    .buffers
-                    .get(&buffer_id)
-                    .map(|b| b.line_count())
-                    .unwrap_or(0)
-            {
+            } else if pos.line + 1 < self.buffers.get(&buffer_id).map(|b| b.line_count()).unwrap_or(0) {
                 pos.line += 1;
                 pos.col = 0;
             }
@@ -118,21 +100,13 @@ impl MovementExt for Editor {
             let buffer_id = window.buffer_id;
             let pos = &mut window.cursor.position;
             let desired = window.cursor.desired_col.unwrap_or(pos.col);
-            let max_line = self
-                .buffers
-                .get(&buffer_id)
-                .map(|b| b.line_count())
-                .unwrap_or(0);
+            let max_line = self.buffers.get(&buffer_id).map(|b| b.line_count()).unwrap_or(0);
 
             if pos.line + 1 < max_line {
                 pos.line += 1;
             }
 
-            let max_col = self
-                .buffers
-                .get(&buffer_id)
-                .map(|b| b.line_len(pos.line))
-                .unwrap_or(0);
+            let max_col = self.buffers.get(&buffer_id).map(|b| b.line_len(pos.line)).unwrap_or(0);
             pos.col = desired.min(max_col);
             window.cursor.desired_col = Some(desired);
 
@@ -144,8 +118,7 @@ impl MovementExt for Editor {
                 //   (scroll_line + edit_height - 1) - cursor_line >= scroll_offset
                 let lower_bound = (pos.line + scroll_offset + 1).saturating_sub(edit_height);
                 let max_scroll = max_line.saturating_sub(edit_height.min(max_line));
-                window.viewport.scroll_line =
-                    window.viewport.scroll_line.max(lower_bound).min(max_scroll);
+                window.viewport.scroll_line = window.viewport.scroll_line.max(lower_bound).min(max_scroll);
             }
         }
         CommandResult::ViewChanged
@@ -161,11 +134,7 @@ impl MovementExt for Editor {
                 pos.line -= 1;
             }
 
-            let max_col = self
-                .buffers
-                .get(&buffer_id)
-                .map(|b| b.line_len(pos.line))
-                .unwrap_or(0);
+            let max_col = self.buffers.get(&buffer_id).map(|b| b.line_len(pos.line)).unwrap_or(0);
             pos.col = desired.min(max_col);
             window.cursor.desired_col = Some(desired);
 
@@ -243,10 +212,7 @@ impl MovementExt for Editor {
             if let Some(buffer) = self.buffers.get(&buffer_id) {
                 if let Some(line_text) = buffer.line_text(pos.line) {
                     let graphemes: Vec<_> = line_text.graphemes(true).collect();
-                    let mut col = pos
-                        .col
-                        .saturating_sub(1)
-                        .min(graphemes.len().saturating_sub(1));
+                    let mut col = pos.col.saturating_sub(1).min(graphemes.len().saturating_sub(1));
 
                     // Skip whitespace.
                     while col + 1 < graphemes.len() && !is_word_char(graphemes[col + 1]) {
@@ -314,11 +280,7 @@ impl MovementExt for Editor {
     fn move_file_end(&mut self) -> CommandResult {
         if let Some(window) = self.windows.active_window_mut() {
             let buffer_id = window.buffer_id;
-            let last_line = self
-                .buffers
-                .get(&buffer_id)
-                .map(|b| b.line_count().saturating_sub(1))
-                .unwrap_or(0);
+            let last_line = self.buffers.get(&buffer_id).map(|b| b.line_count().saturating_sub(1)).unwrap_or(0);
             window.cursor.position.line = last_line;
             window.cursor.position.col = 0;
             window.cursor.desired_col = None;
@@ -329,11 +291,7 @@ impl MovementExt for Editor {
     fn move_to_line(&mut self, line: usize) -> CommandResult {
         if let Some(window) = self.windows.active_window_mut() {
             let buffer_id = window.buffer_id;
-            let max_line = self
-                .buffers
-                .get(&buffer_id)
-                .map(|b| b.line_count().saturating_sub(1))
-                .unwrap_or(0);
+            let max_line = self.buffers.get(&buffer_id).map(|b| b.line_count().saturating_sub(1)).unwrap_or(0);
             window.cursor.position.line = line.saturating_sub(1).min(max_line);
             window.cursor.position.col = 0;
             window.cursor.desired_col = None;
@@ -356,13 +314,8 @@ impl MovementExt for Editor {
             let buffer_id = window.buffer_id;
             let half = (window.height as usize) / 2;
             window.viewport.scroll_line = window.viewport.scroll_line.saturating_sub(half);
-            let cursor_screen_line = window
-                .cursor
-                .position
-                .line
-                .saturating_sub(window.viewport.scroll_line);
-            window.cursor.position.line =
-                window.viewport.scroll_line + cursor_screen_line.min(half.saturating_sub(1));
+            let cursor_screen_line = window.cursor.position.line.saturating_sub(window.viewport.scroll_line);
+            window.cursor.position.line = window.viewport.scroll_line + cursor_screen_line.min(half.saturating_sub(1));
             self.clamp_cursor_to_buffer(&buffer_id);
         }
         CommandResult::ViewChanged
@@ -371,11 +324,7 @@ impl MovementExt for Editor {
     fn scroll_down(&mut self) -> CommandResult {
         if let Some(window) = self.windows.active_window_mut() {
             let buffer_id = window.buffer_id;
-            let max_line = self
-                .buffers
-                .get(&buffer_id)
-                .map(|b| b.line_count())
-                .unwrap_or(0);
+            let max_line = self.buffers.get(&buffer_id).map(|b| b.line_count()).unwrap_or(0);
             let half = (window.height as usize) / 2;
             window.viewport.scroll_line = (window.viewport.scroll_line + half).min(max_line);
             let cursor_screen_line = window
@@ -383,8 +332,7 @@ impl MovementExt for Editor {
                 .position
                 .line
                 .saturating_sub(window.viewport.scroll_line.saturating_sub(half));
-            window.cursor.position.line =
-                window.viewport.scroll_line + cursor_screen_line.min(half.saturating_sub(1));
+            window.cursor.position.line = window.viewport.scroll_line + cursor_screen_line.min(half.saturating_sub(1));
             self.clamp_cursor_to_buffer(&buffer_id);
         }
         CommandResult::ViewChanged
@@ -405,11 +353,7 @@ impl MovementExt for Editor {
     fn page_down(&mut self) -> CommandResult {
         if let Some(window) = self.windows.active_window_mut() {
             let buffer_id = window.buffer_id;
-            let max_line = self
-                .buffers
-                .get(&buffer_id)
-                .map(|b| b.line_count())
-                .unwrap_or(0);
+            let max_line = self.buffers.get(&buffer_id).map(|b| b.line_count()).unwrap_or(0);
             let page = (window.height as usize).saturating_sub(1);
             window.viewport.scroll_line = (window.viewport.scroll_line + page).min(max_line);
             window.cursor.position.line = window.viewport.scroll_line;
@@ -455,11 +399,7 @@ impl MovementExt for Editor {
     // ── Viewport helpers (used inside movement methods) ──
 
     fn ensure_cursor_visible(&mut self, buffer_id: &crate::buffer::BufferId) {
-        let max_line = self
-            .buffers
-            .get(buffer_id)
-            .map(|b| b.line_count())
-            .unwrap_or(0);
+        let max_line = self.buffers.get(buffer_id).map(|b| b.line_count()).unwrap_or(0);
         if let Some(window) = self.windows.active_window_mut() {
             window.ensure_cursor_visible(max_line);
         }
@@ -542,8 +482,7 @@ impl MovementExt for Editor {
 
         // For brackets, scan the whole buffer
         let full_text = buffer.text();
-        let char_idx =
-            buffer.rope.line_to_char(cursor_pos.line) + line_text[..cursor_pos.col].chars().count();
+        let char_idx = buffer.rope.line_to_char(cursor_pos.line) + line_text[..cursor_pos.col].chars().count();
 
         let new_pos = if !is_opening {
             // closing bracket: scan backwards
@@ -612,11 +551,7 @@ impl MovementExt for Editor {
 
 // Add this separate impl block for private helpers
 impl Editor {
-    pub fn char_idx_to_cursor_position(
-        &self,
-        buffer: &crate::buffer::Buffer,
-        char_idx: usize,
-    ) -> CursorPosition {
+    pub fn char_idx_to_cursor_position(&self, buffer: &crate::buffer::Buffer, char_idx: usize) -> CursorPosition {
         let line = buffer.rope.char_to_line(char_idx);
         let line_start = buffer.rope.line_to_char(line);
         let col = buffer.rope.slice(line_start..char_idx).chars().count();
@@ -626,8 +561,5 @@ impl Editor {
 
 // ── Helper: word character check (copied from original editor.rs) ──
 fn is_word_char(g: &str) -> bool {
-    g.chars()
-        .next()
-        .map(|c| c.is_alphanumeric() || c == '_')
-        .unwrap_or(false)
+    g.chars().next().map(|c| c.is_alphanumeric() || c == '_').unwrap_or(false)
 }

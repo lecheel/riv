@@ -90,12 +90,7 @@ impl GitStatusExt for Editor {
 
         let git_root = match find_git_root(&start_dir) {
             Some(root) => root,
-            None => {
-                return CommandResult::Error(format!(
-                    "Not a git repository (or any parent): {}",
-                    start_dir.display()
-                ))
-            }
+            None => return CommandResult::Error(format!("Not a git repository (or any parent): {}", start_dir.display())),
         };
 
         match GitProvider::new(&git_root) {
@@ -147,14 +142,9 @@ impl GitStatusExt for Editor {
             .current_dir(git_root)
             .output()
         {
-            Ok(output) if output.status.success() => {
-                parse_git_status_porcelain(&String::from_utf8_lossy(&output.stdout))
-            }
+            Ok(output) if output.status.success() => parse_git_status_porcelain(&String::from_utf8_lossy(&output.stdout)),
             Ok(output) => {
-                return CommandResult::Error(format!(
-                    "git status failed: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                ));
+                return CommandResult::Error(format!("git status failed: {}", String::from_utf8_lossy(&output.stderr)));
             }
             Err(e) => return CommandResult::Error(format!("Failed to run git: {}", e)),
         };
@@ -179,9 +169,7 @@ impl GitStatusExt for Editor {
             None => return CommandResult::Error("No active window".to_string()),
         };
 
-        let branch = git_provider
-            .current_branch()
-            .unwrap_or_else(|_| "HEAD".to_string());
+        let branch = git_provider.current_branch().unwrap_or_else(|_| "HEAD".to_string());
         let repo_path = git_provider.repo_path().display();
 
         if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
@@ -194,11 +182,7 @@ impl GitStatusExt for Editor {
                 content.push_str("  (none)\n");
             } else {
                 for entry in &staged {
-                    content.push_str(&format!(
-                        "  {} {}\n",
-                        staged_status_str(entry),
-                        entry.path.display()
-                    ));
+                    content.push_str(&format!("  {} {}\n", staged_status_str(entry), entry.path.display()));
                 }
             }
 
@@ -208,11 +192,7 @@ impl GitStatusExt for Editor {
                 content.push_str("  (none)\n");
             } else {
                 for entry in &unstaged {
-                    content.push_str(&format!(
-                        "  {} {}\n",
-                        unstaged_status_str(entry),
-                        entry.path.display()
-                    ));
+                    content.push_str(&format!("  {} {}\n", unstaged_status_str(entry), entry.path.display()));
                 }
             }
 
@@ -256,11 +236,7 @@ impl GitStatusExt for Editor {
     fn git_status_toggle_stage(&mut self) -> CommandResult {
         let (path_str, is_staged) = match self.get_git_status_file_path() {
             Some(result) => result,
-            None => {
-                return CommandResult::Message(
-                    "Move cursor to a file to toggle staging".to_string(),
-                )
-            }
+            None => return CommandResult::Message("Move cursor to a file to toggle staging".to_string()),
         };
 
         let git_provider = match &self.git.provider {
@@ -334,11 +310,7 @@ impl GitStatusExt for Editor {
         let (is_gs, buffer_id) = {
             if let Some(window) = self.windows.active_window() {
                 let bid = window.buffer_id;
-                let is_gs = self
-                    .buffers
-                    .get(&bid)
-                    .map(|b| b.kind == BufferKind::GitStatus)
-                    .unwrap_or(false);
+                let is_gs = self.buffers.get(&bid).map(|b| b.kind == BufferKind::GitStatus).unwrap_or(false);
                 (is_gs, bid)
             } else {
                 return CommandResult::NoOp;
@@ -374,11 +346,7 @@ impl GitStatusExt for Editor {
 
 impl Editor {
     // Helper to handle common post-stage logic
-    fn apply_stage_result(
-        &mut self,
-        result: Result<String, String>,
-        path_str: &str,
-    ) -> CommandResult {
+    fn apply_stage_result(&mut self, result: Result<String, String>, path_str: &str) -> CommandResult {
         match result {
             Ok(msg) => {
                 if let CommandResult::Error(e) = self.git_status_refresh() {
@@ -393,8 +361,7 @@ impl Editor {
                             if let Some(line_text) = buffer.line_text(line_idx) {
                                 if line_text.contains(path_str) {
                                     window.cursor.position.line = line_idx;
-                                    window.cursor.position.col =
-                                        line_text.find(path_str).unwrap_or(4);
+                                    window.cursor.position.col = line_text.find(path_str).unwrap_or(4);
                                     window.cursor.desired_col = None;
                                     found = true;
                                     break;

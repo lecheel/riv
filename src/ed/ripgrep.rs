@@ -84,30 +84,22 @@ impl RipgrepExt for Editor {
                     Some(b) => b,
                     None => return CommandResult::Error("No active buffer".to_string()),
                 };
-                let line_text = buffer
-                    .line_text(window.cursor.position.line)
-                    .unwrap_or_default();
+                let line_text = buffer.line_text(window.cursor.position.line).unwrap_or_default();
                 let pat = ripgrep::word_under_cursor(&line_text, window.cursor.position.col);
                 let dir = buffer
                     .file_path
                     .as_ref()
                     .and_then(|p| find_git_root(p))
-                    .unwrap_or_else(|| {
-                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-                    });
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
                 (pat, dir)
             } else {
-                let line_text = buffer
-                    .line_text(window.cursor.position.line)
-                    .unwrap_or_default();
+                let line_text = buffer.line_text(window.cursor.position.line).unwrap_or_default();
                 let pat = ripgrep::word_under_cursor(&line_text, window.cursor.position.col);
                 let dir = buffer
                     .file_path
                     .as_ref()
                     .and_then(|p| find_git_root(p))
-                    .unwrap_or_else(|| {
-                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-                    });
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
                 (pat, dir)
             }
         };
@@ -138,11 +130,7 @@ impl RipgrepExt for Editor {
 
     fn ripgrep_last(&mut self) -> CommandResult {
         // ── If an RG buffer already exists, just switch to it (preserves position) ──
-        let existing_rg = self
-            .buffers
-            .iter()
-            .find(|b| b.kind == BufferKind::Ripgrep)
-            .map(|b| b.id);
+        let existing_rg = self.buffers.iter().find(|b| b.kind == BufferKind::Ripgrep).map(|b| b.id);
 
         if let Some(rg_id) = existing_rg {
             self.save_current_position();
@@ -224,10 +212,7 @@ impl RipgrepExt for Editor {
             let result_idx = match buffer.ripgrep_line_map.get(line_idx) {
                 Some(Some(idx)) => *idx,
                 _ => {
-                    return CommandResult::Message(
-                        "Cursor is on a header line — move to a match line and press Enter."
-                            .to_string(),
-                    );
+                    return CommandResult::Message("Cursor is on a header line — move to a match line and press Enter.".to_string());
                 }
             };
 
@@ -249,11 +234,7 @@ impl RipgrepExt for Editor {
         let (is_rg, _buffer_id) = {
             if let Some(window) = self.windows.active_window() {
                 let buf_id = window.buffer_id;
-                let is_rg = self
-                    .buffers
-                    .get(&buf_id)
-                    .map(|b| b.kind == BufferKind::Ripgrep)
-                    .unwrap_or(false);
+                let is_rg = self.buffers.get(&buf_id).map(|b| b.kind == BufferKind::Ripgrep).unwrap_or(false);
                 (is_rg, buf_id)
             } else {
                 return CommandResult::NoOp;
@@ -378,11 +359,7 @@ impl RipgrepExt for Editor {
 
 /// Shared helper to populate the RG buffer with results and switch to it.
 impl Editor {
-    pub(crate) fn populate_ripgrep_buffer(
-        &mut self,
-        pattern: &str,
-        rg_output: ripgrep::RipgrepOutput,
-    ) -> CommandResult {
+    pub(crate) fn populate_ripgrep_buffer(&mut self, pattern: &str, rg_output: ripgrep::RipgrepOutput) -> CommandResult {
         let rg_buffer_id = self.get_or_create_ripgrep_buffer();
 
         self.save_current_position();
@@ -422,11 +399,7 @@ impl Editor {
             .len();
 
         if count == 0 {
-            self.set_status(format!(
-                "No matches for '{}' in {}",
-                pattern,
-                rg_output.root_dir.display()
-            ));
+            self.set_status(format!("No matches for '{}' in {}", pattern, rg_output.root_dir.display()));
         } else {
             self.set_status(format!(
                 "[RG] '{}' — {} match{} in {} file{}  (Enter=jump, q=close)",

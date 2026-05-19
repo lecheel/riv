@@ -15,16 +15,9 @@ pub struct TagEntry {
 impl TagEntry {
     pub fn display(&self, project_root: &Path) -> String {
         let kind_str = self.kind.as_deref().unwrap_or("?");
-        let file_rel = self
-            .file
-            .strip_prefix(project_root)
-            .unwrap_or(&self.file)
-            .display();
+        let file_rel = self.file.strip_prefix(project_root).unwrap_or(&self.file).display();
         if let Some(ref scope) = self.scope {
-            format!(
-                "[{}] {}::{} ({}:{})",
-                kind_str, scope, self.name, file_rel, self.line
-            )
+            format!("[{}] {}::{} ({}:{})", kind_str, scope, self.name, file_rel, self.line)
         } else {
             format!("[{}] {} ({}:{})", kind_str, self.name, file_rel, self.line)
         }
@@ -132,8 +125,7 @@ impl TagManager {
             return Err("No .tags file. Run :tags to generate.".to_string());
         }
 
-        let content = std::fs::read_to_string(&self.tag_file)
-            .map_err(|e| format!("Failed to read .tags: {}", e))?;
+        let content = std::fs::read_to_string(&self.tag_file).map_err(|e| format!("Failed to read .tags: {}", e))?;
 
         self.tags.clear();
 
@@ -179,10 +171,7 @@ impl TagManager {
                     kind,
                     scope,
                 };
-                self.tags
-                    .entry(name.to_lowercase())
-                    .or_default()
-                    .push(entry);
+                self.tags.entry(name.to_lowercase()).or_default().push(entry);
             }
         }
 
@@ -281,10 +270,7 @@ impl TagManager {
     }
 
     pub fn get_matches_display(&self, project_root: &Path) -> Vec<String> {
-        self.current_matches
-            .iter()
-            .map(|tag| tag.display(project_root))
-            .collect()
+        self.current_matches.iter().map(|tag| tag.display(project_root)).collect()
     }
 
     pub fn project_root(&self) -> &Path {

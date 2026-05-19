@@ -27,15 +27,15 @@ use crate::ed::ReplaceExt;
 use crate::ed::SearchExt;
 use crate::ed::ShortcutsExt;
 use crate::ed::{
-    BufferOpsExt, CommandExt, CompletionExt, EditingExt, FileOpsExt, GitExt, LlmExt, MovementExt,
-    RepeatExt, RipgrepExt, VisualExt, WindowExt,
+    BufferOpsExt, CommandExt, CompletionExt, EditingExt, FileOpsExt, GitExt, LlmExt, MovementExt, RepeatExt, RipgrepExt, VisualExt,
+    WindowExt,
 };
 use crate::ed::{GitDiffExt, GitLogExt, GitStatusExt};
 use crate::ed::{TextObjectExt, TextObjectKind, TextObjectOperator};
 use crate::ghost_text::GhostTextManager;
 use crate::keybind::{
-    apply_custom_keybindings, default_command_keymap, default_insert_keymap, default_normal_keymap,
-    default_visual_keymap, KeyBindManager, KeyBindResult,
+    apply_custom_keybindings, default_command_keymap, default_insert_keymap, default_normal_keymap, default_visual_keymap, KeyBindManager,
+    KeyBindResult,
 };
 use crate::llm::LlmPreset;
 use crate::misc::format_shortcut_keys;
@@ -343,8 +343,7 @@ pub struct Editor {
     /// In-memory buffer positions for session-only buffer switching.
     /// Maps BufferId → (cursor_position, scroll_line).
     /// Covers ALL buffer kinds (including Ripgrep, GitDiff, etc.)
-    pub buffer_positions:
-        std::collections::HashMap<crate::buffer::BufferId, (crate::buffer::CursorPosition, usize)>,
+    pub buffer_positions: std::collections::HashMap<crate::buffer::BufferId, (crate::buffer::CursorPosition, usize)>,
 
     // ==================== Command System ====================
     /// Dynamic command registry for `:` commands.
@@ -456,9 +455,7 @@ impl Editor {
         let keybindings_ref = config.keybindings.clone();
         // Deserialize the raw TOML map into our structured KeyBindingsConfig
         let keybindings_config: crate::keybind::KeyBindingsConfig =
-            toml::Value::Table(keybindings_ref.clone())
-                .try_into()
-                .unwrap_or_default();
+            toml::Value::Table(keybindings_ref.clone()).try_into().unwrap_or_default();
         apply_custom_keybindings(&mut keybinds, &keybindings_config, Some(leader));
 
         let history_data = HistoryData::load();
@@ -509,11 +506,7 @@ impl Editor {
                     if let Some(action) = crate::keybind::parse_action_str(action_str) {
                         list.push((keys, action));
                     } else {
-                        log::warn!(
-                            "[config] shortcuts: unknown action '{}' for key '{}'",
-                            action_str,
-                            key_str
-                        );
+                        log::warn!("[config] shortcuts: unknown action '{}' for key '{}'", action_str, key_str);
                     }
                 } else {
                     log::warn!(
@@ -523,8 +516,7 @@ impl Editor {
                 }
             }
             list.sort_by(
-                |a: &(Vec<crate::terminal::Key>, crate::action::Action),
-                 b: &(Vec<crate::terminal::Key>, crate::action::Action)| {
+                |a: &(Vec<crate::terminal::Key>, crate::action::Action), b: &(Vec<crate::terminal::Key>, crate::action::Action)| {
                     a.0.len()
                         .cmp(&b.0.len())
                         .then_with(|| format_shortcut_keys(&a.0).cmp(&format_shortcut_keys(&b.0)))
@@ -589,11 +581,7 @@ impl Editor {
             last_edit_time: Instant::now(),
             undo_break_timeout_ms: 2000,
             vocab: {
-                let mut v = VocabManager::new(
-                    Config::config_dir()
-                        .unwrap_or_else(|_| PathBuf::from("."))
-                        .join("vocab.json"),
-                );
+                let mut v = VocabManager::new(Config::config_dir().unwrap_or_else(|_| PathBuf::from(".")).join("vocab.json"));
                 v.load(); // ← make sure this is called
                 v
             },
@@ -629,12 +617,7 @@ impl Editor {
 
             // MRU
             mru: {
-                let mut m = MruManager::new(
-                    100,
-                    Config::config_dir()
-                        .unwrap_or_else(|_| PathBuf::from("."))
-                        .join("mru.json"),
-                );
+                let mut m = MruManager::new(100, Config::config_dir().unwrap_or_else(|_| PathBuf::from(".")).join("mru.json"));
                 m.load();
                 m.prune_missing();
                 m
@@ -682,9 +665,7 @@ impl Editor {
             .clone()
             .or_else(|| std::env::var("CODEIUM_API_KEY").ok())
             .or_else(crate::codeium::load_api_key_from_config)
-            .ok_or_else(|| {
-                "Codeium: no API key. Run :codeium-auth or set CODEIUM_API_KEY env var".to_string()
-            })?;
+            .ok_or_else(|| "Codeium: no API key. Run :codeium-auth or set CODEIUM_API_KEY env var".to_string())?;
 
         self.codeium
             .start(api_key, &self.llm.runtime)
@@ -706,20 +687,14 @@ impl Editor {
 
     /// Return a reference to the buffer in the active window (if any).
     pub fn current_buffer(&self) -> Option<&Buffer> {
-        self.windows
-            .active_window()
-            .and_then(|w| self.buffers.get(&w.buffer_id))
+        self.windows.active_window().and_then(|w| self.buffers.get(&w.buffer_id))
     }
 
     /// Ensure the cursor is visible in the active window's viewport.
     pub fn ensure_cursor_visible_all(&mut self) {
         let buffer_id = self.windows.active_window().map(|w| w.buffer_id);
         let Some(buffer_id) = buffer_id else { return };
-        let max_line = self
-            .buffers
-            .get(&buffer_id)
-            .map(|b| b.line_count())
-            .unwrap_or(0);
+        let max_line = self.buffers.get(&buffer_id).map(|b| b.line_count()).unwrap_or(0);
         if let Some(window) = self.windows.active_window_mut() {
             window.ensure_cursor_visible(max_line);
         }
@@ -807,11 +782,7 @@ impl Editor {
                 if self.completion.active {
                     // Only mark the current line as dirty — skip full window redraw
                     // This prevents the popup from flashing
-                    let cursor_line = self
-                        .windows
-                        .active_window()
-                        .map(|w| w.cursor.position.line)
-                        .unwrap_or(0);
+                    let cursor_line = self.windows.active_window().map(|w| w.cursor.position.line).unwrap_or(0);
                     self.dirty.mark_single_line(cursor_line);
                 } else {
                     self.dirty.mark_insert();
@@ -1092,10 +1063,7 @@ impl Editor {
         }
 
         // ── COUNT PREFIX ACCUMULATION ──
-        if matches!(
-            self.mode,
-            Mode::Normal | Mode::Visual | Mode::VisualLine | Mode::VisualBlock
-        ) {
+        if matches!(self.mode, Mode::Normal | Mode::Visual | Mode::VisualLine | Mode::VisualBlock) {
             if let Key::Char(c) = key {
                 if c.is_ascii_digit() && (c != '0' || !self.pending_count.is_empty()) {
                     self.pending_count.push(c);
@@ -1224,9 +1192,7 @@ impl Editor {
                     Key::Ctrl('w') => {
                         let word = self.word_under_cursor_in_current_buffer();
                         if !word.is_empty() {
-                            self.command_prompt
-                                .buffer
-                                .insert_str(self.command_prompt.cursor, &word);
+                            self.command_prompt.buffer.insert_str(self.command_prompt.cursor, &word);
                             self.command_prompt.cursor += word.len();
                             self.trigger_command_completion();
                             self.dirty.mark_all();
@@ -1239,9 +1205,7 @@ impl Editor {
                     Key::Ctrl('l') => {
                         let line = self.current_line_content();
                         if !line.is_empty() {
-                            self.command_prompt
-                                .buffer
-                                .insert_str(self.command_prompt.cursor, &line);
+                            self.command_prompt.buffer.insert_str(self.command_prompt.cursor, &line);
                             self.command_prompt.cursor += line.len();
                             self.trigger_command_completion();
                             self.dirty.mark_all();
@@ -1261,9 +1225,7 @@ impl Editor {
                             .unwrap_or_default();
 
                         if !path.is_empty() {
-                            self.command_prompt
-                                .buffer
-                                .insert_str(self.command_prompt.cursor, &path);
+                            self.command_prompt.buffer.insert_str(self.command_prompt.cursor, &path);
                             self.command_prompt.cursor += path.len();
                             self.trigger_command_completion();
                             self.dirty.mark_all();
@@ -1276,9 +1238,7 @@ impl Editor {
                     Key::Ctrl('a') => {
                         // Insert whole line from cursor
                         let line = self.current_line_content();
-                        self.command_prompt
-                            .buffer
-                            .insert_str(self.command_prompt.cursor, &line);
+                        self.command_prompt.buffer.insert_str(self.command_prompt.cursor, &line);
                         self.command_prompt.cursor += line.len();
                         self.trigger_command_completion();
                         self.dirty.mark_all();
@@ -1442,11 +1402,7 @@ impl Editor {
         // ── In Vim, most actions (especially movement) clear the status/error message. ──
         let is_passthrough = matches!(action, Action::None | Action::ShowHelp | Action::UndoBreak);
 
-        if !is_passthrough
-            && self.mode != Mode::Command
-            && self.mode != Mode::LlmPrompt
-            && !self.search.input_active
-        {
+        if !is_passthrough && self.mode != Mode::Command && self.mode != Mode::LlmPrompt && !self.search.input_active {
             self.clear_messages();
 
             // Cancel force quit confirmation if the user performs another action
@@ -1475,10 +1431,7 @@ impl Editor {
                 self.clear_messages();
 
                 // ── Capture visual range and pre-fill '<,'> ──
-                if matches!(
-                    self.mode,
-                    Mode::Visual | Mode::VisualLine | Mode::VisualBlock
-                ) {
+                if matches!(self.mode, Mode::Visual | Mode::VisualLine | Mode::VisualBlock) {
                     self.visual_selection_range = self.visual_line_range();
                     self.command_prompt.buffer = "'<,'>".to_string();
                     self.command_prompt.cursor = self.command_prompt.buffer.len();
@@ -1494,9 +1447,7 @@ impl Editor {
                     self.dirty.mark_all();
                     crate::editor::CommandResult::ViewChanged
                 } else {
-                    crate::editor::CommandResult::Error(
-                        "Codeium not connected. Use :codeium to start.".into(),
-                    )
+                    crate::editor::CommandResult::Error("Codeium not connected. Use :codeium to start.".into())
                 }
             }
             Action::RegisterPrefix => {
@@ -1533,12 +1484,7 @@ impl Editor {
                 if let Some(window) = self.windows.active_window() {
                     if let Some(buf) = self.buffers.get(&window.buffer_id) {
                         if buf.kind == BufferKind::Llm {
-                            if let Some(other_id) = self
-                                .buffers
-                                .iter()
-                                .find(|b| b.kind == BufferKind::Normal)
-                                .map(|b| b.id)
-                            {
+                            if let Some(other_id) = self.buffers.iter().find(|b| b.kind == BufferKind::Normal).map(|b| b.id) {
                                 if let Some(w) = self.windows.active_window_mut() {
                                     w.set_buffer(other_id);
                                 }
@@ -1549,10 +1495,7 @@ impl Editor {
                 CommandResult::ViewChanged
             }
             Action::LlmQuickCheckEnglish => {
-                let was_visual = matches!(
-                    self.mode,
-                    Mode::Visual | Mode::VisualLine | Mode::VisualBlock
-                );
+                let was_visual = matches!(self.mode, Mode::Visual | Mode::VisualLine | Mode::VisualBlock);
 
                 let text = if was_visual {
                     self.get_selection_text().unwrap_or_default()
@@ -1593,10 +1536,7 @@ impl Editor {
                 }
             }
             Action::LlmQuickPrompt => {
-                let context = if matches!(
-                    self.mode,
-                    Mode::Visual | Mode::VisualLine | Mode::VisualBlock
-                ) {
+                let context = if matches!(self.mode, Mode::Visual | Mode::VisualLine | Mode::VisualBlock) {
                     let text = self.get_selection_text();
                     if let Some(window) = self.windows.active_window_mut() {
                         window.selection_anchor = None;
@@ -1647,10 +1587,7 @@ impl Editor {
                 CommandResult::Message("LLM history cleared".to_string())
             }
             Action::LlmQuickTranslateChinese => {
-                let ctx = self
-                    .shortcut_visual_context
-                    .take()
-                    .or_else(|| self.get_selection_text()); // fallback for direct visual keybind
+                let ctx = self.shortcut_visual_context.take().or_else(|| self.get_selection_text()); // fallback for direct visual keybind
                 self.llm_quick_action(LlmPreset::TranslateToChinese, &ctx.unwrap_or_default())
             }
             Action::LlmQuickTranslateEnglish => {
@@ -1835,30 +1772,14 @@ impl Editor {
                 CommandResult::ContentChanged
             }
 
-            Action::DeleteAroundBraces => {
-                self.operate_on_pair('{', '}', TextObjectKind::Around, TextObjectOperator::Delete)
-            }
-            Action::DeleteInsideBraces => {
-                self.operate_on_pair('{', '}', TextObjectKind::Inner, TextObjectOperator::Delete)
-            }
-            Action::DeleteAroundBrackets => {
-                self.operate_on_pair('[', ']', TextObjectKind::Around, TextObjectOperator::Delete)
-            }
-            Action::DeleteInsideBrackets => {
-                self.operate_on_pair('[', ']', TextObjectKind::Inner, TextObjectOperator::Delete)
-            }
-            Action::DeleteAroundParens => {
-                self.operate_on_pair('(', ')', TextObjectKind::Around, TextObjectOperator::Delete)
-            }
-            Action::DeleteInsideParens => {
-                self.operate_on_pair('(', ')', TextObjectKind::Inner, TextObjectOperator::Delete)
-            }
-            Action::DeleteAroundQuotes => {
-                self.operate_on_pair('"', '"', TextObjectKind::Around, TextObjectOperator::Delete)
-            }
-            Action::DeleteInsideQuotes => {
-                self.operate_on_pair('"', '"', TextObjectKind::Inner, TextObjectOperator::Delete)
-            }
+            Action::DeleteAroundBraces => self.operate_on_pair('{', '}', TextObjectKind::Around, TextObjectOperator::Delete),
+            Action::DeleteInsideBraces => self.operate_on_pair('{', '}', TextObjectKind::Inner, TextObjectOperator::Delete),
+            Action::DeleteAroundBrackets => self.operate_on_pair('[', ']', TextObjectKind::Around, TextObjectOperator::Delete),
+            Action::DeleteInsideBrackets => self.operate_on_pair('[', ']', TextObjectKind::Inner, TextObjectOperator::Delete),
+            Action::DeleteAroundParens => self.operate_on_pair('(', ')', TextObjectKind::Around, TextObjectOperator::Delete),
+            Action::DeleteInsideParens => self.operate_on_pair('(', ')', TextObjectKind::Inner, TextObjectOperator::Delete),
+            Action::DeleteAroundQuotes => self.operate_on_pair('"', '"', TextObjectKind::Around, TextObjectOperator::Delete),
+            Action::DeleteInsideQuotes => self.operate_on_pair('"', '"', TextObjectKind::Inner, TextObjectOperator::Delete),
 
             Action::DeleteBuffer => {
                 // Save cursor position before closing
@@ -1941,8 +1862,7 @@ impl Editor {
             }
             Action::DeleteAroundFunction => {
                 self.record_action(RepeatableAction::DeleteAroundFunction, self.current_count);
-                let result =
-                    self.operate_on_function(TextObjectKind::Around, TextObjectOperator::Delete);
+                let result = self.operate_on_function(TextObjectKind::Around, TextObjectOperator::Delete);
                 // Reparse tree after deletion so subsequent tree-sitter queries work
                 if matches!(result, CommandResult::ContentChanged) {
                     if let Some(window) = self.windows.active_window() {
@@ -2003,10 +1923,7 @@ impl Editor {
                 CommandResult::ContentChanged
             }),
             Action::Indent => {
-                if matches!(
-                    self.mode,
-                    Mode::Visual | Mode::VisualLine | Mode::VisualBlock
-                ) {
+                if matches!(self.mode, Mode::Visual | Mode::VisualLine | Mode::VisualBlock) {
                     self.with_undo_group(|s| s.indent_selection())
                 } else {
                     self.with_undo_group(|s| {
@@ -2016,10 +1933,7 @@ impl Editor {
                 }
             }
             Action::Dedent => {
-                if matches!(
-                    self.mode,
-                    Mode::Visual | Mode::VisualLine | Mode::VisualBlock
-                ) {
+                if matches!(self.mode, Mode::Visual | Mode::VisualLine | Mode::VisualBlock) {
                     self.with_undo_group(|s| s.dedent_selection())
                 } else {
                     self.with_undo_group(|s| {
@@ -2043,12 +1957,7 @@ impl Editor {
                             None
                         };
 
-                        s.record_action(
-                            RepeatableAction::IndentTs {
-                                count: s.current_count,
-                            },
-                            s.current_count,
-                        );
+                        s.record_action(RepeatableAction::IndentTs { count: s.current_count }, s.current_count);
 
                         let result = s.format_ts_indent(range);
                         if let Some(window) = s.windows.active_window_mut() {
@@ -2065,20 +1974,11 @@ impl Editor {
                     let range = if let Some((start, end)) = s.find_function_lines() {
                         Some((start, end))
                     } else {
-                        let line = s
-                            .windows
-                            .active_window()
-                            .map(|w| w.cursor.position.line)
-                            .unwrap_or(0);
+                        let line = s.windows.active_window().map(|w| w.cursor.position.line).unwrap_or(0);
                         Some((line, line + s.current_count.saturating_sub(1)))
                     };
 
-                    s.record_action(
-                        RepeatableAction::IndentTs {
-                            count: s.current_count,
-                        },
-                        s.current_count,
-                    );
+                    s.record_action(RepeatableAction::IndentTs { count: s.current_count }, s.current_count);
 
                     match s.format_ts_indent(range) {
                         Ok(()) => {
@@ -2090,15 +1990,8 @@ impl Editor {
                 })
             }
             Action::IndentTsToFileEnd => {
-                let line = self
-                    .windows
-                    .active_window()
-                    .map(|w| w.cursor.position.line)
-                    .unwrap_or(0);
-                let last_line = self
-                    .current_buffer()
-                    .map(|b| b.line_count().saturating_sub(1))
-                    .unwrap_or(0);
+                let line = self.windows.active_window().map(|w| w.cursor.position.line).unwrap_or(0);
+                let last_line = self.current_buffer().map(|b| b.line_count().saturating_sub(1)).unwrap_or(0);
 
                 match self.format_ts_indent(Some((line, last_line))) {
                     Ok(()) => {
@@ -2296,11 +2189,7 @@ impl Editor {
                 CommandResult::ViewChanged
             }
 
-            Action::GotoDeclaration
-            | Action::FindReferences
-            | Action::HoverInfo
-            | Action::CodeAction
-            | Action::GitBlame => {
+            Action::GotoDeclaration | Action::FindReferences | Action::HoverInfo | Action::CodeAction | Action::GitBlame => {
                 self.set_status(format!("{} — not yet implemented", action.label()));
                 CommandResult::NoOp
             }
@@ -2368,11 +2257,7 @@ impl Editor {
                 let result = self.toggle_comment_lines(self.current_count);
                 if !matches!(result, CommandResult::Error(_)) {
                     // Move cursor down by current_count (or just 1 if no count)
-                    let move_count = if self.current_count > 1 {
-                        self.current_count
-                    } else {
-                        1
-                    };
+                    let move_count = if self.current_count > 1 { self.current_count } else { 1 };
                     for _ in 0..move_count {
                         self.move_cursor_down();
                     }
@@ -2452,10 +2337,7 @@ impl Editor {
             Action::RepeatLastAction => self.repeat_last_action(),
             Action::None => CommandResult::NoOp,
             _ => {
-                if self.mode != Mode::Command
-                    && self.mode != Mode::LlmPrompt
-                    && !self.search.input_active
-                {
+                if self.mode != Mode::Command && self.mode != Mode::LlmPrompt && !self.search.input_active {
                     self.clear_messages();
                 }
                 // Cancel force quit confirmation if the user performs another action

@@ -83,9 +83,7 @@ pub struct Guide {
 
 /// Escape a string for safe inclusion in a TOML double-quoted value.
 fn escape_toml_string(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
+    s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n")
 }
 
 // ── Marker parsing ────────────────────────────────────────────────
@@ -106,9 +104,7 @@ fn extract_token(remaining: &str) -> Option<(String, &str)> {
         Some((value, rest))
     } else {
         // Unquoted value
-        let end = remaining
-            .find(|c: char| c.is_whitespace())
-            .unwrap_or(remaining.len());
+        let end = remaining.find(|c: char| c.is_whitespace()).unwrap_or(remaining.len());
         let value = remaining[..end].to_string();
         let rest = &remaining[end..];
         Some((value, rest))
@@ -172,24 +168,11 @@ fn extract_guide_marker(line: &str) -> Option<ParsedGuideMarker> {
             remaining.trim().to_string()
         };
 
-        let anchor = if anchor.is_empty() {
-            label.clone()
-        } else {
-            anchor
-        };
+        let anchor = if anchor.is_empty() { label.clone() } else { anchor };
         // adjust plain comment using empty kind:w
-        let kind = if kind.is_empty() {
-            "usr".to_string()
-        } else {
-            kind
-        };
+        let kind = if kind.is_empty() { "usr".to_string() } else { kind };
 
-        return Some(ParsedGuideMarker {
-            kind,
-            label,
-            anchor,
-            desc,
-        });
+        return Some(ParsedGuideMarker { kind, label, anchor, desc });
     }
 
     // ── 2. Plain format: //-- ... --// ──────────────
@@ -220,11 +203,7 @@ fn extract_guide_marker(line: &str) -> Option<ParsedGuideMarker> {
     if let Some(anchor_start) = inner.find("(anchor") {
         let directive_substring = &inner[anchor_start..];
         if let Some(close_paren) = directive_substring.find(')') {
-            label_text = format!(
-                "{}{}",
-                &inner[..anchor_start],
-                &directive_substring[close_paren + 1..]
-            );
+            label_text = format!("{}{}", &inner[..anchor_start], &directive_substring[close_paren + 1..]);
         }
     }
 
@@ -271,9 +250,7 @@ impl Guide {
     /// Load the guide using a specific root directory.
     pub fn load_from(root: &Path) -> Self {
         let path = root.join(".riv").join("guide.toml");
-        let last_modified = std::fs::metadata(&path)
-            .ok()
-            .and_then(|m| m.modified().ok());
+        let last_modified = std::fs::metadata(&path).ok().and_then(|m| m.modified().ok());
         // parse_file returns empty Vec if file doesn't exist
         let entries = Self::parse_file(&path);
         let filtered: Vec<usize> = (0..entries.len()).collect();
@@ -302,45 +279,17 @@ impl Guide {
         if let Ok(value) = content.parse::<toml::Value>() {
             if let Some(checkpoints) = value.get("checkpoint").and_then(|v| v.as_array()) {
                 for cp in checkpoints {
-                    let file = cp
-                        .get("file")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let anchor = cp
-                        .get("anchor")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let kind = cp
-                        .get("kind")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("fn")
-                        .to_string();
-                    let label = cp
-                        .get("label")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let desc = cp
-                        .get("desc")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
+                    let file = cp.get("file").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let anchor = cp.get("anchor").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let kind = cp.get("kind").and_then(|v| v.as_str()).unwrap_or("fn").to_string();
+                    let label = cp.get("label").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let desc = cp.get("desc").and_then(|v| v.as_str()).unwrap_or("").to_string();
                     let tags: Vec<String> = cp
                         .get("tags")
                         .and_then(|v| v.as_str())
-                        .map(|s| {
-                            s.split(',')
-                                .map(|t| t.trim().to_lowercase())
-                                .filter(|t| !t.is_empty())
-                                .collect()
-                        })
+                        .map(|s| s.split(',').map(|t| t.trim().to_lowercase()).filter(|t| !t.is_empty()).collect())
                         .unwrap_or_default();
-                    let hint = cp
-                        .get("hint")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
+                    let hint = cp.get("hint").and_then(|v| v.as_str()).map(|s| s.to_string());
 
                     if !anchor.is_empty() && !label.is_empty() {
                         entries.push(GuideEntry {
@@ -363,9 +312,7 @@ impl Guide {
     /// Reload the guide from disk (manual or auto).
     pub fn reload(&mut self) {
         let path = self.root.join(".riv").join("guide.toml");
-        self.last_modified = std::fs::metadata(&path)
-            .ok()
-            .and_then(|m| m.modified().ok());
+        self.last_modified = std::fs::metadata(&path).ok().and_then(|m| m.modified().ok());
         self.last_check_time = Some(Instant::now());
         let new_entries = Self::parse_file(&path);
         self.entries = new_entries;
@@ -376,22 +323,17 @@ impl Guide {
     /// Returns `true` if the guide was reloaded.
     pub fn check_and_reload_if_stale(&mut self) -> bool {
         let now = Instant::now();
-        let last_check = self
-            .last_check_time
-            .unwrap_or(Instant::now() - std::time::Duration::from_secs(10));
+        let last_check = self.last_check_time.unwrap_or(Instant::now() - std::time::Duration::from_secs(10));
 
         // Debounce: don't check more often than check_interval_ms
-        if now.duration_since(last_check) < std::time::Duration::from_millis(self.check_interval_ms)
-        {
+        if now.duration_since(last_check) < std::time::Duration::from_millis(self.check_interval_ms) {
             return false;
         }
 
         self.last_check_time = Some(now);
 
         let path = self.root.join(".riv").join("guide.toml");
-        let current_modified = std::fs::metadata(&path)
-            .ok()
-            .and_then(|m| m.modified().ok());
+        let current_modified = std::fs::metadata(&path).ok().and_then(|m| m.modified().ok());
 
         if current_modified != self.last_modified {
             self.reload();
@@ -420,21 +362,12 @@ impl Guide {
         for entry in &self.entries {
             content.push_str("[[checkpoint]]\n");
             content.push_str(&format!("file = \"{}\"\n", escape_toml_string(&entry.file)));
-            content.push_str(&format!(
-                "anchor = \"{}\"\n",
-                escape_toml_string(&entry.anchor)
-            ));
+            content.push_str(&format!("anchor = \"{}\"\n", escape_toml_string(&entry.anchor)));
             content.push_str(&format!("kind = \"{}\"\n", escape_toml_string(&entry.kind)));
-            content.push_str(&format!(
-                "label = \"{}\"\n",
-                escape_toml_string(&entry.label)
-            ));
+            content.push_str(&format!("label = \"{}\"\n", escape_toml_string(&entry.label)));
             content.push_str(&format!("desc = \"{}\"\n", escape_toml_string(&entry.desc)));
             if !entry.tags.is_empty() {
-                content.push_str(&format!(
-                    "tags = \"{}\"\n",
-                    escape_toml_string(&entry.tags.join(", "))
-                ));
+                content.push_str(&format!("tags = \"{}\"\n", escape_toml_string(&entry.tags.join(", "))));
             }
             if let Some(hint) = &entry.hint {
                 content.push_str(&format!("hint = \"{}\"\n", escape_toml_string(hint)));
@@ -487,9 +420,7 @@ impl Guide {
 
     /// Return the currently selected entry (if any).
     pub fn selected_entry(&self) -> Option<&GuideEntry> {
-        self.filtered
-            .get(self.selected)
-            .and_then(|&idx| self.entries.get(idx))
+        self.filtered.get(self.selected).and_then(|&idx| self.entries.get(idx))
     }
 
     // ── Anchor search ─────────────────────────────────────────────
@@ -533,27 +464,16 @@ impl Guide {
         }
 
         // Fallback: just the filename (last resort)
-        file_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
-            .to_string()
+        file_path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string()
     }
 
-    pub fn sync_from_buffer(
-        &mut self,
-        file_path: &Path,
-        source: &str,
-    ) -> Result<SyncResult, String> {
+    pub fn sync_from_buffer(&mut self, file_path: &Path, source: &str) -> Result<SyncResult, String> {
         let mut result = SyncResult::default();
 
         let relative_file = self.make_relative_path(file_path);
 
         // ── Parse all markers from current source ──
-        let markers: Vec<ParsedGuideMarker> = source
-            .lines()
-            .filter_map(|line| extract_guide_marker(line))
-            .collect();
+        let markers: Vec<ParsedGuideMarker> = source.lines().filter_map(|line| extract_guide_marker(line)).collect();
 
         // ── Remove stale entries for this file that no longer exist in source ──
         let current_anchors: Vec<String> = markers.iter().map(|m| m.anchor.clone()).collect();
@@ -601,10 +521,7 @@ impl Guide {
             }
 
             // Priority 2: Match by (file, label) — anchor changed but same label
-            let by_label = self
-                .entries
-                .iter_mut()
-                .find(|e| e.file == relative_file && e.label == marker.label);
+            let by_label = self.entries.iter_mut().find(|e| e.file == relative_file && e.label == marker.label);
 
             if let Some(existing) = by_label {
                 let mut changed = false;

@@ -2,9 +2,8 @@
 
 use crate::popup::{case_insensitive_find, Scrollable};
 use crate::rounded_box::{
-    catppuccin, centered_in_edit, clamp_height, clamp_width, clear_rect, content_width,
-    draw_bottom_border, draw_empty_row, draw_row, draw_top_border, str_width, truncate_to_width,
-    BoxStyle, RowStyle, Segment,
+    catppuccin, centered_in_edit, clamp_height, clamp_width, clear_rect, content_width, draw_bottom_border, draw_empty_row, draw_row,
+    draw_top_border, str_width, truncate_to_width, BoxStyle, RowStyle, Segment,
 };
 use crossterm::cursor::MoveTo;
 use crossterm::execute;
@@ -50,9 +49,7 @@ impl MarkListPopup {
     }
 
     pub fn selected_entry(&self) -> Option<&MarkEntry> {
-        self.filtered
-            .get(self.selected)
-            .and_then(|&i| self.entries.get(i))
+        self.filtered.get(self.selected).and_then(|&i| self.entries.get(i))
     }
 
     fn apply_filter(&mut self) {
@@ -137,9 +134,7 @@ pub fn render_mark_list_popup(
             format!("({}/{})", popup.filtered.len(), popup.entries.len())
         }
     );
-    let title_style = BoxStyle::default()
-        .with_title(title)
-        .with_bg(catppuccin::MANTLE);
+    let title_style = BoxStyle::default().with_title(title).with_bg(catppuccin::MANTLE);
     draw_top_border(stdout, x, y, popup_width, &title_style)?;
 
     // ── Filter row ─────────────────────────────────────────────────────
@@ -150,10 +145,7 @@ pub fn render_mark_list_popup(
         let max_filter_len = content_width(popup_width, &filter_style).saturating_sub(prompt_w + 1);
         let filter_display = truncate_to_width(&popup.filter, max_filter_len);
 
-        let segments = [
-            Segment::new(">", catppuccin::PEACH),
-            Segment::new(filter_display, catppuccin::TEXT),
-        ];
+        let segments = [Segment::new(">", catppuccin::PEACH), Segment::new(filter_display, catppuccin::TEXT)];
         draw_row(stdout, x, filter_y, popup_width, &segments, &filter_style)?;
 
         // Block cursor after the filter text
@@ -181,26 +173,17 @@ pub fn render_mark_list_popup(
             let real_idx = popup.filtered[entry_idx];
             let entry = &popup.entries[real_idx];
             let is_selected = entry_idx == popup.selected;
-            let row_style = if is_selected {
-                RowStyle::selected()
-            } else {
-                RowStyle::normal()
-            };
+            let row_style = if is_selected { RowStyle::selected() } else { RowStyle::normal() };
 
             let is_closed = entry.file_name == "[closed]";
 
             // Mark name: " a "
             let name_str = format!(" {} ", entry.name);
-            let name_color = if is_closed {
-                catppuccin::OVERLAY0
-            } else {
-                catppuccin::MAUVE
-            };
+            let name_color = if is_closed { catppuccin::OVERLAY0 } else { catppuccin::MAUVE };
 
             // File name (truncated to column width)
             let displayed_name: String = if str_width(&entry.file_name) > file_name_width {
-                let truncated =
-                    truncate_to_width(&entry.file_name, file_name_width.saturating_sub(1));
+                let truncated = truncate_to_width(&entry.file_name, file_name_width.saturating_sub(1));
                 format!("{}…", truncated)
             } else {
                 entry.file_name.clone()
@@ -222,16 +205,11 @@ pub fn render_mark_list_popup(
 
             // File name with optional match highlighting
             if !popup.filter.is_empty() && !is_closed {
-                if let Some((match_start, match_end)) =
-                    case_insensitive_find(&displayed_name, &popup.filter)
-                {
+                if let Some((match_start, match_end)) = case_insensitive_find(&displayed_name, &popup.filter) {
                     if match_start > 0 {
                         segments.push(Segment::new(&displayed_name[..match_start], file_color));
                     }
-                    segments.push(Segment::new(
-                        &displayed_name[match_start..match_end],
-                        catppuccin::PEACH,
-                    ));
+                    segments.push(Segment::new(&displayed_name[match_start..match_end], catppuccin::PEACH));
                     if match_end < displayed_name.len() {
                         segments.push(Segment::new(&displayed_name[match_end..], file_color));
                     }
@@ -245,11 +223,7 @@ pub fn render_mark_list_popup(
             // Padding to fill file_name_width
             let displayed_w = str_width(&displayed_name);
             let padding = file_name_width.saturating_sub(displayed_w);
-            let pad = if padding > 0 {
-                " ".repeat(padding)
-            } else {
-                String::new()
-            };
+            let pad = if padding > 0 { " ".repeat(padding) } else { String::new() };
             if !pad.is_empty() {
                 segments.push(Segment::new(&pad, catppuccin::SURFACE1));
             }
@@ -279,21 +253,11 @@ pub fn render_mark_list_popup(
     let bottom_y = filter_y + 1 + content_rows as u16;
     let footer = format!(
         "[Enter] jump  [Del] remove  [Esc]{}close  {}/{}",
-        if popup.filter.is_empty() {
-            " "
-        } else {
-            " clear "
-        },
-        if popup.filtered.is_empty() {
-            0
-        } else {
-            popup.selected + 1
-        },
+        if popup.filter.is_empty() { " " } else { " clear " },
+        if popup.filtered.is_empty() { 0 } else { popup.selected + 1 },
         popup.filtered.len(),
     );
-    let footer_style = BoxStyle::default()
-        .with_footer(footer)
-        .with_bg(catppuccin::MANTLE);
+    let footer_style = BoxStyle::default().with_footer(footer).with_bg(catppuccin::MANTLE);
     draw_bottom_border(stdout, x, bottom_y, popup_width, &footer_style)?;
 
     execute!(stdout, ResetColor)?;

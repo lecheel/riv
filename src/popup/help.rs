@@ -3,8 +3,7 @@
 
 use crate::popup::Scrollable;
 use crate::rounded_box::{
-    catppuccin, centered_in_edit, clamp_width, clear_rect, draw_border, draw_empty_row,
-    draw_row_text, BoxStyle, RowStyle,
+    catppuccin, centered_in_edit, clamp_width, clear_rect, draw_border, draw_empty_row, draw_row_text, BoxStyle, RowStyle,
 };
 use crossterm::execute;
 use crossterm::style::ResetColor;
@@ -116,13 +115,9 @@ pub fn render_help_popup(
             let line = &popup.lines[line_idx];
             let is_selected = line_idx == popup.selected;
             let row_style = if is_selected {
-                RowStyle::selected()
-                    .with_border(catppuccin::SURFACE0)
-                    .with_text(catppuccin::BLUE)
+                RowStyle::selected().with_border(catppuccin::SURFACE0).with_text(catppuccin::BLUE)
             } else {
-                RowStyle::normal()
-                    .with_border(catppuccin::SURFACE0)
-                    .with_text(catppuccin::TEXT)
+                RowStyle::normal().with_border(catppuccin::SURFACE0).with_text(catppuccin::TEXT)
             };
             draw_row_text(stdout, x, row_y, popup.width, line, &row_style)?;
         } else {

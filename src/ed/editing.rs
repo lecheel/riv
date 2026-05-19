@@ -149,10 +149,7 @@ impl EditingExt for Editor {
                 // Determine new indentation level
                 let mut new_indent = indent.clone();
                 let before_trim = before.trim_end();
-                if before_trim.ends_with('{')
-                    || before_trim.ends_with('(')
-                    || before_trim.ends_with('[')
-                {
+                if before_trim.ends_with('{') || before_trim.ends_with('(') || before_trim.ends_with('[') {
                     let one_level = if self.config.use_tabs {
                         "\t".to_string()
                     } else {
@@ -162,9 +159,7 @@ impl EditingExt for Editor {
                 }
 
                 // If a closing delimiter follows the cursor, place it on its own line
-                let dedent_after = after_trim.starts_with('}')
-                    || after_trim.starts_with(')')
-                    || after_trim.starts_with(']');
+                let dedent_after = after_trim.starts_with('}') || after_trim.starts_with(')') || after_trim.starts_with(']');
 
                 let (text, c_col) = if dedent_after {
                     (
@@ -172,10 +167,7 @@ impl EditingExt for Editor {
                         new_indent.graphemes(true).count(),
                     )
                 } else {
-                    (
-                        format!("\n{}{}", new_indent, after_trim),
-                        new_indent.graphemes(true).count(),
-                    )
+                    (format!("\n{}{}", new_indent, after_trim), new_indent.graphemes(true).count())
                 };
 
                 (text, c_col, after.graphemes(true).count())
@@ -296,11 +288,7 @@ impl EditingExt for Editor {
             // Delete lines.
             if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
                 for _ in 0..count {
-                    let line = self
-                        .windows
-                        .active_window()
-                        .map(|w| w.cursor.position.line)
-                        .unwrap_or(0);
+                    let line = self.windows.active_window().map(|w| w.cursor.position.line).unwrap_or(0);
                     if line < buffer.line_count() {
                         buffer.delete_line(line);
                         buffer.dirty = true;
@@ -308,8 +296,7 @@ impl EditingExt for Editor {
                 }
                 // Clamp cursor: if we deleted past EOF, move to the last line.
                 if let Some(window) = self.windows.active_window_mut() {
-                    if window.cursor.position.line >= buffer.line_count() && buffer.line_count() > 0
-                    {
+                    if window.cursor.position.line >= buffer.line_count() && buffer.line_count() > 0 {
                         window.cursor.position.line = buffer.line_count() - 1;
                     }
                 }
@@ -402,11 +389,7 @@ impl EditingExt for Editor {
         if let Some(window) = self.windows.active_window_mut() {
             let buffer_id = window.buffer_id;
             let pos = window.cursor.position;
-            let line_len = self
-                .buffers
-                .get(&buffer_id)
-                .map(|b| b.line_len(pos.line))
-                .unwrap_or(0);
+            let line_len = self.buffers.get(&buffer_id).map(|b| b.line_len(pos.line)).unwrap_or(0);
             if pos.col < line_len {
                 let count = line_len - pos.col;
                 if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
@@ -600,17 +583,10 @@ impl EditingExt for Editor {
                     new_indent.push_str(&one_level);
                 }
 
-                (
-                    format!("\n{}", new_indent),
-                    new_indent.graphemes(true).count(),
-                )
+                (format!("\n{}", new_indent), new_indent.graphemes(true).count())
             };
 
-            let line_len = self
-                .buffers
-                .get(&buffer_id)
-                .map(|b| b.line_len(line))
-                .unwrap_or(0);
+            let line_len = self.buffers.get(&buffer_id).map(|b| b.line_len(line)).unwrap_or(0);
             let insert_pos = CursorPosition::new(line, line_len);
 
             if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
@@ -651,17 +627,10 @@ impl EditingExt for Editor {
                     new_indent.push_str(&one_level);
                 }
 
-                (
-                    format!("\n{}", new_indent),
-                    new_indent.graphemes(true).count(),
-                )
+                (format!("\n{}", new_indent), new_indent.graphemes(true).count())
             };
 
-            let line_len = self
-                .buffers
-                .get(&buffer_id)
-                .map(|b| b.line_len(line))
-                .unwrap_or(0);
+            let line_len = self.buffers.get(&buffer_id).map(|b| b.line_len(line)).unwrap_or(0);
             let insert_pos = CursorPosition::new(line, line_len);
 
             if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
@@ -788,11 +757,7 @@ impl EditingExt for Editor {
 
     fn dedent_n_lines(&mut self, count: usize) {
         let count = count.max(1);
-        let remove_count = if self.config.use_tabs {
-            1
-        } else {
-            self.config.tab_width as usize
-        };
+        let remove_count = if self.config.use_tabs { 1 } else { self.config.tab_width as usize };
         if let Some(window) = self.windows.active_window_mut() {
             let buffer_id = window.buffer_id;
             let start_line = window.cursor.position.line;
@@ -802,8 +767,7 @@ impl EditingExt for Editor {
                     let actual = remove_count.min(buffer.line_len(line));
                     buffer.delete_at(CursorPosition::new(line, 0), actual);
                 }
-                window.cursor.position.col =
-                    window.cursor.position.col.saturating_sub(remove_count);
+                window.cursor.position.col = window.cursor.position.col.saturating_sub(remove_count);
                 buffer.dirty = true;
                 self.invalidate_git_gutter();
             }
@@ -878,10 +842,7 @@ impl EditingExt for Editor {
 
         // ── Visual mode: same as paste_after (replace selection) ──
         // In Vim, both p and P replace the visual selection.
-        if matches!(
-            self.mode,
-            Mode::Visual | Mode::VisualLine | Mode::VisualBlock
-        ) {
+        if matches!(self.mode, Mode::Visual | Mode::VisualLine | Mode::VisualBlock) {
             // pending_register was already consumed above, yank_register is set.
             // Delegate to paste_after which now handles visual mode.
             self.paste_after();
@@ -894,11 +855,7 @@ impl EditingExt for Editor {
             let buffer_id = window.buffer_id;
             let pos = window.cursor.position;
             if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
-                let insert_pos = if linewise {
-                    CursorPosition::new(pos.line, 0)
-                } else {
-                    pos
-                };
+                let insert_pos = if linewise { CursorPosition::new(pos.line, 0) } else { pos };
                 let _new_pos = buffer.insert_at(insert_pos, &self.yank_register);
                 if linewise {
                     // ★ FIX: cursor on the first pasted line (which is at pos.line
@@ -929,10 +886,7 @@ impl EditingExt for Editor {
         }
 
         // ── Visual mode: replace selection with register contents ──
-        if matches!(
-            self.mode,
-            Mode::Visual | Mode::VisualLine | Mode::VisualBlock
-        ) {
+        if matches!(self.mode, Mode::Visual | Mode::VisualLine | Mode::VisualBlock) {
             let paste_text = self.yank_register.clone();
 
             match self.mode {
@@ -974,11 +928,7 @@ impl EditingExt for Editor {
         };
 
         if linewise {
-            let line_count = self
-                .buffers
-                .get(&buffer_id)
-                .map(|b| b.line_count())
-                .unwrap_or(0);
+            let line_count = self.buffers.get(&buffer_id).map(|b| b.line_count()).unwrap_or(0);
             let next_line = pos.line + 1;
 
             if next_line < line_count {
@@ -1048,10 +998,7 @@ impl EditingExt for Editor {
                         // is consistent with what was just yanked.
                         self.yank_register = text.clone();
 
-                        self.set_status(format!(
-                            "Buffer yanked to clipboard ({} bytes)",
-                            text.len()
-                        ));
+                        self.set_status(format!("Buffer yanked to clipboard ({} bytes)", text.len()));
                         return CommandResult::Message("Buffer yanked to clipboard".to_string());
                     }
                     Err(e) => {
@@ -1098,11 +1045,7 @@ impl EditingExt for Editor {
                         window.cursor.position = new_pos;
                         buffer.dirty = true;
                         s.invalidate_git_gutter();
-                        s.set_status(format!(
-                            "Pasted {} bytes from clipboard at line {}",
-                            text.len(),
-                            line + 1
-                        ));
+                        s.set_status(format!("Pasted {} bytes from clipboard at line {}", text.len(), line + 1));
                         return CommandResult::ContentChanged;
                     }
                 }
@@ -1130,11 +1073,7 @@ impl EditingExt for Editor {
                         }
                         s.invalidate_git_gutter();
                         s.dirty.mark_all();
-                        let msg = format!(
-                            "Buffer replaced from clipboard ({} -> {} bytes)",
-                            bytes.unwrap_or(0),
-                            text.len()
-                        );
+                        let msg = format!("Buffer replaced from clipboard ({} -> {} bytes)", bytes.unwrap_or(0), text.len());
                         s.set_status(msg);
                         return CommandResult::ContentChanged;
                     }
@@ -1152,9 +1091,7 @@ impl EditingExt for Editor {
             let buffer_id = window.buffer_id;
             if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
                 if buffer.in_undo_group() {
-                    if self.last_edit_time.elapsed().as_millis()
-                        > self.undo_break_timeout_ms as u128
-                    {
+                    if self.last_edit_time.elapsed().as_millis() > self.undo_break_timeout_ms as u128 {
                         buffer.end_undo_group(window.cursor.position);
                         buffer.begin_undo_group(window.cursor.position);
                         self.last_edit_time = std::time::Instant::now();
@@ -1186,8 +1123,7 @@ impl EditingExt for Editor {
             }
         }
 
-        let result =
-            buffer_id.and_then(|bid| self.buffers.get_mut(&bid).and_then(|b| b.pop_undo()));
+        let result = buffer_id.and_then(|bid| self.buffers.get_mut(&bid).and_then(|b| b.pop_undo()));
 
         if let Some((text, cursor)) = result {
             if let Some(buffer) = self.buffers.get_mut(&buffer_id.unwrap()) {
@@ -1222,8 +1158,7 @@ impl EditingExt for Editor {
             }
         }
 
-        let result =
-            buffer_id.and_then(|bid| self.buffers.get_mut(&bid).and_then(|b| b.pop_redo()));
+        let result = buffer_id.and_then(|bid| self.buffers.get_mut(&bid).and_then(|b| b.pop_redo()));
 
         if let Some((text, cursor)) = result {
             if let Some(buffer) = self.buffers.get_mut(&buffer_id.unwrap()) {
@@ -1265,19 +1200,12 @@ impl EditingExt for Editor {
         let (prefix, _suffix) = match comment_chars(&language) {
             Some(p) => p,
             None => {
-                self.set_infobar_message(
-                    "No comment syntax defined for this file type".to_string(),
-                );
+                self.set_infobar_message("No comment syntax defined for this file type".to_string());
                 return CommandResult::NoOp;
             }
         };
 
-        let end_line = (start_line + count).min(
-            self.buffers
-                .get(&buffer_id)
-                .map(|b| b.line_count())
-                .unwrap_or(0),
-        );
+        let end_line = (start_line + count).min(self.buffers.get(&buffer_id).map(|b| b.line_count()).unwrap_or(0));
 
         self.with_undo_group(|s| {
             for line in start_line..end_line {
@@ -1362,9 +1290,7 @@ impl EditingExt for Editor {
             Mode::Command | Mode::LlmPrompt => {
                 // Paste into command line — strip newlines, take first line only
                 let first_line = text.lines().next().unwrap_or("").to_string();
-                self.command_prompt
-                    .buffer
-                    .insert_str(self.command_prompt.cursor, &first_line);
+                self.command_prompt.buffer.insert_str(self.command_prompt.cursor, &first_line);
                 self.command_prompt.cursor += first_line.len();
                 self.trigger_command_completion();
                 CommandResult::ViewChanged
@@ -1385,11 +1311,7 @@ impl EditingExt for Editor {
 
                     if linewise {
                         // ── Linewise paste: insert on the next line ──
-                        let line_count = s
-                            .buffers
-                            .get(&buffer_id)
-                            .map(|b| b.line_count())
-                            .unwrap_or(0);
+                        let line_count = s.buffers.get(&buffer_id).map(|b| b.line_count()).unwrap_or(0);
                         let next_line = pos.line + 1;
 
                         if next_line < line_count {
@@ -1419,17 +1341,9 @@ impl EditingExt for Editor {
                         }
                     } else {
                         // ── Characterwise paste: insert after cursor character ──
-                        let line_len = s
-                            .buffers
-                            .get(&buffer_id)
-                            .map(|b| b.line_len(pos.line))
-                            .unwrap_or(0);
+                        let line_len = s.buffers.get(&buffer_id).map(|b| b.line_len(pos.line)).unwrap_or(0);
                         // In vim, `p` pastes after the character under cursor
-                        let insert_col = if line_len > 0 && pos.col < line_len {
-                            pos.col + 1
-                        } else {
-                            pos.col
-                        };
+                        let insert_col = if line_len > 0 && pos.col < line_len { pos.col + 1 } else { pos.col };
                         let insert_pos = CursorPosition::new(pos.line, insert_col);
                         if let Some(buffer) = s.buffers.get_mut(&buffer_id) {
                             let new_pos = buffer.insert_at(insert_pos, &normalized);
@@ -1556,11 +1470,7 @@ impl EditingExt for Editor {
             if buffer.tree().is_none() {
                 return Err("No syntax tree — save file first or check language detection".into());
             }
-            (
-                window.buffer_id,
-                self.config.tab_width as usize,
-                self.config.use_tabs,
-            )
+            (window.buffer_id, self.config.tab_width as usize, self.config.use_tabs)
         };
 
         // ── Collect brace line numbers ──
@@ -1571,11 +1481,7 @@ impl EditingExt for Editor {
         let mut open_braces: Vec<usize> = Vec::new();
         let mut close_braces: Vec<usize> = Vec::new();
 
-        fn collect_braces(
-            node: &tree_sitter::Node,
-            opens: &mut Vec<usize>,
-            closes: &mut Vec<usize>,
-        ) {
+        fn collect_braces(node: &tree_sitter::Node, opens: &mut Vec<usize>, closes: &mut Vec<usize>) {
             let kind = node.kind();
             if is_string_or_comment_node(kind) {
                 return;
@@ -1671,11 +1577,7 @@ impl EditingExt for Editor {
         }
 
         // ★ Undoable replacement ★
-        let cursor_pos = self
-            .windows
-            .active_window()
-            .map(|w| w.cursor.position)
-            .unwrap_or_default();
+        let cursor_pos = self.windows.active_window().map(|w| w.cursor.position).unwrap_or_default();
 
         let buffer = self.buffers.get_mut(&buffer_id).unwrap();
         let replaced = buffer.replace_all(&final_text, cursor_pos);
@@ -1751,10 +1653,7 @@ impl EditingExt for Editor {
                 Some(b) => b,
                 None => return CommandResult::NoOp,
             };
-            let line_text = buffer
-                .line_text(cursor.line)
-                .unwrap_or_default()
-                .to_string();
+            let line_text = buffer.line_text(cursor.line).unwrap_or_default().to_string();
             (buffer_id, cursor, line_text)
         };
 

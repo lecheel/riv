@@ -60,9 +60,9 @@ impl LspExt for Editor {
                         .buffers
                         .iter()
                         .filter_map(|b| {
-                            b.file_path.as_ref().and_then(|p| {
-                                std::fs::read_to_string(p).ok().map(|t| (p.clone(), t))
-                            })
+                            b.file_path
+                                .as_ref()
+                                .and_then(|p| std::fs::read_to_string(p).ok().map(|t| (p.clone(), t)))
                         })
                         .collect();
 
@@ -103,8 +103,7 @@ impl LspExt for Editor {
                     if should_try_lsp_ghost {
                         if let Some(first) = items.first() {
                             // OPT: use borrowed get_insert_text when possible
-                            let insert_text =
-                                first.get_insert_text().unwrap_or(&first.label).to_string();
+                            let insert_text = first.get_insert_text().unwrap_or(&first.label).to_string();
                             if !insert_text.is_empty() {
                                 self.process_lsp_ghost(first.label.clone(), insert_text);
                                 continue;
@@ -113,10 +112,7 @@ impl LspExt for Editor {
                     }
 
                     if matches!(self.get_mode(), Mode::Insert | Mode::Replace) {
-                        crate::completion::CompletionEngine::update_unified_completions(
-                            self,
-                            Some(items),
-                        );
+                        crate::completion::CompletionEngine::update_unified_completions(self, Some(items));
                         self.dirty.mark_all();
                         crate::ed::completion::CompletionExt::request_completion_resolve(self);
                     }
@@ -140,11 +136,7 @@ impl LspExt for Editor {
                     self.dirty.mark_all();
                 }
 
-                AppMessage::LspInlayHints {
-                    uri,
-                    hints,
-                    version: _,
-                } => {
+                AppMessage::LspInlayHints { uri, hints, version: _ } => {
                     self.insert_lsp_inlay_hints(uri, hints);
                     self.dirty.mark_all();
                 }
@@ -222,10 +214,7 @@ impl LspExt for Editor {
                             if save_after {
                                 match self.save() {
                                     Ok(()) => self.set_status("Formatted and saved.".into()),
-                                    Err(e) => self.set_infobar_message(format!(
-                                        "Format ok, save failed: {}",
-                                        e
-                                    )),
+                                    Err(e) => self.set_infobar_message(format!("Format ok, save failed: {}", e)),
                                 }
                             } else {
                                 self.set_status("Formatted.".into());
@@ -265,9 +254,7 @@ impl LspExt for Editor {
         self.lsp.completion_was_trigger = trigger.is_some();
         // ─────────────────────────────────────────────────────────────────────
 
-        self.send_lsp_message(crate::lsp::LspMessage::RequestCompletion(
-            path, line, character, trigger,
-        ));
+        self.send_lsp_message(crate::lsp::LspMessage::RequestCompletion(path, line, character, trigger));
         self.set_lsp_completion_pending(true);
     }
 
@@ -340,12 +327,7 @@ impl LspExt for Editor {
     }
 
     fn lsp_did_change(&mut self, path: &Path, text: String, version: i32) {
-        self.send_lsp_message(crate::lsp::LspMessage::ChangeFile(
-            path.to_path_buf(),
-            String::new(),
-            text,
-            version,
-        ));
+        self.send_lsp_message(crate::lsp::LspMessage::ChangeFile(path.to_path_buf(), String::new(), text, version));
     }
 
     fn notify_lsp_change(&mut self) {
@@ -353,9 +335,7 @@ impl LspExt for Editor {
         if self.is_paste_in_progress() {
             return;
         }
-        self.set_lsp_change_deadline(
-            Instant::now() + std::time::Duration::from_millis(self.get_lsp_change_debounce_ms()),
-        );
+        self.set_lsp_change_deadline(Instant::now() + std::time::Duration::from_millis(self.get_lsp_change_debounce_ms()));
     }
 
     fn handle_lsp_format_result(
@@ -476,19 +456,14 @@ impl LspExt for Editor {
             let popup = TagListPopup::from_lsp_locations(&word, &locations);
             self.popup.tag_list = Some(popup);
 
-            self.set_status(format!(
-                "{} definitions found — select in popup",
-                locations.len()
-            ));
+            self.set_status(format!("{} definitions found — select in popup", locations.len()));
         }
     }
 }
 
 // Private helper methods for Editor
 impl Editor {
-    fn try_recv_app_message(
-        &mut self,
-    ) -> Result<AppMessage, tokio::sync::mpsc::error::TryRecvError> {
+    fn try_recv_app_message(&mut self) -> Result<AppMessage, tokio::sync::mpsc::error::TryRecvError> {
         self.app_rx.try_recv()
     }
 

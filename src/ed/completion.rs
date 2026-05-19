@@ -70,8 +70,7 @@ fn is_trigger_char(ch: char) -> bool {
 
 impl CompletionExt for Editor {
     fn trigger_completion(&mut self) -> CommandResult {
-        let is_insert_or_replace =
-            self.mode == crate::editor::Mode::Insert || self.mode == crate::editor::Mode::Replace;
+        let is_insert_or_replace = self.mode == crate::editor::Mode::Insert || self.mode == crate::editor::Mode::Replace;
         if !is_insert_or_replace {
             return CommandResult::NoOp;
         }
@@ -119,8 +118,7 @@ impl CompletionExt for Editor {
             return;
         }
 
-        let is_insert_or_replace =
-            self.mode == crate::editor::Mode::Insert || self.mode == crate::editor::Mode::Replace;
+        let is_insert_or_replace = self.mode == crate::editor::Mode::Insert || self.mode == crate::editor::Mode::Replace;
         if !is_insert_or_replace {
             return;
         }
@@ -297,10 +295,7 @@ impl CompletionExt for Editor {
 
         // OPT: skip resolve if documentation already present
         let lsp_item = self.completion.selected_item().and_then(|item| {
-            if item.source == crate::completion::CompletionSource::Lsp
-                && item.documentation.is_none()
-                && item.lsp_item.is_some()
-            {
+            if item.source == crate::completion::CompletionSource::Lsp && item.documentation.is_none() && item.lsp_item.is_some() {
                 item.lsp_item.clone()
             } else {
                 None
@@ -309,8 +304,7 @@ impl CompletionExt for Editor {
 
         if let Some(lsp_item) = lsp_item {
             if lsp_item.data.is_some() {
-                let _ = self.lsp.tx
-                    .send(crate::lsp::LspMessage::ResolveCompletionItem(lsp_item));
+                let _ = self.lsp.tx.send(crate::lsp::LspMessage::ResolveCompletionItem(lsp_item));
             }
         }
     }
@@ -346,8 +340,7 @@ impl CompletionExt for Editor {
                             let remaining_str = std::str::from_utf8(remaining).unwrap_or("");
                             completion_merge_overlap(&text, remaining_str)
                         } else {
-                            let remaining: String =
-                                line_text.graphemes(true).skip(pos.col).collect();
+                            let remaining: String = line_text.graphemes(true).skip(pos.col).collect();
                             completion_merge_overlap(&text, &remaining)
                         }
                     } else {
@@ -427,8 +420,7 @@ impl CompletionExt for Editor {
         let (range_prefix, after_range) = strip_range_prefix(input);
 
         const FILE_ARG_COMMANDS: &[&str] = &[
-            "e", "edit", "open", "sp", "split", "vs", "vsplit", "find", "tabe", "tabedit", "w",
-            "write",
+            "e", "edit", "open", "sp", "split", "vs", "vsplit", "find", "tabe", "tabedit", "w", "write",
         ];
 
         if let Some(space_pos) = after_range.find(|c: char| c.is_whitespace()) {
@@ -447,17 +439,14 @@ impl CompletionExt for Editor {
                 let base_dir = self.current_buffer().and_then(|b| b.file_path.as_deref());
 
                 let mut items: Vec<crate::completion::CompletionEntry> =
-                    crate::completion::collect_file_completions_for_arg(
-                        if arg.is_empty() { "" } else { arg },
-                        base_dir,
-                    )
-                    .into_iter()
-                    .map(|entry| crate::completion::CompletionEntry {
-                        text: format!("{}{}", cmd_prefix, entry.text),
-                        label: format!("{}{}", cmd_prefix, entry.label),
-                        ..entry
-                    })
-                    .collect();
+                    crate::completion::collect_file_completions_for_arg(if arg.is_empty() { "" } else { arg }, base_dir)
+                        .into_iter()
+                        .map(|entry| crate::completion::CompletionEntry {
+                            text: format!("{}{}", cmd_prefix, entry.text),
+                            label: format!("{}{}", cmd_prefix, entry.label),
+                            ..entry
+                        })
+                        .collect();
 
                 items.sort_by(|a, b| {
                     b.score
@@ -544,8 +533,8 @@ impl CompletionExt for Editor {
         let buffer_id = self.windows.active_window().map(|w| w.buffer_id);
 
         if let Some(bid) = buffer_id {
-            let needs_rebuild = self.completion.word_index_buffer_id != Some(bid)
-                || self.buffers.get(&bid).map(|b| b.dirty).unwrap_or(false);
+            let needs_rebuild =
+                self.completion.word_index_buffer_id != Some(bid) || self.buffers.get(&bid).map(|b| b.dirty).unwrap_or(false);
 
             if needs_rebuild {
                 if let Some(buffer) = self.buffers.get(&bid) {

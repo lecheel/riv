@@ -74,11 +74,7 @@ pub fn handle_jump_key(editor: &mut Editor, c: char) -> bool {
             // Targets are already stored in editor.jump.targets from above!
             editor.jump.labels = labels;
             editor.jump.phase = crate::editor::JumpPhase::Active;
-            editor.set_status(format!(
-                "Jump: {} [{} targets]",
-                editor.jump.input,
-                editor.jump.targets.len()
-            ));
+            editor.set_status(format!("Jump: {} [{} targets]", editor.jump.input, editor.jump.targets.len()));
             true
         }
         crate::editor::JumpPhase::Active => {
@@ -147,10 +143,7 @@ fn find_targets(editor: &Editor, pattern: &str) -> Vec<crate::editor::JumpTarget
 
         for col in 0..=(line_chars.len().saturating_sub(2)) {
             if line_chars[col] == pat_chars[0] && line_chars[col + 1] == pat_chars[1] {
-                targets.push(crate::editor::JumpTarget {
-                    line: line_idx,
-                    col,
-                });
+                targets.push(crate::editor::JumpTarget { line: line_idx, col });
             }
         }
     }

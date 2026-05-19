@@ -142,12 +142,10 @@ impl FilePicker {
         if self.filtered.is_empty() {
             self.selected = 0;
         } else if self.selected >= self.filtered.len() {
-            let parent_pos = self.filtered.iter().position(|&idx| {
-                self.all_entries
-                    .get(idx)
-                    .map(|e| e.is_parent)
-                    .unwrap_or(false)
-            });
+            let parent_pos = self
+                .filtered
+                .iter()
+                .position(|&idx| self.all_entries.get(idx).map(|e| e.is_parent).unwrap_or(false));
             self.selected = parent_pos.unwrap_or(self.filtered.len() - 1);
         }
 
@@ -220,16 +218,11 @@ impl FilePicker {
     }
 
     pub fn selected_entry(&self) -> Option<&FileEntry> {
-        self.filtered
-            .get(self.selected)
-            .and_then(|&i| self.all_entries.get(i))
+        self.filtered.get(self.selected).and_then(|&i| self.all_entries.get(i))
     }
 
     pub fn can_go_up(&self) -> bool {
-        self.cwd
-            .parent()
-            .map(|p| !p.as_os_str().is_empty())
-            .unwrap_or(false)
+        self.cwd.parent().map(|p| !p.as_os_str().is_empty()).unwrap_or(false)
     }
 
     pub fn cwd_display(&self) -> String {
@@ -284,10 +277,7 @@ pub fn render_file_picker(
         let max_filter_len = content_width(popup_width, &filter_style).saturating_sub(prompt_w + 1);
         let filter_display = truncate_to_width(&picker.filter, max_filter_len);
 
-        let segments = [
-            Segment::new(">", catppuccin::PEACH),
-            Segment::new(filter_display, catppuccin::TEXT),
-        ];
+        let segments = [Segment::new(">", catppuccin::PEACH), Segment::new(filter_display, catppuccin::TEXT)];
         draw_row(stdout, x, filter_y, popup_width, &segments, &filter_style)?;
 
         let cursor_x = x as usize + 1 + prompt_w + str_width(filter_display);
@@ -319,11 +309,7 @@ pub fn render_file_picker(
             let real_idx = picker.filtered[entry_idx];
             let entry = &picker.all_entries[real_idx];
             let is_selected = entry_idx == picker.selected;
-            let row_style = if is_selected {
-                RowStyle::selected()
-            } else {
-                RowStyle::normal()
-            };
+            let row_style = if is_selected { RowStyle::selected() } else { RowStyle::normal() };
 
             let (icon, icon_color) = if entry.is_parent {
                 ("← ", catppuccin::YELLOW)
@@ -351,10 +337,7 @@ pub fn render_file_picker(
                 catppuccin::SUBTEXT
             };
 
-            let segments = [
-                Segment::new(icon, icon_color),
-                Segment::new(&entry.name, name_color),
-            ];
+            let segments = [Segment::new(icon, icon_color), Segment::new(&entry.name, name_color)];
             draw_row(stdout, x, row_y, popup_width, &segments, &row_style)?;
         } else {
             draw_empty_row(stdout, x, row_y, popup_width, &RowStyle::normal())?;
@@ -365,17 +348,11 @@ pub fn render_file_picker(
     let bottom_y = filter_y + 1 + content_rows as u16;
     let footer_text = format!(
         "[-] up  [Enter] open  [Esc]{}close  {}/{}",
-        if picker.filter_is_empty() {
-            " "
-        } else {
-            " clear "
-        },
+        if picker.filter_is_empty() { " " } else { " clear " },
         picker.selected + 1,
         picker.filtered.len(),
     );
-    let footer_style = BoxStyle::default()
-        .with_footer(footer_text)
-        .with_bg(catppuccin::MANTLE);
+    let footer_style = BoxStyle::default().with_footer(footer_text).with_bg(catppuccin::MANTLE);
     draw_bottom_border(stdout, x, bottom_y, popup_width, &footer_style)?;
 
     execute!(stdout, ResetColor)?;
@@ -395,11 +372,7 @@ pub fn case_insensitive_find(haystack: &str, needle: &str) -> Option<(usize, usi
     }
     for i in 0..=hay_chars.len() - n_len {
         let window: String = hay_chars[i..i + n_len].iter().collect();
-        if window
-            .to_lowercase()
-            .chars()
-            .eq(needle_lower.iter().cloned())
-        {
+        if window.to_lowercase().chars().eq(needle_lower.iter().cloned()) {
             let start_byte = hay_chars[..i].iter().collect::<String>().len();
             let end_byte = hay_chars[..i + n_len].iter().collect::<String>().len();
             return Some((start_byte, end_byte));

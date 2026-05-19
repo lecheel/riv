@@ -38,13 +38,7 @@ impl SessionManager {
         // Sanitize: only allow alphanumeric, underscore, hyphen
         let safe: String = name
             .chars()
-            .map(|c| {
-                if c.is_alphanumeric() || c == '_' || c == '-' {
-                    c
-                } else {
-                    '_'
-                }
-            })
+            .map(|c| if c.is_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
             .collect();
         self.dir.join(format!("{}.json", safe))
     }
@@ -96,19 +90,11 @@ impl SessionManager {
     }
 
     fn now_secs() -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0)
+        SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
     }
 
     /// Save current session to disk
-    pub fn save(
-        &self,
-        name: &str,
-        preset: LlmPreset,
-        messages: &[LlmMessage],
-    ) -> Result<(), String> {
+    pub fn save(&self, name: &str, preset: LlmPreset, messages: &[LlmMessage]) -> Result<(), String> {
         let saved_msgs: Vec<SavedMessage> = messages
             .iter()
             .filter(|m| m.role != LlmRole::Error) // Don't persist error messages
@@ -125,8 +111,7 @@ impl SessionManager {
             updated_at: Self::now_secs(),
         };
 
-        let json =
-            serde_json::to_string_pretty(&session).map_err(|e| format!("serialize: {}", e))?;
+        let json = serde_json::to_string_pretty(&session).map_err(|e| format!("serialize: {}", e))?;
 
         fs::write(self.path_for(name), json).map_err(|e| format!("write: {}", e))?;
 
@@ -144,8 +129,7 @@ impl SessionManager {
         }
 
         let json = fs::read_to_string(&path).map_err(|e| format!("read: {}", e))?;
-        let session: SavedSession =
-            serde_json::from_str(&json).map_err(|e| format!("parse: {}", e))?;
+        let session: SavedSession = serde_json::from_str(&json).map_err(|e| format!("parse: {}", e))?;
 
         let messages: Vec<LlmMessage> = session
             .messages
@@ -191,11 +175,7 @@ impl SessionManager {
 
                 let msg_count = fs::read_to_string(entry.path())
                     .ok()
-                    .and_then(|json| {
-                        serde_json::from_str::<SavedSession>(&json)
-                            .ok()
-                            .map(|s| s.messages.len())
-                    })
+                    .and_then(|json| serde_json::from_str::<SavedSession>(&json).ok().map(|s| s.messages.len()))
                     .unwrap_or(0);
 
                 sessions.push(SessionInfo {

@@ -119,19 +119,13 @@ impl SearchExt for Editor {
         // ── Recompute if the active buffer changed or content was modified ──
         let current_buf = self.windows.active_window().map(|w| w.buffer_id);
 
-        let cursor = self
-            .windows
-            .active_window()
-            .map(|w| w.cursor.position)
-            .unwrap_or_default();
+        let cursor = self.windows.active_window().map(|w| w.cursor.position).unwrap_or_default();
 
         let cursor_still_on_current_match = !self.search.matches.is_empty()
             && self.search.current_match < self.search.matches.len()
             && self.search.matches[self.search.current_match] == cursor;
 
-        let need_recompute = current_buf != self.search.buffer_id
-            || self.search.matches_dirty
-            || !cursor_still_on_current_match;
+        let need_recompute = current_buf != self.search.buffer_id || self.search.matches_dirty || !cursor_still_on_current_match;
 
         if need_recompute {
             self.search.matches = self.find_all_matches(&self.search.prompt.buffer);
@@ -143,11 +137,7 @@ impl SearchExt for Editor {
                 return Error(format!("Pattern not found: {}", self.search.prompt.buffer));
             }
 
-            let cursor = self
-                .windows
-                .active_window()
-                .map(|w| w.cursor.position)
-                .unwrap_or_default();
+            let cursor = self.windows.active_window().map(|w| w.cursor.position).unwrap_or_default();
 
             // n = "next match in search direction" — must be strictly
             // after / before the cursor so we don't re-find the match
@@ -172,7 +162,9 @@ impl SearchExt for Editor {
                     }
                 }
                 SearchDirection::Backward => {
-                    let prev_idx = self.search.matches
+                    let prev_idx = self
+                        .search
+                        .matches
                         .iter()
                         .enumerate()
                         .rev()
@@ -223,19 +215,13 @@ impl SearchExt for Editor {
         // ── Recompute if the active buffer changed or content was modified ──
         let current_buf = self.windows.active_window().map(|w| w.buffer_id);
 
-        let cursor = self
-            .windows
-            .active_window()
-            .map(|w| w.cursor.position)
-            .unwrap_or_default();
+        let cursor = self.windows.active_window().map(|w| w.cursor.position).unwrap_or_default();
 
         let cursor_still_on_current_match = !self.search.matches.is_empty()
             && self.search.current_match < self.search.matches.len()
             && self.search.matches[self.search.current_match] == cursor;
 
-        let need_recompute = current_buf != self.search.buffer_id
-            || self.search.matches_dirty
-            || !cursor_still_on_current_match;
+        let need_recompute = current_buf != self.search.buffer_id || self.search.matches_dirty || !cursor_still_on_current_match;
 
         if need_recompute {
             self.search.matches = self.find_all_matches(&self.search.prompt.buffer);
@@ -246,17 +232,15 @@ impl SearchExt for Editor {
                 return Error(format!("Pattern not found: {}", self.search.prompt.buffer));
             }
 
-            let cursor = self
-                .windows
-                .active_window()
-                .map(|w| w.cursor.position)
-                .unwrap_or_default();
+            let cursor = self.windows.active_window().map(|w| w.cursor.position).unwrap_or_default();
 
             // N = "previous match in search direction" — the opposite
             // of n, so strictly before (forward) or after (backward).
             match self.search.direction.unwrap_or(SearchDirection::Forward) {
                 SearchDirection::Forward => {
-                    let prev_idx = self.search.matches
+                    let prev_idx = self
+                        .search
+                        .matches
                         .iter()
                         .enumerate()
                         .rev()
@@ -274,19 +258,17 @@ impl SearchExt for Editor {
                         }
                     }
                 }
-                SearchDirection::Backward => {
-                    match self.search.matches.iter().position(|pos| *pos > cursor) {
-                        Some(idx) => {
-                            self.search.current_match = idx;
-                            let pos = self.search.matches[idx];
-                            let _ = self.move_to_match(pos);
-                        }
-                        None => {
-                            self.search.current_match = self.search.matches.len() - 1;
-                            return Error("Search hit BOTTOM without match".to_string());
-                        }
+                SearchDirection::Backward => match self.search.matches.iter().position(|pos| *pos > cursor) {
+                    Some(idx) => {
+                        self.search.current_match = idx;
+                        let pos = self.search.matches[idx];
+                        let _ = self.move_to_match(pos);
                     }
-                }
+                    None => {
+                        self.search.current_match = self.search.matches.len() - 1;
+                        return Error("Search hit BOTTOM without match".to_string());
+                    }
+                },
             }
         } else {
             if self.search.matches.is_empty() {
@@ -460,11 +442,7 @@ impl SearchExt for Editor {
         self.search.matches = matches;
         self.search.buffer_id = self.windows.active_window().map(|w| w.buffer_id);
 
-        let cursor = self
-            .windows
-            .active_window()
-            .map(|w| w.cursor.position)
-            .unwrap_or_default();
+        let cursor = self.windows.active_window().map(|w| w.cursor.position).unwrap_or_default();
 
         // Find the first match strictly after cursor — no wrap.
         let next_idx = match self.search.matches.iter().position(|pos| *pos > cursor) {
@@ -510,25 +488,21 @@ impl SearchExt for Editor {
         self.search.matches = matches;
         self.search.buffer_id = self.windows.active_window().map(|w| w.buffer_id);
 
-        let cursor = self
-            .windows
-            .active_window()
-            .map(|w| w.cursor.position)
-            .unwrap_or_default();
+        let cursor = self.windows.active_window().map(|w| w.cursor.position).unwrap_or_default();
 
         let word_char_len = word.chars().count();
-        let reference_pos = self.search.matches
+        let reference_pos = self
+            .search
+            .matches
             .iter()
-            .find(|pos| {
-                pos.line == cursor.line
-                    && cursor.col >= pos.col
-                    && cursor.col < pos.col + word_char_len
-            })
+            .find(|pos| pos.line == cursor.line && cursor.col >= pos.col && cursor.col < pos.col + word_char_len)
             .copied()
             .unwrap_or(cursor);
 
         // Find the last match strictly before the reference position — no wrap.
-        let prev_idx = match self.search.matches
+        let prev_idx = match self
+            .search
+            .matches
             .iter()
             .enumerate()
             .rev()
@@ -591,7 +565,8 @@ impl SearchExt for Editor {
         if pattern_len == 0 {
             return false;
         }
-        self.search.matches
+        self.search
+            .matches
             .iter()
             .any(|pos| pos.line == line && col >= pos.col && col < pos.col + pattern_len)
     }
@@ -627,11 +602,7 @@ impl Editor {
         if self.search.matches.is_empty() {
             return NoOp;
         }
-        let cursor = self
-            .windows
-            .active_window()
-            .map(|w| w.cursor.position)
-            .unwrap_or_default();
+        let cursor = self.windows.active_window().map(|w| w.cursor.position).unwrap_or_default();
 
         for (i, pos) in self.search.matches.iter().enumerate() {
             if *pos >= cursor {
@@ -647,11 +618,7 @@ impl Editor {
         if self.search.matches.is_empty() {
             return NoOp;
         }
-        let cursor = self
-            .windows
-            .active_window()
-            .map(|w| w.cursor.position)
-            .unwrap_or_default();
+        let cursor = self.windows.active_window().map(|w| w.cursor.position).unwrap_or_default();
 
         for i in (0..self.search.matches.len()).rev() {
             if self.search.matches[i] <= cursor {

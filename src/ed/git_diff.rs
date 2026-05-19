@@ -66,10 +66,7 @@ fn parse_hunk_new_start(line: &str) -> Option<usize> {
         return None;
     }
     let new_range = parts[1].strip_prefix('+')?;
-    let num_str: String = new_range
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
+    let num_str: String = new_range.chars().take_while(|c| c.is_ascii_digit()).collect();
     if num_str.is_empty() {
         return None;
     }
@@ -112,11 +109,7 @@ fn canonicalize_file_path(file_path: &std::path::Path) -> PathBuf {
 
 /// Run `git diff` and return stdout.
 fn run_git_diff(repo_path: &std::path::Path, args: &[&str]) -> Result<String, String> {
-    match std::process::Command::new("git")
-        .args(args)
-        .current_dir(repo_path)
-        .output()
-    {
+    match std::process::Command::new("git").args(args).current_dir(repo_path).output() {
         Ok(o) => {
             let stdout = String::from_utf8_lossy(&o.stdout).to_string();
             let stderr = String::from_utf8_lossy(&o.stderr);
@@ -125,10 +118,7 @@ fn run_git_diff(repo_path: &std::path::Path, args: &[&str]) -> Result<String, St
                 if !stderr.is_empty() {
                     return Err(format!("git diff failed: {}", stderr.trim()));
                 }
-                return Err(format!(
-                    "git diff failed with exit code {:?}",
-                    o.status.code()
-                ));
+                return Err(format!("git diff failed with exit code {:?}", o.status.code()));
             }
             Ok(stdout)
         }
@@ -159,27 +149,15 @@ impl GitDiffExt for Editor {
 
         // Determine the file path: if we're already in a GitDiff buffer,
         // extract the original file from metadata; otherwise use current buffer.
-        let file_path = if self
-            .current_buffer()
-            .map(|b| b.kind == BufferKind::GitDiff)
-            .unwrap_or(false)
-        {
+        let file_path = if self.current_buffer().map(|b| b.kind == BufferKind::GitDiff).unwrap_or(false) {
             match self.extract_git_diff_file_path() {
                 Some(p) => p,
-                None => {
-                    return CommandResult::Error(
-                        "Cannot determine original file for diff".to_string(),
-                    )
-                }
+                None => return CommandResult::Error("Cannot determine original file for diff".to_string()),
             }
         } else {
             match self.current_buffer().and_then(|b| b.file_path.clone()) {
                 Some(p) => p,
-                None => {
-                    return CommandResult::Error(
-                        "No file associated with current buffer".to_string(),
-                    )
-                }
+                None => return CommandResult::Error("No file associated with current buffer".to_string()),
             }
         };
 
@@ -191,12 +169,7 @@ impl GitDiffExt for Editor {
 
         let git_root = match find_git_root(&start_dir) {
             Some(root) => root,
-            None => {
-                return CommandResult::Error(format!(
-                    "Not a git repository (or any parent): {}",
-                    start_dir.display()
-                ))
-            }
+            None => return CommandResult::Error(format!("Not a git repository (or any parent): {}", start_dir.display())),
         };
 
         // Update git provider if needed
@@ -224,16 +197,10 @@ impl GitDiffExt for Editor {
         // Build git diff command
         let diff_output = if git_ref == "HEAD" {
             // Uncommitted changes: working tree + index vs HEAD
-            run_git_diff(
-                git_provider.repo_path(),
-                &["diff", "HEAD", "--", &rel_path_str],
-            )
+            run_git_diff(git_provider.repo_path(), &["diff", "HEAD", "--", &rel_path_str])
         } else {
             // Commit range: ref vs HEAD
-            run_git_diff(
-                git_provider.repo_path(),
-                &["diff", &git_ref, "HEAD", "--", &rel_path_str],
-            )
+            run_git_diff(git_provider.repo_path(), &["diff", &git_ref, "HEAD", "--", &rel_path_str])
         };
 
         match diff_output {
@@ -249,16 +216,9 @@ impl GitDiffExt for Editor {
                         window.set_buffer(buf_id);
                     }
                     if let Some(buffer) = self.buffers.get_mut(&buf_id) {
-                        buffer
-                            .set_display_name(format!("Git Diff: {} vs {}", rel_path_str, git_ref));
+                        buffer.set_display_name(format!("Git Diff: {} vs {}", rel_path_str, git_ref));
                     }
-                    return self.git_diff_populate(
-                        buf_id,
-                        &output,
-                        &canon_file_path,
-                        &git_ref_owned,
-                        &rel_path_str,
-                    );
+                    return self.git_diff_populate(buf_id, &output, &canon_file_path, &git_ref_owned, &rel_path_str);
                 }
 
                 // Create a new buffer
@@ -274,13 +234,7 @@ impl GitDiffExt for Editor {
                     window.set_buffer(buffer_id);
                 }
 
-                self.git_diff_populate(
-                    buffer_id,
-                    &output,
-                    &canon_file_path,
-                    &git_ref_owned,
-                    &rel_path_str,
-                )
+                self.git_diff_populate(buffer_id, &output, &canon_file_path, &git_ref_owned, &rel_path_str)
             }
         }
     }
@@ -314,12 +268,7 @@ impl GitDiffExt for Editor {
 
         let git_root = match find_git_root(&start_dir) {
             Some(root) => root,
-            None => {
-                return CommandResult::Error(format!(
-                    "Not a git repository (or any parent): {}",
-                    start_dir.display()
-                ))
-            }
+            None => return CommandResult::Error(format!("Not a git repository (or any parent): {}", start_dir.display())),
         };
 
         let needs_update = match &self.git.provider {
@@ -383,11 +332,7 @@ impl GitDiffExt for Editor {
     fn git_diff_refresh(&mut self) -> CommandResult {
         let git_ref = match self.extract_git_diff_ref() {
             Some(r) => r,
-            None => {
-                return CommandResult::Error(
-                    "Cannot determine git ref for diff refresh".to_string(),
-                )
-            }
+            None => return CommandResult::Error("Cannot determine git ref for diff refresh".to_string()),
         };
 
         let buffer_id = match self.windows.active_window() {
@@ -410,22 +355,14 @@ impl GitDiffExt for Editor {
                 let rel_path_str = rel_path.to_string_lossy();
 
                 let diff_output = if git_ref == "HEAD" {
-                    run_git_diff(
-                        git_provider.repo_path(),
-                        &["diff", "HEAD", "--", &rel_path_str],
-                    )
+                    run_git_diff(git_provider.repo_path(), &["diff", "HEAD", "--", &rel_path_str])
                 } else {
-                    run_git_diff(
-                        git_provider.repo_path(),
-                        &["diff", &git_ref, "HEAD", "--", &rel_path_str],
-                    )
+                    run_git_diff(git_provider.repo_path(), &["diff", &git_ref, "HEAD", "--", &rel_path_str])
                 };
 
                 match diff_output {
                     Err(e) => CommandResult::Error(e),
-                    Ok(output) => {
-                        self.git_diff_populate(buffer_id, &output, &fp, &git_ref, &rel_path_str)
-                    }
+                    Ok(output) => self.git_diff_populate(buffer_id, &output, &fp, &git_ref, &rel_path_str),
                 }
             }
             None => {
@@ -447,11 +384,7 @@ impl GitDiffExt for Editor {
     fn git_diff_goto_file(&mut self) -> CommandResult {
         let (file_path, line_num) = match self.get_git_diff_hunk_line() {
             Some(result) => result,
-            None => {
-                return CommandResult::Message(
-                    "Move cursor to a diff hunk to jump to file".to_string(),
-                )
-            }
+            None => return CommandResult::Message("Move cursor to a diff hunk to jump to file".to_string()),
         };
 
         // Close the diff buffer first
@@ -484,11 +417,7 @@ impl GitDiffExt for Editor {
         let (is_gd, buffer_id) = {
             if let Some(window) = self.windows.active_window() {
                 let bid = window.buffer_id;
-                let is_gd = self
-                    .buffers
-                    .get(&bid)
-                    .map(|b| b.kind == BufferKind::GitDiff)
-                    .unwrap_or(false);
+                let is_gd = self.buffers.get(&bid).map(|b| b.kind == BufferKind::GitDiff).unwrap_or(false);
                 (is_gd, bid)
             } else {
                 return CommandResult::NoOp;
@@ -617,17 +546,12 @@ impl Editor {
             None => return CommandResult::Error("Not a git repository".to_string()),
         };
 
-        let branch = git_provider
-            .current_branch()
-            .unwrap_or_else(|_| "HEAD".to_string());
+        let branch = git_provider.current_branch().unwrap_or_else(|_| "HEAD".to_string());
 
         let mut content = String::new();
 
         // Header
-        content.push_str(&format!(
-            "── Git Diff ── {} vs {} ── branch: {} ──\n",
-            rel_path, git_ref, branch
-        ));
+        content.push_str(&format!("── Git Diff ── {} vs {} ── branch: {} ──\n", rel_path, git_ref, branch));
         // Metadata lines (parsed by refresh/goto — hidden from casual view)
         content.push_str(&format!("│file:{}\n", file_path.display()));
         content.push_str(&format!("│ref:{}\n", git_ref));
@@ -802,27 +726,17 @@ impl Editor {
         Some((file_path, target_line))
     }
     /// Populate the GitDiff buffer with a full-repo diff (no file filter).
-    fn git_diff_populate_all(
-        &mut self,
-        buffer_id: crate::buffer::BufferId,
-        diff_output: &str,
-        git_ref: &str,
-    ) -> CommandResult {
+    fn git_diff_populate_all(&mut self, buffer_id: crate::buffer::BufferId, diff_output: &str, git_ref: &str) -> CommandResult {
         let git_provider = match &self.git.provider {
             Some(gp) => gp,
             None => return CommandResult::Error("Not a git repository".to_string()),
         };
 
-        let branch = git_provider
-            .current_branch()
-            .unwrap_or_else(|_| "HEAD".to_string());
+        let branch = git_provider.current_branch().unwrap_or_else(|_| "HEAD".to_string());
 
         let mut content = String::new();
 
-        content.push_str(&format!(
-            "── Git Diff ── ALL FILES vs {} ── branch: {} ──\n",
-            git_ref, branch
-        ));
+        content.push_str(&format!("── Git Diff ── ALL FILES vs {} ── branch: {} ──\n", git_ref, branch));
         // Metadata — no │file: line means "all files"
         content.push_str(&format!("│ref:{}\n", git_ref));
         content.push('\n');

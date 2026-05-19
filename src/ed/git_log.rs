@@ -150,11 +150,7 @@ fn parse_log_with_files(output: &str) -> Vec<LogCommit> {
 
 fn clean_body(lines: &[String]) -> String {
     let start = lines.iter().position(|l| !l.trim().is_empty()).unwrap_or(0);
-    let end = lines
-        .iter()
-        .rposition(|l| !l.trim().is_empty())
-        .map(|i| i + 1)
-        .unwrap_or(0);
+    let end = lines.iter().rposition(|l| !l.trim().is_empty()).map(|i| i + 1).unwrap_or(0);
     if start >= end {
         return String::new();
     }
@@ -178,11 +174,7 @@ fn resolve_stat_path(trimmed: &str) -> Option<PathBuf> {
         let prefix = before_arrow.trim_end_matches('{');
         let after_parts: Vec<&str> = after_arrow.splitn(2, '}').collect();
         let middle = after_parts[0];
-        let suffix = if after_parts.len() > 1 {
-            after_parts[1]
-        } else {
-            ""
-        };
+        let suffix = if after_parts.len() > 1 { after_parts[1] } else { "" };
         format!("{}{}{}", prefix, middle, suffix)
     } else {
         path_part.to_string()
@@ -218,13 +210,7 @@ fn count_display(count: usize) -> String {
 
 // ── Content generation ──────────────────────────────────────────────
 
-fn build_log_content(
-    commits: &[LogCommit],
-    branch: &str,
-    repo_path: &str,
-    count: usize,
-    grep: &str,
-) -> String {
+fn build_log_content(commits: &[LogCommit], branch: &str, repo_path: &str, count: usize, grep: &str) -> String {
     let mut content = String::new();
 
     let grep_display = if grep.is_empty() {
@@ -287,12 +273,7 @@ fn build_log_content(
 
 // ── File save helper ────────────────────────────────────────────────
 
-fn save_file_at_commit(
-    repo_path: &Path,
-    hash: &str,
-    short_hash: &str,
-    file_path: &Path,
-) -> Result<String, String> {
+fn save_file_at_commit(repo_path: &Path, hash: &str, short_hash: &str, file_path: &Path) -> Result<String, String> {
     let ref_path = format!("{}:{}", hash, file_path.to_string_lossy());
 
     let output = std::process::Command::new("git")
@@ -306,16 +287,12 @@ fn save_file_at_commit(
         return Err(format!("git show failed: {}", stderr.trim()));
     }
 
-    let file_name = file_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("unknown");
+    let file_name = file_path.file_name().and_then(|n| n.to_str()).unwrap_or("unknown");
     let output_name = format!("{}_{}", short_hash, file_name);
 
     let output_path = repo_path.join(&output_name);
 
-    std::fs::write(&output_path, &output.stdout)
-        .map_err(|e| format!("Failed to write {}: {}", output_name, e))?;
+    std::fs::write(&output_path, &output.stdout).map_err(|e| format!("Failed to write {}: {}", output_name, e))?;
 
     Ok(output_name)
 }
@@ -346,12 +323,7 @@ impl GitLogExt for Editor {
 
         let git_root = match find_git_root(&start_dir) {
             Some(root) => root,
-            None => {
-                return CommandResult::Error(format!(
-                    "Not a git repository (or any parent): {}",
-                    start_dir.display()
-                ))
-            }
+            None => return CommandResult::Error(format!("Not a git repository (or any parent): {}", start_dir.display())),
         };
 
         let needs_update = match &self.git.provider {
@@ -376,9 +348,7 @@ impl GitLogExt for Editor {
                         self.git.provider = Some(gp);
                     }
                 }
-                Err(_) => {
-                    return CommandResult::Error("Not a git repository (or any parent)".to_string())
-                }
+                Err(_) => return CommandResult::Error("Not a git repository (or any parent)".to_string()),
             }
         }
 
@@ -425,11 +395,7 @@ impl GitLogExt for Editor {
     fn git_log_show_diff(&mut self) -> CommandResult {
         let hash = match self.get_git_log_commit_hash() {
             Some(h) => h,
-            None => {
-                return CommandResult::Message(
-                    "Move cursor to a commit to show its diff".to_string(),
-                )
-            }
+            None => return CommandResult::Message("Move cursor to a commit to show its diff".to_string()),
         };
 
         let repo_path = match &self.git.provider {
@@ -541,10 +507,7 @@ impl GitLogExt for Editor {
         let all_lines: Vec<&str> = output.lines().collect();
         let max_lines = 60;
         let lines: Vec<String> = if all_lines.len() > max_lines {
-            let mut l: Vec<String> = all_lines[..max_lines]
-                .iter()
-                .map(|s| s.to_string())
-                .collect();
+            let mut l: Vec<String> = all_lines[..max_lines].iter().map(|s| s.to_string()).collect();
             l.push(format!("... ({} more lines)", all_lines.len() - max_lines));
             l
         } else {
@@ -567,11 +530,7 @@ impl GitLogExt for Editor {
         let (is_gl, buffer_id) = {
             if let Some(window) = self.windows.active_window() {
                 let bid = window.buffer_id;
-                let is_gl = self
-                    .buffers
-                    .get(&bid)
-                    .map(|b| b.kind == BufferKind::GitLog)
-                    .unwrap_or(false);
+                let is_gl = self.buffers.get(&bid).map(|b| b.kind == BufferKind::GitLog).unwrap_or(false);
                 (is_gl, bid)
             } else {
                 return CommandResult::NoOp;
@@ -606,11 +565,7 @@ impl GitLogExt for Editor {
     fn git_log_save_file(&mut self) -> CommandResult {
         let hash = match self.get_git_log_commit_hash() {
             Some(h) => h,
-            None => {
-                return CommandResult::Message(
-                    "Move cursor to a commit or file stat line".to_string(),
-                )
-            }
+            None => return CommandResult::Message("Move cursor to a commit or file stat line".to_string()),
         };
 
         let short_hash: String = hash.chars().take(6).collect();
@@ -646,18 +601,9 @@ impl GitLogExt for Editor {
         }
 
         if !errors.is_empty() {
-            CommandResult::Error(format!(
-                "Saved {}/{}, errors: {}",
-                saved.len(),
-                files.len(),
-                errors.join("; ")
-            ))
+            CommandResult::Error(format!("Saved {}/{}, errors: {}", saved.len(), files.len(), errors.join("; ")))
         } else {
-            CommandResult::Message(format!(
-                "Saved {} file(s): {}",
-                saved.len(),
-                saved.join(", ")
-            ))
+            CommandResult::Message(format!("Saved {} file(s): {}", saved.len(), saved.join(", ")))
         }
     }
 }
@@ -683,9 +629,7 @@ impl Editor {
         };
 
         let git_root = git_provider.repo_path();
-        let branch = git_provider
-            .current_branch()
-            .unwrap_or_else(|_| "HEAD".to_string());
+        let branch = git_provider.current_branch().unwrap_or_else(|_| "HEAD".to_string());
 
         let stat_width = (self.term_width as usize).max(80);
 
@@ -704,17 +648,10 @@ impl Editor {
             args_vec.push(grep_flag);
         }
 
-        let output = match std::process::Command::new("git")
-            .args(&args_vec)
-            .current_dir(git_root)
-            .output()
-        {
+        let output = match std::process::Command::new("git").args(&args_vec).current_dir(git_root).output() {
             Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
             Ok(o) => {
-                return CommandResult::Error(format!(
-                    "git log failed: {}",
-                    String::from_utf8_lossy(&o.stderr)
-                ));
+                return CommandResult::Error(format!("git log failed: {}", String::from_utf8_lossy(&o.stderr)));
             }
             Err(e) => return CommandResult::Error(format!("Failed to run git: {}", e)),
         };
@@ -742,13 +679,7 @@ impl Editor {
         let commits = parse_log_with_files(&output);
 
         if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
-            let content = build_log_content(
-                &commits,
-                &branch,
-                &git_root.display().to_string(),
-                count,
-                grep,
-            );
+            let content = build_log_content(&commits, &branch, &git_root.display().to_string(), count, grep);
             buffer.rope = Rope::from_str(&content);
         }
 

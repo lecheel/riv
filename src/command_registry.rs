@@ -183,9 +183,7 @@ fn split_horizontal_handler(e: &mut Editor, args: &str) -> CommandResult {
         let path = PathBuf::from(args);
         match e.buffers.open_file(&path) {
             Ok(bid) => {
-                let _ = e
-                    .windows
-                    .split_active_with_buffer(SplitDirection::Horizontal, bid);
+                let _ = e.windows.split_active_with_buffer(SplitDirection::Horizontal, bid);
                 e.windows.resize_all(e.term_width, e.term_height);
                 e.dirty.mark_all();
                 CommandResult::Message(format!("Opened {:?}", path))
@@ -207,9 +205,7 @@ fn split_vertical_handler(e: &mut Editor, args: &str) -> CommandResult {
         let path = PathBuf::from(args);
         match e.buffers.open_file(&path) {
             Ok(bid) => {
-                let _ = e
-                    .windows
-                    .split_active_with_buffer(SplitDirection::Vertical, bid);
+                let _ = e.windows.split_active_with_buffer(SplitDirection::Vertical, bid);
                 e.windows.resize_all(e.term_width, e.term_height);
                 e.dirty.mark_all();
                 CommandResult::Message(format!("Opened {:?}", path))
@@ -309,11 +305,7 @@ fn glog_handler(e: &mut Editor, args: &str) -> CommandResult {
 
     if !args.is_empty() {
         // Strip optional "grep " prefix
-        let effective_args = if args.starts_with("grep ") {
-            &args[5..]
-        } else {
-            args
-        };
+        let effective_args = if args.starts_with("grep ") { &args[5..] } else { args };
 
         // Split into first token and rest
         let mut parts = effective_args.splitn(2, |c: char| c.is_ascii_whitespace());
@@ -443,10 +435,7 @@ fn fmt_ts_handler(e: &mut Editor, _args: &str) -> CommandResult {
         }
     } else {
         // Normal mode: entire buffer
-        let last_line = e
-            .current_buffer()
-            .map(|b| b.line_count().saturating_sub(1))
-            .unwrap_or(0);
+        let last_line = e.current_buffer().map(|b| b.line_count().saturating_sub(1)).unwrap_or(0);
         Some((0, last_line))
     };
 
@@ -489,10 +478,7 @@ fn reg_handler(e: &mut Editor, _args: &str) -> CommandResult {
         } else {
             preview.to_string()
         };
-        let safe_preview = truncated
-            .replace('\n', "\\n")
-            .replace('\r', "\\r")
-            .replace('\t', "\\t");
+        let safe_preview = truncated.replace('\n', "\\n").replace('\r', "\\r").replace('\t', "\\t");
         lines.push(format!("\"\"   {}", safe_preview));
     }
 
@@ -506,10 +492,7 @@ fn reg_handler(e: &mut Editor, _args: &str) -> CommandResult {
                 } else {
                     preview.to_string()
                 };
-                let safe_preview = truncated
-                    .replace('\n', "\\n")
-                    .replace('\r', "\\r")
-                    .replace('\t', "\\t");
+                let safe_preview = truncated.replace('\n', "\\n").replace('\r', "\\r").replace('\t', "\\t");
                 lines.push(format!("\"{}   {}", c, safe_preview));
             }
         }
@@ -645,10 +628,7 @@ pub fn guide_handler(e: &mut Editor, args: &str) -> CommandResult {
                 e.popup.guide = Some(guide);
                 e.dirty.guide = true;
                 if result.added > 0 || result.updated > 0 {
-                    CommandResult::Message(format!(
-                        "Guide updated: +{} added, {} updated",
-                        result.added, result.updated
-                    ))
+                    CommandResult::Message(format!("Guide updated: +{} added, {} updated", result.added, result.updated))
                 } else {
                     CommandResult::Message("No guide markers found in current buffer".into())
                 }
@@ -677,10 +657,7 @@ pub fn guide_handler(e: &mut Editor, args: &str) -> CommandResult {
             if let Some(pos) = guide.filtered.iter().position(|&idx| {
                 let entry_path = guide.root.join(&guide.entries[idx].file);
                 let entry_canonical = entry_path.canonicalize().ok();
-                current_file
-                    == entry_canonical
-                        .and_then(|p| p.to_str().map(|s| s.to_string()))
-                        .unwrap_or_default()
+                current_file == entry_canonical.and_then(|p| p.to_str().map(|s| s.to_string())).unwrap_or_default()
                     || current_file.ends_with(&guide.entries[idx].file)
             }) {
                 guide.selected = pos;
@@ -799,11 +776,7 @@ fn clist_handler(e: &mut Editor, _args: &str) -> CommandResult {
     use crate::buffer::BufferKind;
 
     // Extract the ID first, dropping the immutable borrow before any mutation
-    let existing_build_id = e
-        .buffers
-        .iter()
-        .find(|b| b.kind == BufferKind::Build)
-        .map(|b| b.id);
+    let existing_build_id = e.buffers.iter().find(|b| b.kind == BufferKind::Build).map(|b| b.id);
 
     if let Some(id) = existing_build_id {
         if let Some(w) = e.windows.active_window_mut() {
@@ -909,12 +882,7 @@ fn keymap_handler(e: &mut Editor, args: &str) -> CommandResult {
             "insert" | "i" => "insert",
             "visual" | "v" => "visual",
             "command" | "c" => "command",
-            _ => {
-                return CommandResult::Error(format!(
-                    "Unknown mode '{}'. Use: normal, insert, visual, command",
-                    args
-                ))
-            }
+            _ => return CommandResult::Error(format!("Unknown mode '{}'. Use: normal, insert, visual, command", args)),
         };
 
         let help_entries = e.keybinds.help_entries(mode_name);
@@ -931,10 +899,7 @@ fn keymap_handler(e: &mut Editor, args: &str) -> CommandResult {
     }
 }
 
-fn functions_handler(
-    editor: &mut crate::editor::Editor,
-    _args: &str,
-) -> crate::editor::CommandResult {
+fn functions_handler(editor: &mut crate::editor::Editor, _args: &str) -> crate::editor::CommandResult {
     editor.show_function_list()
 }
 
@@ -988,24 +953,12 @@ pub fn build_command_registry() -> CommandRegistry {
     reg.alias("FindFile", "FilePicker");
 
     // Window management
-    reg.register_handler(
-        "sp",
-        split_horizontal_handler,
-        "Horizontal split (:sp [<path>?])",
-    );
+    reg.register_handler("sp", split_horizontal_handler, "Horizontal split (:sp [<path>?])");
     reg.alias("split", "sp");
-    reg.register_handler(
-        "sp!",
-        force_split_horizontal_handler,
-        "Force horizontal split",
-    );
+    reg.register_handler("sp!", force_split_horizontal_handler, "Force horizontal split");
     reg.alias("split!", "sp!");
 
-    reg.register_handler(
-        "vs",
-        split_vertical_handler,
-        "Vertical split (:vs [<path>?])",
-    );
+    reg.register_handler("vs", split_vertical_handler, "Vertical split (:vs [<path>?])");
     reg.alias("vsplit", "vs");
     reg.register_handler("vs!", force_split_vertical_handler, "Force vertical split");
     reg.alias("vsplit!", "vs!");
@@ -1018,34 +971,18 @@ pub fn build_command_registry() -> CommandRegistry {
 
     // Help & info
     reg.register_handler("help", help_handler, "Show quick-reference help");
-    reg.register_handler(
-        "hints",
-        hints_handler,
-        "Show interactive keybinding help popup",
-    );
+    reg.register_handler("hints", hints_handler, "Show interactive keybinding help popup");
     reg.alias("map", "hints");
     reg.alias("keys", "hints");
     reg.alias("bindings", "hints");
 
     // Git
-    reg.register_handler(
-        "Thunk",
-        diff_toggle_handler,
-        "Toggle automatic diff popup near hunks",
-    );
+    reg.register_handler("Thunk", diff_toggle_handler, "Toggle automatic diff popup near hunks");
 
-    reg.register_handler(
-        "gdiff!",
-        gdiff_all_handler,
-        "Git diff ALL files (:gdiff! [n|ref])",
-    );
+    reg.register_handler("gdiff!", gdiff_all_handler, "Git diff ALL files (:gdiff! [n|ref])");
     reg.alias("Gdiff!", "gdiff!");
 
-    reg.register_handler(
-        "gdiff",
-        gdiff_handler,
-        "Git diff current file (:gdiff [n|ref])",
-    );
+    reg.register_handler("gdiff", gdiff_handler, "Git diff current file (:gdiff [n|ref])");
     reg.alias("Gdiff", "gdiff");
     reg.alias("Gdif", "gdiff");
     reg.alias("diff", "gdiff");
@@ -1054,19 +991,11 @@ pub fn build_command_registry() -> CommandRegistry {
     reg.alias("gn", "GhunkNext");
     reg.register_handler("GhunkPrev", ghunk_prev_handler, "Jump to previous git hunk");
     reg.alias("gp", "GhunkPrev");
-    reg.register_handler(
-        "GhunkRevert",
-        ghunk_revert_handler,
-        "Revert hunk under cursor",
-    );
+    reg.register_handler("GhunkRevert", ghunk_revert_handler, "Revert hunk under cursor");
     reg.alias("gr", "GhunkRevert");
 
     reg.register_handler("Gstatus", gstatus_handler, "Show git status");
-    reg.register_handler(
-        "Gblame",
-        gblame_handler,
-        "Show git blame (not yet implemented)",
-    );
+    reg.register_handler("Gblame", gblame_handler, "Show git blame (not yet implemented)");
     reg.register_handler("Glog", glog_handler, "Show git log");
     reg.alias("tig", "Glog");
 
@@ -1082,32 +1011,16 @@ pub fn build_command_registry() -> CommandRegistry {
     reg.register_handler("llm-open", llm_open_handler, "Open LLM conversation buffer");
     reg.alias("LlmOpen", "llm-open");
 
-    reg.register_handler(
-        "llm-close",
-        llm_close_handler,
-        "Close LLM conversation buffer",
-    );
+    reg.register_handler("llm-close", llm_close_handler, "Close LLM conversation buffer");
     reg.alias("LlmClose", "llm-close");
 
-    reg.register_handler(
-        "llm-clear",
-        llm_clear_handler,
-        "Clear LLM conversation history",
-    );
+    reg.register_handler("llm-clear", llm_clear_handler, "Clear LLM conversation history");
     reg.alias("LlmClear", "llm-clear");
 
-    reg.register_handler(
-        "llm-cancel",
-        llm_cancel_handler,
-        "Cancel in-progress LLM request",
-    );
+    reg.register_handler("llm-cancel", llm_cancel_handler, "Cancel in-progress LLM request");
     reg.alias("LlmCancel", "llm-cancel");
 
-    reg.register_handler(
-        "llm-explain",
-        llm_explain_handler,
-        "Ask LLM to explain selection/word under cursor",
-    );
+    reg.register_handler("llm-explain", llm_explain_handler, "Ask LLM to explain selection/word under cursor");
     reg.alias("LlmExplain", "llm-explain");
 
     reg.register_handler(
@@ -1124,18 +1037,10 @@ pub fn build_command_registry() -> CommandRegistry {
     );
     reg.alias("LlmCheckEnglish", "llm-check");
 
-    reg.register_handler(
-        "llm-zh",
-        llm_translate_zh_handler,
-        "Ask LLM to translate selection to Chinese",
-    );
+    reg.register_handler("llm-zh", llm_translate_zh_handler, "Ask LLM to translate selection to Chinese");
     reg.alias("LlmTranslateZh", "llm-zh");
 
-    reg.register_handler(
-        "llm-en",
-        llm_translate_en_handler,
-        "Ask LLM to translate selection to English",
-    );
+    reg.register_handler("llm-en", llm_translate_en_handler, "Ask LLM to translate selection to English");
     reg.alias("LlmTranslateEn", "llm-en");
 
     reg.register_handler(
@@ -1147,21 +1052,13 @@ pub fn build_command_registry() -> CommandRegistry {
     reg.alias("LlmSession", "llm-session");
 
     // ── Ripgrep ────────────────────────────────────────────────────
-    reg.register_handler(
-        "rg",
-        rg_handler,
-        "Search project with ripgrep (:rg <pattern>)",
-    );
+    reg.register_handler("rg", rg_handler, "Search project with ripgrep (:rg <pattern>)");
     reg.alias("Rg", "rg");
     reg.alias("Ripgrep", "rg");
     reg.alias("grep", "rg");
     reg.alias("search", "rg");
 
-    reg.register_handler(
-        "rg!",
-        rg_force_handler,
-        "Search from cwd (ignore current file path)",
-    );
+    reg.register_handler("rg!", rg_force_handler, "Search from cwd (ignore current file path)");
     reg.alias("Rg!", "rg!");
 
     reg.register_handler("rgc", rg_close_handler, "Close ripgrep results buffer");
@@ -1178,11 +1075,7 @@ pub fn build_command_registry() -> CommandRegistry {
     // Next/prev ripgrep result
     reg.register_handler("cn", cn_handler, "Next ripgrep result in current buffer");
     reg.alias("cnext", "cn");
-    reg.register_handler(
-        "cp",
-        cp_handler,
-        "Previous ripgrep result in current buffer",
-    );
+    reg.register_handler("cp", cp_handler, "Previous ripgrep result in current buffer");
     reg.alias("cprev", "cp");
     reg.register_handler("ls", ls_handler, "List open buffers (not yet implemented)");
     reg.alias("buffers", "ls");
@@ -1191,11 +1084,7 @@ pub fn build_command_registry() -> CommandRegistry {
     reg.alias("bdelete", "bd");
     reg.alias("close", "bd");
 
-    reg.register_handler(
-        "bd!",
-        force_bd_handler,
-        "Force close current buffer (discard unsaved changes)",
-    );
+    reg.register_handler("bd!", force_bd_handler, "Force close current buffer (discard unsaved changes)");
     reg.alias("bdelete!", "bd!");
     reg.alias("close!", "bd!");
 
@@ -1204,19 +1093,11 @@ pub fn build_command_registry() -> CommandRegistry {
     reg.register_handler("pwd", pwd_handler, "Print working directory");
 
     // Theme
-    reg.register_handler(
-        "colorscheme",
-        colorscheme_handler,
-        "Change colorscheme (not yet implemented)",
-    );
+    reg.register_handler("colorscheme", colorscheme_handler, "Change colorscheme (not yet implemented)");
     reg.alias("theme", "colorscheme");
 
     // Sort
-    reg.register_handler(
-        "sort",
-        sort_handler,
-        "Sort selected lines (not yet implemented)",
-    );
+    reg.register_handler("sort", sort_handler, "Sort selected lines (not yet implemented)");
 
     reg.register_handler(
         "codeium",
@@ -1258,11 +1139,7 @@ pub fn build_command_registry() -> CommandRegistry {
     reg.alias("bindings", "keymap");
     reg.alias("showkeys", "keymap");
 
-    reg.register_handler(
-        "gc",
-        gc_handler,
-        "Generate git commit message from staged changes via LLM",
-    );
+    reg.register_handler("gc", gc_handler, "Generate git commit message from staged changes via LLM");
     reg.alias("gitcommit", "gc");
     reg.alias("GitCommit", "gc");
 
@@ -1275,18 +1152,10 @@ pub fn build_command_registry() -> CommandRegistry {
     reg.alias("status", "Gstatus");
     reg.alias("Git", "Gstatus");
 
-    reg.register_handler(
-        "lastrg",
-        lastrg_handler,
-        "Reopen last ripgrep results (instant)",
-    );
+    reg.register_handler("lastrg", lastrg_handler, "Reopen last ripgrep results (instant)");
     reg.alias("LastRg", "lastrg");
     reg.alias("LRg", "lastrg");
-    reg.register_handler(
-        "lastrg!",
-        lastrg_rerun_handler,
-        "Re-run last ripgrep search",
-    );
+    reg.register_handler("lastrg!", lastrg_rerun_handler, "Re-run last ripgrep search");
     reg.alias("LastRg!", "lastrg!");
     reg.alias("LRg!", "lastrg!");
 
@@ -1298,23 +1167,11 @@ pub fn build_command_registry() -> CommandRegistry {
     reg.register_handler("daf", daf_handler, "Delete around function");
     reg.alias("DeleteAroundFunction", "daf");
 
-    reg.register_handler(
-        "functions",
-        functions_handler,
-        "List all functions in current buffer",
-    );
-    reg.register_handler(
-        "funs",
-        functions_handler,
-        "List all functions in current buffer",
-    );
+    reg.register_handler("functions", functions_handler, "List all functions in current buffer");
+    reg.register_handler("funs", functions_handler, "List all functions in current buffer");
 
     // ── Tags (ctags) ──────────────────────────────────────────────
-    reg.register_handler(
-        "tags",
-        tags_generate_handler,
-        "Generate ctags for the project",
-    );
+    reg.register_handler("tags", tags_generate_handler, "Generate ctags for the project");
     reg.register_handler(
         "tag",
         tag_handler,
@@ -1324,11 +1181,7 @@ pub fn build_command_registry() -> CommandRegistry {
     reg.alias("tnext", "tn");
     reg.register_handler("tp", tprev_handler, "Jump to previous tag match");
     reg.alias("tprev", "tp");
-    reg.register_handler(
-        "pop",
-        tpop_handler,
-        "Return to previous location from tag stack",
-    );
+    reg.register_handler("pop", tpop_handler, "Return to previous location from tag stack");
     reg.alias("tpop", "pop");
     reg.alias("tagpop", "pop");
 
@@ -1336,11 +1189,7 @@ pub fn build_command_registry() -> CommandRegistry {
     reg.alias("registers", "reg");
 
     // ── Build ──────────────────────────────────────────────────────
-    reg.register_handler(
-        "build",
-        build_handler,
-        "Run cargo build --release and show errors in a buffer",
-    );
+    reg.register_handler("build", build_handler, "Run cargo build --release and show errors in a buffer");
     reg.alias("Build", "build");
     reg.alias("cargo", "build");
     reg.alias("Cargo", "build");
@@ -1350,17 +1199,9 @@ pub fn build_command_registry() -> CommandRegistry {
     reg.alias("marks", "bm");
     reg.alias("Bookmarks", "bm");
 
-    reg.register_handler(
-        "shortcuts",
-        shortcuts_handler,
-        "Show keybindings for current mode in a float popup",
-    );
+    reg.register_handler("shortcuts", shortcuts_handler, "Show keybindings for current mode in a float popup");
     reg.alias("sc", "shortcuts");
-    reg.register_handler(
-        "vocab",
-        vocab_handler,
-        "Add word to local vocabulary completion (:vocab <word>)",
-    );
+    reg.register_handler("vocab", vocab_handler, "Add word to local vocabulary completion (:vocab <word>)");
 
     reg.register_handler(
         "guide",
@@ -1368,21 +1209,13 @@ pub fn build_command_registry() -> CommandRegistry {
         "Open code architecture guide (use 'update' to sync from current buffer)",
     );
 
-    reg.register_handler(
-        "clist",
-        clist_handler,
-        "Open build output buffer (or run :build if none exists)",
-    );
+    reg.register_handler("clist", clist_handler, "Open build output buffer (or run :build if none exists)");
     reg.alias("copen", "clist");
     reg.alias("Clist", "clist");
     reg.alias("Copen", "clist");
 
     // Search highlight toggle
-    reg.register_handler(
-        "nohlsearch",
-        nohlsearch_handler,
-        "Disable search highlight until next search",
-    );
+    reg.register_handler("nohlsearch", nohlsearch_handler, "Disable search highlight until next search");
     reg.alias("noh", "nohlsearch");
     reg.alias("nohl", "nohlsearch");
 
@@ -1395,11 +1228,7 @@ pub fn build_command_registry() -> CommandRegistry {
         |editor, _args| {
             editor.config.indent_guides = !editor.config.indent_guides;
             editor.dirty.mark_all();
-            let state = if editor.config.indent_guides {
-                "on"
-            } else {
-                "off"
-            };
+            let state = if editor.config.indent_guides { "on" } else { "off" };
             CommandResult::Message(format!("Indent guides: {}", state))
         },
         "Toggle indent guides on/off",

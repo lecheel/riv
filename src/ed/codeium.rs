@@ -38,9 +38,7 @@ impl Editor {
         match crate::codeium::exchange_token_for_api_key(&input) {
             Ok(api_key) => {
                 self.config.codeium.api_key = Some(api_key);
-                self.set_status(
-                    "Codeium: API key saved ✓. Run :codeium to start the server.".to_string(),
-                );
+                self.set_status("Codeium: API key saved ✓. Run :codeium to start the server.".to_string());
                 CommandResult::Message("Codeium: authenticated successfully!".to_string())
             }
             Err(e) => {

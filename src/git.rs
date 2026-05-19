@@ -256,10 +256,7 @@ impl GitProvider {
     }
     /// Run a git command and return stdout.
     fn run(&self, args: &[&str]) -> Result<String, GitError> {
-        let output = Command::new("git")
-            .args(args)
-            .current_dir(&self.repo_path)
-            .output()?;
+        let output = Command::new("git").args(args).current_dir(&self.repo_path).output()?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -459,9 +456,7 @@ impl GitProvider {
                     DiffLineType::Context => {
                         if pending_deletes > 0 {
                             if let Some(new_ln) = line.new_lineno {
-                                signs
-                                    .entry(new_ln.saturating_sub(1))
-                                    .or_insert(GitSign::RemovedAbove);
+                                signs.entry(new_ln.saturating_sub(1)).or_insert(GitSign::RemovedAbove);
                             }
                             pending_deletes = 0;
                         }
@@ -544,10 +539,7 @@ impl GitProvider {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(GitError::CommandFailed(format!(
-                "git apply --reverse failed: {}",
-                stderr.trim()
-            )));
+            return Err(GitError::CommandFailed(format!("git apply --reverse failed: {}", stderr.trim())));
         }
         Ok(())
     }
@@ -580,11 +572,7 @@ impl GitProvider {
     /// Get recent commit log.
     pub fn log(&self, count: usize) -> Result<Vec<GitCommit>, GitError> {
         let count_str = count.to_string();
-        let output = self.run(&[
-            "log",
-            &format!("-{}", count_str),
-            "--format=%H %h %an %at %s",
-        ])?;
+        let output = self.run(&["log", &format!("-{}", count_str), "--format=%H %h %an %at %s"])?;
         parse_log(&output)
     }
 
@@ -624,16 +612,12 @@ impl GitProvider {
 
         // Write HEAD content to first temp file.
         let mut head_tmp = tempfile::NamedTempFile::new().map_err(GitError::Io)?;
-        head_tmp
-            .write_all(head_content.as_bytes())
-            .map_err(GitError::Io)?;
+        head_tmp.write_all(head_content.as_bytes()).map_err(GitError::Io)?;
         head_tmp.flush().map_err(GitError::Io)?;
 
         // Write buffer content to second temp file.
         let mut buf_tmp = tempfile::NamedTempFile::new().map_err(GitError::Io)?;
-        buf_tmp
-            .write_all(content.as_bytes())
-            .map_err(GitError::Io)?;
+        buf_tmp.write_all(content.as_bytes()).map_err(GitError::Io)?;
         buf_tmp.flush().map_err(GitError::Io)?;
 
         let output = Command::new("git")
@@ -694,10 +678,7 @@ impl GitProvider {
                                 GitSign::Added
                             };
 
-                            signs.push(EditorSign {
-                                line: line_idx,
-                                kind,
-                            });
+                            signs.push(EditorSign { line: line_idx, kind });
 
                             min_line = min_line.min(line_idx);
                             max_line = max_line.max(line_idx);
@@ -903,9 +884,7 @@ fn parse_blame(output: &str) -> Result<Vec<BlameLine>, GitError> {
             if line.starts_with("author ") {
                 bl.author = line[7..].to_string();
             } else if line.starts_with("author-mail ") {
-                bl.author_email = line[12..]
-                    .trim_matches(|c: char| c == '<' || c == '>')
-                    .to_string();
+                bl.author_email = line[12..].trim_matches(|c: char| c == '<' || c == '>').to_string();
             } else if line.starts_with("author-time ") {
                 bl.author_time = line[12..].parse().unwrap_or(0);
             } else if line.starts_with('\t') {

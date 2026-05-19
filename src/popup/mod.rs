@@ -105,8 +105,7 @@ pub fn word_wrap(text: &str, max_width: usize) -> Vec<String> {
         }
 
         let trimmed = paragraph.trim_start();
-        if trimmed.starts_with("```") || paragraph.starts_with("  ") || paragraph.starts_with('\t')
-        {
+        if trimmed.starts_with("```") || paragraph.starts_with("  ") || paragraph.starts_with('\t') {
             if UnicodeWidthStr::width(paragraph) <= max_width {
                 lines.push(paragraph.to_string());
             } else {
@@ -120,11 +119,7 @@ pub fn word_wrap(text: &str, max_width: usize) -> Vec<String> {
 
         for word in paragraph.split_whitespace() {
             let word_width = UnicodeWidthStr::width(word);
-            let (sep, sep_width) = if current_line.is_empty() {
-                ("", 0)
-            } else {
-                (" ", 1)
-            };
+            let (sep, sep_width) = if current_line.is_empty() { ("", 0) } else { (" ", 1) };
 
             if current_width + sep_width + word_width > max_width && !current_line.is_empty() {
                 lines.push(current_line);

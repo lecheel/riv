@@ -185,12 +185,7 @@ impl BufferKind {
     pub fn is_readonly(&self) -> bool {
         matches!(
             self,
-            BufferKind::Ripgrep
-                | BufferKind::Build
-                | BufferKind::GitDiff
-                | BufferKind::GitCommit
-                | BufferKind::GitLog
-                | BufferKind::Llm
+            BufferKind::Ripgrep | BufferKind::Build | BufferKind::GitDiff | BufferKind::GitCommit | BufferKind::GitLog | BufferKind::Llm
         )
     }
 
@@ -198,11 +193,7 @@ impl BufferKind {
     pub fn is_ephemeral(&self) -> bool {
         matches!(
             self,
-            BufferKind::Ripgrep
-                | BufferKind::GitDiff
-                | BufferKind::GitLog
-                | BufferKind::Llm
-                | BufferKind::Build
+            BufferKind::Ripgrep | BufferKind::GitDiff | BufferKind::GitLog | BufferKind::Llm | BufferKind::Build
         )
     }
 }
@@ -245,11 +236,7 @@ impl GitGutter {
 
     /// Update the gutter data with accurate per-line signs computed from
     /// the full parsed diff hunks, plus the simplified hunk ranges for navigation.
-    pub fn update_with_diff_signs(
-        &mut self,
-        hunks: Vec<HunkRange>,
-        signs: std::collections::HashMap<usize, crate::git::GitSign>,
-    ) {
+    pub fn update_with_diff_signs(&mut self, hunks: Vec<HunkRange>, signs: std::collections::HashMap<usize, crate::git::GitSign>) {
         self.signs = signs;
         self.hunks = hunks;
         self.computed = true;
@@ -400,10 +387,7 @@ impl Buffer {
     /// Load a file into a new buffer.
     pub fn from_file(path: &Path) -> Result<Self, BufferError> {
         let content = std::fs::read_to_string(path)?;
-        let language = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(Language::from_extension);
+        let language = path.extension().and_then(|e| e.to_str()).map(Language::from_extension);
 
         let mut buf = Self::from_str(&content);
         buf.file_path = Some(path.to_path_buf());
@@ -504,11 +488,7 @@ impl Buffer {
 
         // Calculate new position.
         let new_lines = text.chars().filter(|&c| c == '\n').count();
-        let last_line_graphemes = text
-            .split('\n')
-            .next_back()
-            .map(|s| s.graphemes(true).count())
-            .unwrap_or(0);
+        let last_line_graphemes = text.split('\n').next_back().map(|s| s.graphemes(true).count()).unwrap_or(0);
 
         self.tree_dirty = true;
         CursorPosition {
@@ -531,11 +511,7 @@ impl Buffer {
 
         if pos.col < graphemes.len() {
             let start_byte = graphemes[pos.col].0;
-            let end_byte = if end < graphemes.len() {
-                graphemes[end].0
-            } else {
-                line_str.len()
-            };
+            let end_byte = if end < graphemes.len() { graphemes[end].0 } else { line_str.len() };
 
             let char_start = match self.rope.try_line_to_char(line) {
                 Ok(c) => c,
@@ -546,8 +522,7 @@ impl Buffer {
             let chars_before = line_str[..start_byte].chars().count();
             let chars_after_end = line_str[..end_byte].chars().count();
 
-            self.rope
-                .remove(char_start + chars_before..char_start + chars_after_end);
+            self.rope.remove(char_start + chars_before..char_start + chars_after_end);
             self.revision += 1;
             self.dirty = true;
         }
@@ -582,9 +557,7 @@ impl Buffer {
             self.last_saved_rev = self.revision;
             Ok(())
         } else {
-            Err(BufferError::Io(std::io::Error::other(
-                "No file path associated with buffer",
-            )))
+            Err(BufferError::Io(std::io::Error::other("No file path associated with buffer")))
         }
     }
 
@@ -596,10 +569,7 @@ impl Buffer {
         self.dirty = false;
         self.last_saved_rev = self.revision;
 
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(Language::from_extension);
+        let ext = path.extension().and_then(|e| e.to_str()).map(Language::from_extension);
         if ext.is_some() {
             self.language = ext;
         }
@@ -626,10 +596,7 @@ impl Buffer {
         }
         // Outermost group closing
         self.undo_group_open = false;
-        if let (Some(cursor_before), Some(text_before)) = (
-            self.undo_group_cursor_before.take(),
-            self.undo_group_text_before.take(),
-        ) {
+        if let (Some(cursor_before), Some(text_before)) = (self.undo_group_cursor_before.take(), self.undo_group_text_before.take()) {
             let text_after = self.text();
             if text_before != text_after {
                 self.undo_stack.push(UndoGroup {
@@ -824,9 +791,7 @@ pub struct BufferCollection {
 
 impl BufferCollection {
     pub fn new() -> Self {
-        Self {
-            buffers: HashMap::new(),
-        }
+        Self { buffers: HashMap::new() }
     }
 
     /// Insert a buffer, returning its id.
@@ -902,10 +867,7 @@ impl BufferCollection {
             Err(BufferError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
                 // File doesn't exist yet — create an empty buffer for it
                 let mut b = Buffer::new();
-                b.language = path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .map(Language::from_extension);
+                b.language = path.extension().and_then(|e| e.to_str()).map(Language::from_extension);
                 b.init_tree_sitter();
                 b
             }
@@ -924,10 +886,7 @@ impl BufferCollection {
 
     /// Find a buffer by its kind (returns the first match).
     pub fn find_by_kind(&self, kind: BufferKind) -> Option<BufferId> {
-        self.buffers
-            .values()
-            .find(|buf| buf.kind == kind)
-            .map(|buf| buf.id)
+        self.buffers.values().find(|buf| buf.kind == kind).map(|buf| buf.id)
     }
 
     /// Find a buffer by its display name (case-insensitive partial match).
@@ -941,11 +900,7 @@ impl BufferCollection {
 
     /// Return all buffer IDs of a specific kind.
     pub fn ids_by_kind(&self, kind: BufferKind) -> Vec<BufferId> {
-        self.buffers
-            .values()
-            .filter(|buf| buf.kind == kind)
-            .map(|buf| buf.id)
-            .collect()
+        self.buffers.values().filter(|buf| buf.kind == kind).map(|buf| buf.id).collect()
     }
 }
 

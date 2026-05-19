@@ -35,18 +35,12 @@ fn split_command(cmd: &str) -> (&str, &str) {
     let cmd = cmd.trim_start();
 
     // `:s` with an attached delimiter (e.g. `s/pat/repl/flags`)
-    if cmd.len() > 1
-        && cmd.as_bytes()[0] == b's'
-        && matches!(cmd.as_bytes()[1], b'/' | b'|' | b'#' | b'!')
-    {
+    if cmd.len() > 1 && cmd.as_bytes()[0] == b's' && matches!(cmd.as_bytes()[1], b'/' | b'|' | b'#' | b'!') {
         return (&cmd[..1], &cmd[1..]);
     }
 
     // `:substitute` with an attached delimiter
-    if cmd.starts_with("substitute/")
-        || cmd.starts_with("substitute|")
-        || cmd.starts_with("substitute#")
-        || cmd.starts_with("substitute!")
+    if cmd.starts_with("substitute/") || cmd.starts_with("substitute|") || cmd.starts_with("substitute#") || cmd.starts_with("substitute!")
     {
         return (&cmd[..9], &cmd[9..]);
     }
@@ -114,10 +108,7 @@ fn parse_command_range(cmd: &str) -> (Option<CommandRange>, &str) {
             }
 
             // Bare {n}
-            return (
-                Some(CommandRange::SingleLine(n1.saturating_sub(1))),
-                after_first,
-            );
+            return (Some(CommandRange::SingleLine(n1.saturating_sub(1))), after_first);
         }
     }
 
@@ -139,11 +130,7 @@ fn split_substitute_parts(s: &str, delim: char) -> Vec<&str> {
             continue;
         }
         if chars[char_idx] == delim {
-            let byte_pos = s
-                .char_indices()
-                .nth(char_idx)
-                .map(|(pos, _)| pos)
-                .unwrap_or(s.len());
+            let byte_pos = s.char_indices().nth(char_idx).map(|(pos, _)| pos).unwrap_or(s.len());
             parts.push(&s[start..byte_pos]);
             start = byte_pos + delim.len_utf8();
             char_idx += 1;
@@ -215,10 +202,7 @@ fn parse_substitute_args(args: &str) -> Result<(String, String, String), String>
     }
     let delim = args.chars().next().unwrap();
     if !matches!(delim, '/' | '|' | '#' | '!') {
-        return Err(format!(
-            "Expected s/pattern/replacement/flags, got delimiter '{}'",
-            delim
-        ));
+        return Err(format!("Expected s/pattern/replacement/flags, got delimiter '{}'", delim));
     }
     let rest = &args[delim.len_utf8()..];
     let parts = split_substitute_parts(rest, delim);
@@ -440,10 +424,7 @@ impl CommandExt for Editor {
         // (enter_mode clears messages, but we need the prompt to survive)
         if self.search.substitute_confirm.is_some() {
             if let Some(ref state) = self.search.substitute_confirm {
-                self.set_status(format!(
-                    "replace with \"{}\"? (y/n/a/q/l)",
-                    state.replacement
-                ));
+                self.set_status(format!("replace with \"{}\"? (y/n/a/q/l)", state.replacement));
             }
             self.dirty.status_cmdline = true;
             self.dirty.status_infobar = true;
@@ -459,11 +440,7 @@ impl CommandExt for Editor {
 
         // Handle :s without range (operates on current line)
         if name == "s" || name == "substitute" {
-            let cur_line = self
-                .windows
-                .active_window()
-                .map(|w| w.cursor.position.line)
-                .unwrap_or(0);
+            let cur_line = self.windows.active_window().map(|w| w.cursor.position.line).unwrap_or(0);
             return self.ranged_substitute(args, cur_line, cur_line);
         }
 
@@ -474,11 +451,7 @@ impl CommandExt for Editor {
 
         // Resolve command name (handles aliases)
         if let Some(canonical) = self.command_registry.resolve(name) {
-            if let Some(handler) = self
-                .command_registry
-                .get(canonical)
-                .and_then(|entry| entry.handler)
-            {
+            if let Some(handler) = self.command_registry.get(canonical).and_then(|entry| entry.handler) {
                 return handler(self, args);
             }
         }
@@ -499,11 +472,7 @@ impl CommandExt for Editor {
             1 => {
                 let matched = candidates.into_iter().next().unwrap();
                 self.set_status(format!("Expanded '{}' -> '{}'", cmd, matched));
-                if let Some(handler) = self
-                    .command_registry
-                    .get(&matched)
-                    .and_then(|entry| entry.handler)
-                {
+                if let Some(handler) = self.command_registry.get(&matched).and_then(|entry| entry.handler) {
                     handler(self, args)
                 } else {
                     CommandResult::Error(format!("Expanded '{}' but no handler", matched))
@@ -512,11 +481,7 @@ impl CommandExt for Editor {
             _ => CommandResult::Error(format!(
                 "Ambiguous command '{}': matches {}",
                 cmd,
-                candidates
-                    .iter()
-                    .map(|c| format!(":{}", c))
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                candidates.iter().map(|c| format!(":{}", c)).collect::<Vec<_>>().join(", ")
             )),
         }
     }
@@ -530,36 +495,25 @@ impl CommandExt for Editor {
 
         match key {
             "nu" | "number" | "ruler" => {
-                self.config.line_numbers =
-                    !value.map(|v| v == "false" || v == "no").unwrap_or(true);
+                self.config.line_numbers = !value.map(|v| v == "false" || v == "no").unwrap_or(true);
                 self.dirty.mark_all();
                 CommandResult::Message(format!("line_numbers = {}", self.config.line_numbers))
             }
             "ic" | "ignorecase" => {
-                self.config.case_sensitive_search =
-                    value.map(|v| v == "false" || v == "no").unwrap_or(false);
+                self.config.case_sensitive_search = value.map(|v| v == "false" || v == "no").unwrap_or(false);
                 self.dirty.mark_all();
-                CommandResult::Message(format!(
-                    "case_sensitive_search = {}",
-                    self.config.case_sensitive_search
-                ))
+                CommandResult::Message(format!("case_sensitive_search = {}", self.config.case_sensitive_search))
             }
             "noic" | "noignorecase" => {
                 self.config.case_sensitive_search = true;
                 self.dirty.mark_all();
-                CommandResult::Message(format!(
-                    "case_sensitive_search = {}",
-                    self.config.case_sensitive_search
-                ))
+                CommandResult::Message(format!("case_sensitive_search = {}", self.config.case_sensitive_search))
             }
             "tabstop" | "ts" => {
                 if let Some(v) = value {
                     if let Ok(n) = v.parse::<u8>() {
                         self.config.tab_width = n.max(1);
-                        return CommandResult::Message(format!(
-                            "tab_width = {}",
-                            self.config.tab_width
-                        ));
+                        return CommandResult::Message(format!("tab_width = {}", self.config.tab_width));
                     }
                 }
                 CommandResult::Error("Invalid tab width.".to_string())
@@ -568,10 +522,7 @@ impl CommandExt for Editor {
                 if let Some(v) = value {
                     if let Ok(n) = v.parse::<usize>() {
                         self.config.scroll_offset = n;
-                        return CommandResult::Message(format!(
-                            "scroll_offset = {}",
-                            self.config.scroll_offset
-                        ));
+                        return CommandResult::Message(format!("scroll_offset = {}", self.config.scroll_offset));
                     }
                 }
                 CommandResult::Error("Invalid scroll offset.".to_string())
@@ -645,9 +596,7 @@ impl Editor {
     /// Resolve a `CommandRange` into concrete 0‑based (start, end) line numbers.
     fn resolve_command_range(&self, range: &CommandRange) -> Result<(usize, usize), String> {
         match range {
-            CommandRange::VisualSelection => self
-                .visual_selection_range
-                .ok_or_else(|| "E20: Mark not set".to_string()),
+            CommandRange::VisualSelection => self.visual_selection_range.ok_or_else(|| "E20: Mark not set".to_string()),
             CommandRange::EntireFile => {
                 let lc = self.current_buffer().map(|b| b.line_count()).unwrap_or(0);
                 if lc == 0 {
@@ -688,11 +637,7 @@ impl Editor {
             _ => {
                 // Fall through to registry (ignoring range for unsupported commands)
                 if let Some(canonical) = self.command_registry.resolve(name) {
-                    if let Some(handler) = self
-                        .command_registry
-                        .get(canonical)
-                        .and_then(|entry| entry.handler)
-                    {
+                    if let Some(handler) = self.command_registry.get(canonical).and_then(|entry| entry.handler) {
                         return handler(self, args);
                     }
                 }
@@ -711,11 +656,7 @@ impl Editor {
             None => return CommandResult::Error("No active window".into()),
         };
 
-        let line_count = self
-            .buffers
-            .get(&buffer_id)
-            .map(|b| b.line_count())
-            .unwrap_or(0);
+        let line_count = self.buffers.get(&buffer_id).map(|b| b.line_count()).unwrap_or(0);
         let end_clamped = end.min(line_count.saturating_sub(1));
 
         // Yank first (read‑only pass)
@@ -740,12 +681,7 @@ impl Editor {
         self.invalidate_git_gutter();
 
         if let Some(w) = self.windows.active_window_mut() {
-            w.cursor.position.line = start.min(
-                self.buffers
-                    .get(&buffer_id)
-                    .map(|b| b.line_count().saturating_sub(1))
-                    .unwrap_or(0),
-            );
+            w.cursor.position.line = start.min(self.buffers.get(&buffer_id).map(|b| b.line_count().saturating_sub(1)).unwrap_or(0));
             w.cursor.position.col = 0;
             w.cursor.desired_col = None;
         }
@@ -758,11 +694,7 @@ impl Editor {
             Some(w) => w.buffer_id,
             None => return CommandResult::Error("No active window".into()),
         };
-        let line_count = self
-            .buffers
-            .get(&buffer_id)
-            .map(|b| b.line_count())
-            .unwrap_or(0);
+        let line_count = self.buffers.get(&buffer_id).map(|b| b.line_count()).unwrap_or(0);
         let end_clamped = end.min(line_count.saturating_sub(1));
 
         let mut parts = Vec::new();
@@ -795,9 +727,7 @@ impl Editor {
         let confirm = flags.contains('c');
 
         let re = match if icase {
-            regex::RegexBuilder::new(&pattern)
-                .case_insensitive(true)
-                .build()
+            regex::RegexBuilder::new(&pattern).case_insensitive(true).build()
         } else {
             regex::Regex::new(&pattern)
         } {
@@ -817,11 +747,7 @@ impl Editor {
             Some(w) => w.buffer_id,
             None => return CommandResult::Error("No active window".into()),
         };
-        let line_count = self
-            .buffers
-            .get(&buffer_id)
-            .map(|b| b.line_count())
-            .unwrap_or(0);
+        let line_count = self.buffers.get(&buffer_id).map(|b| b.line_count()).unwrap_or(0);
         if line_count == 0 {
             return CommandResult::Error("Empty buffer".into());
         }
@@ -833,11 +759,7 @@ impl Editor {
 
         for line in start..=end_clamped {
             let old_text = if let Some(buffer) = self.buffers.get(&buffer_id) {
-                buffer
-                    .line_text(line)
-                    .unwrap_or_default()
-                    .trim_end_matches('\n')
-                    .to_string()
+                buffer.line_text(line).unwrap_or_default().trim_end_matches('\n').to_string()
             } else {
                 break;
             };
@@ -877,10 +799,7 @@ impl Editor {
         self.invalidate_git_gutter();
 
         if total_subs > 0 {
-            CommandResult::Message(format!(
-                "{} substitutions on {} lines",
-                total_subs, lines_changed
-            ))
+            CommandResult::Message(format!("{} substitutions on {} lines", total_subs, lines_changed))
         } else {
             CommandResult::Error("Pattern not found".into())
         }
@@ -897,11 +816,7 @@ impl Editor {
             Some(w) => w.buffer_id,
             None => return CommandResult::Error("No active window".into()),
         };
-        let line_count = self
-            .buffers
-            .get(&buffer_id)
-            .map(|b| b.line_count())
-            .unwrap_or(0);
+        let line_count = self.buffers.get(&buffer_id).map(|b| b.line_count()).unwrap_or(0);
         let end_clamped = end.min(line_count.saturating_sub(1));
 
         self.ensure_undo_group();
@@ -929,28 +844,18 @@ impl Editor {
             Some(w) => w.buffer_id,
             None => return CommandResult::Error("No active window".into()),
         };
-        let line_count = self
-            .buffers
-            .get(&buffer_id)
-            .map(|b| b.line_count())
-            .unwrap_or(0);
+        let line_count = self.buffers.get(&buffer_id).map(|b| b.line_count()).unwrap_or(0);
         let end_clamped = end.min(line_count.saturating_sub(1));
 
         self.ensure_undo_group();
         if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
             for line in start..=end_clamped {
                 let line_text = buffer.line_text(line).unwrap_or_default();
-                let leading: String = line_text
-                    .chars()
-                    .take_while(|c| *c == ' ' || *c == '\t')
-                    .collect();
+                let leading: String = line_text.chars().take_while(|c| *c == ' ' || *c == '\t').collect();
                 if leading.is_empty() {
                     continue;
                 }
-                let ws_cols: usize = leading
-                    .chars()
-                    .map(|c| if c == '\t' { shiftwidth } else { 1 })
-                    .sum();
+                let ws_cols: usize = leading.chars().map(|c| if c == '\t' { shiftwidth } else { 1 }).sum();
                 let remove_cols = ws_cols.min(shiftwidth);
                 let mut cols_remaining = remove_cols;
                 let mut chars_to_remove: usize = 0;
@@ -1011,11 +916,7 @@ impl Editor {
             Some(w) => w.buffer_id,
             None => return CommandResult::Error("No active window".into()),
         };
-        let line_count = self
-            .buffers
-            .get(&buffer_id)
-            .map(|b| b.line_count())
-            .unwrap_or(0);
+        let line_count = self.buffers.get(&buffer_id).map(|b| b.line_count()).unwrap_or(0);
         let end_clamped = end.min(line_count.saturating_sub(1));
 
         let mut lines = Vec::new();
@@ -1027,11 +928,7 @@ impl Editor {
             }
         }
         match std::fs::write(filename, lines.join("\n")) {
-            Ok(()) => CommandResult::Message(format!(
-                "Wrote {} lines to {}",
-                end_clamped - start + 1,
-                filename
-            )),
+            Ok(()) => CommandResult::Message(format!("Wrote {} lines to {}", end_clamped - start + 1, filename)),
             Err(e) => CommandResult::Error(format!("Write failed: {}", e)),
         }
     }
@@ -1056,11 +953,7 @@ impl Editor {
             Some(w) => w.buffer_id,
             None => return CommandResult::Error("No active window".into()),
         };
-        let line_count = self
-            .buffers
-            .get(&buffer_id)
-            .map(|b| b.line_count())
-            .unwrap_or(0);
+        let line_count = self.buffers.get(&buffer_id).map(|b| b.line_count()).unwrap_or(0);
         let end_clamped = end.min(line_count.saturating_sub(1));
 
         // Collect lines (read‑only pass)
@@ -1082,10 +975,7 @@ impl Editor {
         let insert_line = dest_line.min(line_count);
         if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
             for (i, text) in copied.iter().enumerate() {
-                buffer.insert_at(
-                    CursorPosition::new(insert_line + i, 0),
-                    &format!("{}\n", text),
-                );
+                buffer.insert_at(CursorPosition::new(insert_line + i, 0), &format!("{}\n", text));
             }
             buffer.dirty = true;
         }
@@ -1111,11 +1001,7 @@ impl Editor {
             Some(w) => w.buffer_id,
             None => return CommandResult::Error("No active window".into()),
         };
-        let line_count = self
-            .buffers
-            .get(&buffer_id)
-            .map(|b| b.line_count())
-            .unwrap_or(0);
+        let line_count = self.buffers.get(&buffer_id).map(|b| b.line_count()).unwrap_or(0);
         let end_clamped = end.min(line_count.saturating_sub(1));
 
         // Collect lines (read‑only pass)
@@ -1146,18 +1032,10 @@ impl Editor {
         };
 
         // Insert at adjusted destination top‑down
-        let insert_line = adjusted_dest.min(
-            self.buffers
-                .get(&buffer_id)
-                .map(|b| b.line_count())
-                .unwrap_or(0),
-        );
+        let insert_line = adjusted_dest.min(self.buffers.get(&buffer_id).map(|b| b.line_count()).unwrap_or(0));
         if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
             for (i, text) in moved.iter().enumerate() {
-                buffer.insert_at(
-                    CursorPosition::new(insert_line + i, 0),
-                    &format!("{}\n", text),
-                );
+                buffer.insert_at(CursorPosition::new(insert_line + i, 0), &format!("{}\n", text));
             }
             buffer.dirty = true;
         }

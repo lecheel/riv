@@ -405,18 +405,12 @@ impl Action {
             Self::Undo | Self::Redo | Self::UndoBreak => ActionCategory::Undo,
 
             // Tags
-            Self::TagJump | Self::TagNext | Self::TagPrev | Self::TagPop | Self::GenerateTags => {
-                ActionCategory::Marks
-            }
+            Self::TagJump | Self::TagNext | Self::TagPrev | Self::TagPop | Self::GenerateTags => ActionCategory::Marks,
 
             // File
-            Self::Save
-            | Self::SaveFmt
-            | Self::SaveAs(_)
-            | Self::OpenFile(_)
-            | Self::NewFile
-            | Self::CloseFile
-            | Self::FindFile => ActionCategory::File,
+            Self::Save | Self::SaveFmt | Self::SaveAs(_) | Self::OpenFile(_) | Self::NewFile | Self::CloseFile | Self::FindFile => {
+                ActionCategory::File
+            }
 
             // Window
             Self::SplitHorizontal
@@ -477,11 +471,7 @@ impl Action {
             | Self::RipgrepPrevResult => ActionCategory::Ripgrep,
 
             // Buffer
-            Self::ListBuffers
-            | Self::NextBuffer
-            | Self::PrevBuffer
-            | Self::DeleteBuffer
-            | Self::OpenMru => ActionCategory::Buffer,
+            Self::ListBuffers | Self::NextBuffer | Self::PrevBuffer | Self::DeleteBuffer | Self::OpenMru => ActionCategory::Buffer,
 
             // LSP
             Self::GotoDefinition

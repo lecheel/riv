@@ -41,11 +41,10 @@ impl GotoDefExt for Editor {
         }
 
         {
-            let found = self.buffers.get(&current_buffer_id).and_then(|buffer| {
-                buffer
-                    .tree()
-                    .and_then(|tree| find_definition_in_tree(buffer, tree, &identifier))
-            });
+            let found = self
+                .buffers
+                .get(&current_buffer_id)
+                .and_then(|buffer| buffer.tree().and_then(|tree| find_definition_in_tree(buffer, tree, &identifier)));
 
             if let Some((line, col)) = found {
                 self.push_jump_position();
@@ -68,11 +67,10 @@ impl GotoDefExt for Editor {
                 ensure_tree(buffer);
             }
 
-            let found = self.buffers.get(&buf_id).and_then(|buffer| {
-                buffer
-                    .tree()
-                    .and_then(|tree| find_definition_in_tree(buffer, tree, &identifier))
-            });
+            let found = self
+                .buffers
+                .get(&buf_id)
+                .and_then(|buffer| buffer.tree().and_then(|tree| find_definition_in_tree(buffer, tree, &identifier)));
 
             if let Some((line, col)) = found {
                 self.push_jump_position();
@@ -81,16 +79,8 @@ impl GotoDefExt for Editor {
                 }
                 self.move_to_position(line, col);
                 self.ensure_cursor_visible_all();
-                let name = self
-                    .buffers
-                    .get(&buf_id)
-                    .map(|b| b.display_name())
-                    .unwrap_or_else(|| "?".into());
-                return CommandResult::Message(format!(
-                    "Goto definition in {}: line {}",
-                    name,
-                    line + 1
-                ));
+                let name = self.buffers.get(&buf_id).map(|b| b.display_name()).unwrap_or_else(|| "?".into());
+                return CommandResult::Message(format!("Goto definition in {}: line {}", name, line + 1));
             }
         }
 
@@ -150,11 +140,7 @@ fn definition_kinds(language: Language) -> &'static [&'static str] {
     }
 }
 
-fn find_definition_in_tree(
-    buffer: &Buffer,
-    tree: &tree_sitter::Tree,
-    target_name: &str,
-) -> Option<(usize, usize)> {
+fn find_definition_in_tree(buffer: &Buffer, tree: &tree_sitter::Tree, target_name: &str) -> Option<(usize, usize)> {
     let language = buffer.language.unwrap_or(Language::PlainText);
     let def_kinds = definition_kinds(language);
     if def_kinds.is_empty() {
@@ -240,11 +226,7 @@ fn find_name_column(node: &tree_sitter::Node, source: &str) -> usize {
     for i in 0..node.named_child_count() {
         if let Some(child) = node.named_child(i) {
             let kind = child.kind();
-            if kind == "identifier"
-                || kind == "type_identifier"
-                || kind == "field_identifier"
-                || kind == "property_identifier"
-            {
+            if kind == "identifier" || kind == "type_identifier" || kind == "field_identifier" || kind == "property_identifier" {
                 return child.start_position().column;
             }
         }
@@ -252,11 +234,7 @@ fn find_name_column(node: &tree_sitter::Node, source: &str) -> usize {
     node.start_position().column
 }
 
-fn extract_definition_name(
-    node: &tree_sitter::Node,
-    source: &str,
-    language: Language,
-) -> Option<String> {
+fn extract_definition_name(node: &tree_sitter::Node, source: &str, language: Language) -> Option<String> {
     if language == Language::Rust && node.kind() == "let_declaration" {
         return extract_let_binding_name(node, source);
     }
@@ -275,10 +253,7 @@ fn extract_definition_name(
             if let Some(child) = node.named_child(i) {
                 let kind = child.kind();
                 if kind == "identifier" || kind == "property_identifier" {
-                    return child
-                        .utf8_text(source.as_bytes())
-                        .ok()
-                        .map(|s| s.to_string());
+                    return child.utf8_text(source.as_bytes()).ok().map(|s| s.to_string());
                 }
             }
         }
@@ -295,31 +270,18 @@ fn extract_definition_name(
         return None;
     }
     if let Some(name_node) = node.child_by_field_name("name") {
-        return name_node
-            .utf8_text(source.as_bytes())
-            .ok()
-            .map(|s| s.to_string());
+        return name_node.utf8_text(source.as_bytes()).ok().map(|s| s.to_string());
     }
     if node.kind() == "impl_item" {
         if let Some(type_node) = node.child_by_field_name("type") {
-            return type_node
-                .utf8_text(source.as_bytes())
-                .ok()
-                .map(|s| s.to_string());
+            return type_node.utf8_text(source.as_bytes()).ok().map(|s| s.to_string());
         }
     }
     for i in 0..node.named_child_count() {
         if let Some(child) = node.named_child(i) {
             let kind = child.kind();
-            if kind == "identifier"
-                || kind == "type_identifier"
-                || kind == "field_identifier"
-                || kind == "property_identifier"
-            {
-                return child
-                    .utf8_text(source.as_bytes())
-                    .ok()
-                    .map(|s| s.to_string());
+            if kind == "identifier" || kind == "type_identifier" || kind == "field_identifier" || kind == "property_identifier" {
+                return child.utf8_text(source.as_bytes()).ok().map(|s| s.to_string());
             }
         }
     }
@@ -329,18 +291,12 @@ fn extract_definition_name(
 fn extract_let_binding_name(node: &tree_sitter::Node, source: &str) -> Option<String> {
     if let Some(pattern) = node.child_by_field_name("pattern") {
         if pattern.kind() == "identifier" {
-            return pattern
-                .utf8_text(source.as_bytes())
-                .ok()
-                .map(|s| s.to_string());
+            return pattern.utf8_text(source.as_bytes()).ok().map(|s| s.to_string());
         }
         for i in 0..pattern.named_child_count() {
             if let Some(child) = pattern.named_child(i) {
                 if child.kind() == "identifier" {
-                    return child
-                        .utf8_text(source.as_bytes())
-                        .ok()
-                        .map(|s| s.to_string());
+                    return child.utf8_text(source.as_bytes()).ok().map(|s| s.to_string());
                 }
             }
         }
@@ -349,11 +305,7 @@ fn extract_let_binding_name(node: &tree_sitter::Node, source: &str) -> Option<St
 }
 
 impl Editor {
-    fn vim_like_gd(
-        &self,
-        word: &str,
-        buffer_id: crate::buffer::BufferId,
-    ) -> Option<(usize, usize)> {
+    fn vim_like_gd(&self, word: &str, buffer_id: crate::buffer::BufferId) -> Option<(usize, usize)> {
         let buffer = self.buffers.get(&buffer_id)?;
         let scope_start = self.find_function_lines().map(|(s, _)| s).unwrap_or(0);
 
@@ -398,8 +350,7 @@ fn find_word_in_line(line: &str, word: &str) -> Option<usize> {
     while start + word_len <= bytes.len() {
         if &bytes[start..start + word_len] == word_bytes {
             let before_ok = start == 0 || !is_word_char(bytes[start - 1]);
-            let after_ok =
-                start + word_len >= bytes.len() || !is_word_char(bytes[start + word_len]);
+            let after_ok = start + word_len >= bytes.len() || !is_word_char(bytes[start + word_len]);
 
             if before_ok && after_ok {
                 let col = line[..start].chars().count();

@@ -81,9 +81,7 @@ impl KeyMap {
         if self.bindings.contains_key(keys) {
             return true;
         }
-        self.bindings
-            .keys()
-            .any(|seq| seq.len() > keys.len() && seq[..keys.len()] == *keys)
+        self.bindings.keys().any(|seq| seq.len() > keys.len() && seq[..keys.len()] == *keys)
     }
 
     /// Return all bindings as an iterator.
@@ -216,12 +214,8 @@ impl KeyBindManager {
             for (seq, action) in keymap.bindings() {
                 if let Some(first) = seq.first() {
                     let label = first.to_string();
-                    seen.entry(label).or_insert_with(|| {
-                        keymap
-                            .description(seq)
-                            .map(|s| s.to_string())
-                            .unwrap_or_else(|| action.label())
-                    });
+                    seen.entry(label)
+                        .or_insert_with(|| keymap.description(seq).map(|s| s.to_string()).unwrap_or_else(|| action.label()));
                 }
             }
             let mut hints: Vec<(String, String)> = seen.into_iter().collect();
@@ -230,18 +224,10 @@ impl KeyBindManager {
         }
         let mut hints = Vec::new();
         for (seq, action) in keymap.bindings() {
-            if seq.len() > self.pending_keys.len()
-                && seq[..self.pending_keys.len()] == *self.pending_keys
-            {
-                let remaining: String = seq[self.pending_keys.len()..]
-                    .iter()
-                    .map(|k| k.to_string())
-                    .collect();
+            if seq.len() > self.pending_keys.len() && seq[..self.pending_keys.len()] == *self.pending_keys {
+                let remaining: String = seq[self.pending_keys.len()..].iter().map(|k| k.to_string()).collect();
 
-                let desc = keymap
-                    .description(seq)
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| action.label());
+                let desc = keymap.description(seq).map(|s| s.to_string()).unwrap_or_else(|| action.label());
                 hints.push((remaining, desc));
             }
         }
@@ -295,11 +281,7 @@ impl KeyBindManager {
     pub fn binding_counts(&self) -> Vec<(&str, usize)> {
         let mut counts = Vec::new();
         for mode_name in &["normal", "insert", "visual", "command"] {
-            let count = self
-                .keymaps
-                .get(*mode_name)
-                .map(|km| km.bindings.len())
-                .unwrap_or(0);
+            let count = self.keymaps.get(*mode_name).map(|km| km.bindings.len()).unwrap_or(0);
             counts.push((*mode_name, count));
         }
         counts
@@ -343,10 +325,7 @@ impl KeyBindManager {
             }
             seen_actions.insert(action_key);
 
-            let description = keymap
-                .description(seq)
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| action.label());
+            let description = keymap.description(seq).map(|s| s.to_string()).unwrap_or_else(|| action.label());
 
             entries.push(HelpEntry {
                 keys: keys_display,
@@ -355,11 +334,7 @@ impl KeyBindManager {
             });
         }
 
-        entries.sort_by(|a, b| {
-            a.category
-                .cmp(&b.category)
-                .then_with(|| a.keys.cmp(&b.keys))
-        });
+        entries.sort_by(|a, b| a.category.cmp(&b.category).then_with(|| a.keys.cmp(&b.keys)));
 
         entries
     }
@@ -374,11 +349,7 @@ impl KeyBindManager {
         let mut seen = std::collections::HashSet::new();
         entries.retain(|e| seen.insert((e.category, e.description.clone())));
 
-        entries.sort_by(|a, b| {
-            a.category
-                .cmp(&b.category)
-                .then_with(|| a.keys.cmp(&b.keys))
-        });
+        entries.sort_by(|a, b| a.category.cmp(&b.category).then_with(|| a.keys.cmp(&b.keys)));
         entries
     }
     /// Find all key sequences bound to a given action in a specific mode.
@@ -953,9 +924,7 @@ pub fn parse_key_sequence_with_leader(s: &str, leader: char) -> Option<Vec<Key>>
 
     while i < bytes.len() {
         // Check for <leader> (case-insensitive).
-        if i + tag_len <= bytes.len()
-            && s[i..].as_bytes()[..tag_len].eq_ignore_ascii_case(leader_tag.as_bytes())
-        {
+        if i + tag_len <= bytes.len() && s[i..].as_bytes()[..tag_len].eq_ignore_ascii_case(leader_tag.as_bytes()) {
             keys.push(Key::Char(leader));
             i += tag_len;
             continue;
@@ -1001,11 +970,7 @@ pub fn parse_key_sequence_with_leader(s: &str, leader: char) -> Option<Vec<Key>>
 
 /// Bind a leader-prefixed key sequence to an action.
 pub fn bind_leader(km: &mut KeyMap, seq_str: &str, leader: char, action: Action, desc: &str) {
-    let leader_str = if leader == ' ' {
-        "<space>".to_string()
-    } else {
-        leader.to_string()
-    };
+    let leader_str = if leader == ' ' { "<space>".to_string() } else { leader.to_string() };
     let full_str = format!("{}{}", leader_str, seq_str);
     if let Some(keys) = parse_key_sequence_with_leader(&full_str, leader) {
         km.bind_with_desc(keys, action, desc);
@@ -1301,15 +1266,9 @@ pub fn parse_action_str(s: &str) -> Option<Action> {
 /// `(KeySequence, Action)` tuple.
 /// Parse a key-string + action-string pair from config TOML into a
 /// `(KeySequence, Action)` tuple. Expands `<leader>` tags.
-fn parse_key_action(
-    key_str: &str,
-    action_name: &str,
-    leader: char,
-) -> Result<(Vec<Key>, Action), String> {
-    let keys = parse_key_sequence_with_leader(key_str, leader)
-        .ok_or_else(|| format!("invalid key sequence: '{}'", key_str))?;
-    let action = parse_action_str(action_name)
-        .ok_or_else(|| format!("unknown action: '{}'", action_name))?;
+fn parse_key_action(key_str: &str, action_name: &str, leader: char) -> Result<(Vec<Key>, Action), String> {
+    let keys = parse_key_sequence_with_leader(key_str, leader).ok_or_else(|| format!("invalid key sequence: '{}'", key_str))?;
+    let action = parse_action_str(action_name).ok_or_else(|| format!("unknown action: '{}'", action_name))?;
     Ok((keys, action))
 }
 

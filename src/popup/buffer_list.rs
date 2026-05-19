@@ -2,9 +2,8 @@
 
 use crate::popup::{case_insensitive_find, Scrollable};
 use crate::rounded_box::{
-    catppuccin, centered_in_edit, clamp_height, clamp_width, clear_rect, content_width,
-    draw_bottom_border, draw_empty_row, draw_row, draw_top_border, str_width, truncate_to_width,
-    BoxStyle, RowStyle, Segment,
+    catppuccin, centered_in_edit, clamp_height, clamp_width, clear_rect, content_width, draw_bottom_border, draw_empty_row, draw_row,
+    draw_top_border, str_width, truncate_to_width, BoxStyle, RowStyle, Segment,
 };
 use crossterm::cursor::MoveTo;
 use crossterm::execute;
@@ -118,9 +117,7 @@ pub fn render_buffer_list_popup(
             format!("({}/{})", popup.filtered.len(), popup.entries.len())
         }
     );
-    let title_style = BoxStyle::default()
-        .with_title(title)
-        .with_bg(catppuccin::MANTLE);
+    let title_style = BoxStyle::default().with_title(title).with_bg(catppuccin::MANTLE);
     draw_top_border(stdout, x, y, popup_width, &title_style)?;
 
     // ── Filter row ─────────────────────────────────────────────────────
@@ -131,10 +128,7 @@ pub fn render_buffer_list_popup(
         let max_filter_len = content_width(popup_width, &filter_style).saturating_sub(prompt_w + 1);
         let filter_display = truncate_to_width(&popup.filter, max_filter_len);
 
-        let segments = [
-            Segment::new(">", catppuccin::PEACH),
-            Segment::new(filter_display, catppuccin::TEXT),
-        ];
+        let segments = [Segment::new(">", catppuccin::PEACH), Segment::new(filter_display, catppuccin::TEXT)];
         draw_row(stdout, x, filter_y, popup_width, &segments, &filter_style)?;
 
         // Block cursor after the filter text
@@ -160,74 +154,43 @@ pub fn render_buffer_list_popup(
             let real_idx = popup.filtered[entry_idx];
             let entry = &popup.entries[real_idx];
             let is_selected = entry_idx == popup.selected;
-            let row_style = if is_selected {
-                RowStyle::selected()
-            } else {
-                RowStyle::normal()
-            };
+            let row_style = if is_selected { RowStyle::selected() } else { RowStyle::normal() };
 
             let id_str = format!("{:>4}", entry.id);
 
             let mut segments = Vec::new();
-            segments.push(Segment::new(
-                if entry.dirty { "+" } else { " " },
-                catppuccin::RED,
-            ));
-            segments.push(Segment::new(
-                if entry.active { "%" } else { " " },
-                catppuccin::GREEN,
-            ));
+            segments.push(Segment::new(if entry.dirty { "+" } else { " " }, catppuccin::RED));
+            segments.push(Segment::new(if entry.active { "%" } else { " " }, catppuccin::GREEN));
             segments.push(Segment::new(" ", catppuccin::SURFACE1));
             segments.push(Segment::new(&id_str, catppuccin::YELLOW));
             segments.push(Segment::new("  ", catppuccin::SURFACE1));
 
             // Name with match highlighting when filter is active
             if !popup.filter.is_empty() {
-                if let Some((match_start, match_end)) =
-                    case_insensitive_find(&entry.name, &popup.filter)
-                {
+                if let Some((match_start, match_end)) = case_insensitive_find(&entry.name, &popup.filter) {
                     if match_start > 0 {
                         segments.push(Segment::new(
                             &entry.name[..match_start],
-                            if is_selected {
-                                catppuccin::TEXT
-                            } else {
-                                catppuccin::SUBTEXT
-                            },
+                            if is_selected { catppuccin::TEXT } else { catppuccin::SUBTEXT },
                         ));
                     }
-                    segments.push(Segment::new(
-                        &entry.name[match_start..match_end],
-                        catppuccin::PEACH,
-                    ));
+                    segments.push(Segment::new(&entry.name[match_start..match_end], catppuccin::PEACH));
                     if match_end < entry.name.len() {
                         segments.push(Segment::new(
                             &entry.name[match_end..],
-                            if is_selected {
-                                catppuccin::TEXT
-                            } else {
-                                catppuccin::SUBTEXT
-                            },
+                            if is_selected { catppuccin::TEXT } else { catppuccin::SUBTEXT },
                         ));
                     }
                 } else {
                     segments.push(Segment::new(
                         &entry.name,
-                        if is_selected {
-                            catppuccin::TEXT
-                        } else {
-                            catppuccin::SUBTEXT
-                        },
+                        if is_selected { catppuccin::TEXT } else { catppuccin::SUBTEXT },
                     ));
                 }
             } else {
                 segments.push(Segment::new(
                     &entry.name,
-                    if is_selected {
-                        catppuccin::TEXT
-                    } else {
-                        catppuccin::SUBTEXT
-                    },
+                    if is_selected { catppuccin::TEXT } else { catppuccin::SUBTEXT },
                 ));
             }
 
@@ -241,16 +204,10 @@ pub fn render_buffer_list_popup(
     let bottom_y = filter_y + 1 + visible_rows as u16;
     let footer = format!(
         "[Enter] switch  [Esc] close  {}/{}",
-        if popup.filtered.is_empty() {
-            0
-        } else {
-            popup.selected + 1
-        },
+        if popup.filtered.is_empty() { 0 } else { popup.selected + 1 },
         popup.filtered.len(),
     );
-    let bottom_style = BoxStyle::default()
-        .with_border(catppuccin::SURFACE0)
-        .with_footer(footer);
+    let bottom_style = BoxStyle::default().with_border(catppuccin::SURFACE0).with_footer(footer);
     draw_bottom_border(stdout, x, bottom_y, popup_width, &bottom_style)?;
 
     execute!(stdout, ResetColor)?;

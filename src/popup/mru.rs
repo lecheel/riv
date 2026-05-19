@@ -32,32 +32,17 @@ impl MruPopup {
     }
 
     pub fn selected_entry(&self) -> Option<&MruEntry> {
-        self.filtered
-            .get(self.selected)
-            .and_then(|&idx| self.entries.get(idx))
+        self.filtered.get(self.selected).and_then(|&idx| self.entries.get(idx))
     }
 
     pub(crate) fn apply_filter(&mut self) {
         self.filtered.clear();
         let query = self.filter.to_lowercase();
         for (i, entry) in self.entries.iter().enumerate() {
-            let file_name = entry
-                .path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("")
-                .to_string();
-            let dir_str = entry
-                .path
-                .parent()
-                .and_then(|p| p.to_str())
-                .unwrap_or("")
-                .to_string();
+            let file_name = entry.path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+            let dir_str = entry.path.parent().and_then(|p| p.to_str()).unwrap_or("").to_string();
 
-            if query.is_empty()
-                || file_name.to_lowercase().contains(&query)
-                || dir_str.to_lowercase().contains(&query)
-            {
+            if query.is_empty() || file_name.to_lowercase().contains(&query) || dir_str.to_lowercase().contains(&query) {
                 self.filtered.push(i);
             }
         }

@@ -58,10 +58,7 @@ impl HealthReport {
         // Group by category for cleaner output
         let mut categories: Vec<(&str, Vec<&HealthIssue>)> = Vec::new();
         for issue in &self.issues {
-            if let Some(slot) = categories
-                .iter_mut()
-                .find(|(cat, _)| *cat == issue.category)
-            {
+            if let Some(slot) = categories.iter_mut().find(|(cat, _)| *cat == issue.category) {
                 slot.1.push(issue);
             } else {
                 categories.push((issue.category, vec![issue]));
@@ -90,21 +87,9 @@ impl HealthReport {
             }
         }
 
-        let errors = self
-            .issues
-            .iter()
-            .filter(|i| i.severity == Severity::Err)
-            .count();
-        let warns = self
-            .issues
-            .iter()
-            .filter(|i| i.severity == Severity::Warn)
-            .count();
-        let oks = self
-            .issues
-            .iter()
-            .filter(|i| i.severity == Severity::Ok)
-            .count();
+        let errors = self.issues.iter().filter(|i| i.severity == Severity::Err).count();
+        let warns = self.issues.iter().filter(|i| i.severity == Severity::Warn).count();
+        let oks = self.issues.iter().filter(|i| i.severity == Severity::Ok).count();
 
         println!();
         if errors > 0 {
@@ -130,11 +115,7 @@ impl HealthReport {
                 format!("{}, {} passed", oks, oks + warns).grey(),
             );
         } else {
-            println!(
-                "{} {}",
-                "✓".green(),
-                format!("All {} check(s) passed", oks).green().bold(),
-            );
+            println!("{} {}", "✓".green(), format!("All {} check(s) passed", oks).green().bold(),);
         }
     }
 }
@@ -190,20 +171,11 @@ fn colorize_message(msg: &str) -> String {
         // Heuristic: if we see a word containing '/' or ending in a known extension
         if chars[i] == '/' || (chars[i].is_alphanumeric() && looks_like_path_start(&chars, i)) {
             let start = i;
-            while i < chars.len()
-                && !chars[i].is_whitespace()
-                && chars[i] != ')'
-                && chars[i] != ':'
-                && chars[i] != ','
-            {
+            while i < chars.len() && !chars[i].is_whitespace() && chars[i] != ')' && chars[i] != ':' && chars[i] != ',' {
                 i += 1;
             }
             let slice: String = chars[start..i].iter().collect();
-            if slice.contains('/')
-                || slice.contains(".json")
-                || slice.contains(".toml")
-                || slice.contains(".rs")
-            {
+            if slice.contains('/') || slice.contains(".json") || slice.contains(".toml") || slice.contains(".rs") {
                 out.push_str(&slice.to_string().dark_magenta().to_string());
             } else {
                 out.push_str(&slice.to_string().stylize().with(base).to_string());
@@ -212,9 +184,7 @@ fn colorize_message(msg: &str) -> String {
         }
 
         // ── Numbers → yellow ──
-        if chars[i].is_ascii_digit()
-            || (chars[i] == '-' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit())
-        {
+        if chars[i].is_ascii_digit() || (chars[i] == '-' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit()) {
             let start = i;
             if chars[i] == '-' {
                 i += 1;
@@ -290,10 +260,7 @@ fn check_config_dir(issues: &mut Vec<HealthIssue>) {
     let dir = match Config::config_dir() {
         Ok(d) => d,
         Err(e) => {
-            issues.push(err(
-                "config",
-                format!("Cannot determine config directory: {}", e),
-            ));
+            issues.push(err("config", format!("Cannot determine config directory: {}", e)));
             return;
         }
     };
@@ -304,10 +271,7 @@ fn check_config_dir(issues: &mut Vec<HealthIssue>) {
                 issues.push(ok("config", format!("Created config directory {:?}", dir)));
             }
             Err(e) => {
-                issues.push(err(
-                    "config",
-                    format!("Cannot create config directory {:?}: {}", dir, e),
-                ));
+                issues.push(err("config", format!("Cannot create config directory {:?}: {}", dir, e)));
                 return;
             }
         }
@@ -318,16 +282,10 @@ fn check_config_dir(issues: &mut Vec<HealthIssue>) {
     match std::fs::write(&test_file, b"test") {
         Ok(()) => {
             std::fs::remove_file(&test_file).ok();
-            issues.push(ok(
-                "config",
-                format!("Config directory {:?} is writable", dir),
-            ));
+            issues.push(ok("config", format!("Config directory {:?} is writable", dir)));
         }
         Err(e) => {
-            issues.push(err(
-                "config",
-                format!("Config directory {:?} is NOT writable: {}", dir, e),
-            ));
+            issues.push(err("config", format!("Config directory {:?} is NOT writable: {}", dir, e)));
         }
     }
 }
@@ -336,10 +294,7 @@ fn check_config_file(issues: &mut Vec<HealthIssue>) {
     let path = match Config::config_path() {
         Ok(p) => p,
         Err(e) => {
-            issues.push(err(
-                "config",
-                format!("Cannot determine config path: {}", e),
-            ));
+            issues.push(err("config", format!("Cannot determine config path: {}", e)));
             return;
         }
     };
@@ -362,10 +317,7 @@ fn check_config_file(issues: &mut Vec<HealthIssue>) {
     if content.starts_with('\u{feff}') {
         issues.push(warn(
             "config",
-            format!(
-                "{:?} contains a UTF-8 BOM — this may cause parse errors",
-                path
-            ),
+            format!("{:?} contains a UTF-8 BOM — this may cause parse errors", path),
         ));
     }
 
@@ -389,10 +341,7 @@ fn check_config_file(issues: &mut Vec<HealthIssue>) {
 
     // Parse as raw TOML first (catches syntax errors)
     if let Err(e) | Ok(Err(e)) = content.parse::<toml::Value>().map(|_| Ok(())) {
-        issues.push(err(
-            "config",
-            format!("TOML syntax error in {:?}: {}", path, e),
-        ));
+        issues.push(err("config", format!("TOML syntax error in {:?}: {}", path, e)));
         return;
     }
 
@@ -402,10 +351,7 @@ fn check_config_file(issues: &mut Vec<HealthIssue>) {
             issues.push(ok("config", format!("Config parsed OK from {:?}", path)));
         }
         Err(ConfigError::Toml(e)) => {
-            issues.push(err(
-                "config",
-                format!("Config type error in {:?}: {}", path, e),
-            ));
+            issues.push(err("config", format!("Config type error in {:?}: {}", path, e)));
         }
         Err(e) => {
             issues.push(err("config", format!("Config error: {}", e)));
@@ -423,10 +369,7 @@ fn check_config_values(issues: &mut Vec<HealthIssue>) {
     if config.tab_width == 0 {
         issues.push(err("config", "tab_width must be > 0"));
     } else if config.tab_width > 16 {
-        issues.push(warn(
-            "config",
-            format!("tab_width = {} is unusually large", config.tab_width),
-        ));
+        issues.push(warn("config", format!("tab_width = {} is unusually large", config.tab_width)));
     } else {
         issues.push(ok(
             "config",
@@ -440,15 +383,9 @@ fn check_config_values(issues: &mut Vec<HealthIssue>) {
 
     // ── Scroll offset ──
     if config.scroll_offset > 50 {
-        issues.push(warn(
-            "config",
-            format!("scroll_offset = {} is very large", config.scroll_offset),
-        ));
+        issues.push(warn("config", format!("scroll_offset = {} is very large", config.scroll_offset)));
     } else {
-        issues.push(ok(
-            "config",
-            format!("scroll_offset = {}", config.scroll_offset),
-        ));
+        issues.push(ok("config", format!("scroll_offset = {}", config.scroll_offset)));
     }
 
     // ── Auto-save ──
@@ -460,10 +397,7 @@ fn check_config_values(issues: &mut Vec<HealthIssue>) {
     if config.undo_levels == 0 {
         issues.push(err("config", "undo_levels = 0 (undo is disabled!)"));
     } else if config.undo_levels < 100 {
-        issues.push(warn(
-            "config",
-            format!("undo_levels = {} is very low", config.undo_levels),
-        ));
+        issues.push(warn("config", format!("undo_levels = {} is very low", config.undo_levels)));
     }
 
     // ── Ruler ──
@@ -485,10 +419,7 @@ fn check_config_values(issues: &mut Vec<HealthIssue>) {
         } else {
             issues.push(ok(
                 "config",
-                format!(
-                    "completion enabled (trigger len = {})",
-                    config.completion_trigger_len
-                ),
+                format!("completion enabled (trigger len = {})", config.completion_trigger_len),
             ));
         }
     }
@@ -520,48 +451,29 @@ fn check_config_values(issues: &mut Vec<HealthIssue>) {
     // ── LLM ──
     if config.llm.enabled {
         match &config.llm.backend {
-            LlmBackend::OpenAi {
-                api_key,
-                endpoint,
-                model,
-            } => {
+            LlmBackend::OpenAi { api_key, endpoint, model } => {
                 if api_key.is_empty() {
                     issues.push(err("llm", "OpenAI backend enabled but api_key is empty"));
                 } else if api_key.len() < 20 {
                     issues.push(warn("llm", "OpenAI api_key looks too short"));
                 } else {
-                    issues.push(ok(
-                        "llm",
-                        format!("OpenAI backend: {} @ {}", model, endpoint),
-                    ));
+                    issues.push(ok("llm", format!("OpenAI backend: {} @ {}", model, endpoint)));
                 }
             }
             LlmBackend::Ollama { endpoint, model } => {
-                issues.push(ok(
-                    "llm",
-                    format!("Ollama backend: {} @ {}", model, endpoint),
-                ));
+                issues.push(ok("llm", format!("Ollama backend: {} @ {}", model, endpoint)));
             }
             LlmBackend::LlamaCpp { endpoint, model } => {
-                issues.push(ok(
-                    "llm",
-                    format!("llama.cpp backend: {} @ {}", model, endpoint),
-                ));
+                issues.push(ok("llm", format!("llama.cpp backend: {} @ {}", model, endpoint)));
             }
         }
         if config.llm.temperature > 2.0 {
             issues.push(err(
                 "llm",
-                format!(
-                    "temperature = {} is out of range (0.0–2.0)",
-                    config.llm.temperature
-                ),
+                format!("temperature = {} is out of range (0.0–2.0)", config.llm.temperature),
             ));
         } else {
-            issues.push(ok(
-                "llm",
-                format!("temperature = {}", config.llm.temperature),
-            ));
+            issues.push(ok("llm", format!("temperature = {}", config.llm.temperature)));
         }
         if config.llm.max_tokens == 0 {
             issues.push(warn("llm", "max_tokens = 0 (no output will be generated)"));
@@ -586,10 +498,7 @@ fn check_config_values(issues: &mut Vec<HealthIssue>) {
             issues.push(ok("codeium", "API key configured"));
         }
         if config.codeium.debounce_ms == 0 {
-            issues.push(warn(
-                "codeium",
-                "debounce_ms = 0 may cause excessive API calls",
-            ));
+            issues.push(warn("codeium", "debounce_ms = 0 may cause excessive API calls"));
         }
     } else {
         issues.push(ok("codeium", "disabled (no issues)"));
@@ -619,11 +528,7 @@ fn check_keybindings(issues: &mut Vec<HealthIssue>) {
             None => {
                 issues.push(err(
                     "keybind",
-                    format!(
-                        "Mode '{}' must be a table, got {:?}",
-                        mode,
-                        value.type_str()
-                    ),
+                    format!("Mode '{}' must be a table, got {:?}", mode, value.type_str()),
                 ));
                 found_error = true;
                 continue;
@@ -634,10 +539,7 @@ fn check_keybindings(issues: &mut Vec<HealthIssue>) {
         if !["normal", "insert", "visual", "command"].contains(&mode.as_str()) {
             issues.push(warn(
                 "keybind",
-                format!(
-                    "Unknown mode '{}' (valid: normal, insert, visual, command)",
-                    mode
-                ),
+                format!("Unknown mode '{}' (valid: normal, insert, visual, command)", mode),
             ));
         }
 
@@ -646,10 +548,7 @@ fn check_keybindings(issues: &mut Vec<HealthIssue>) {
 
             // Validate key format
             if !is_valid_key_sequence(key_seq) {
-                issues.push(err(
-                    "keybind",
-                    format!("Invalid key sequence '{}' in mode '{}'", key_seq, mode),
-                ));
+                issues.push(err("keybind", format!("Invalid key sequence '{}' in mode '{}'", key_seq, mode)));
                 found_error = true;
                 continue;
             }
@@ -675,20 +574,14 @@ fn check_keybindings(issues: &mut Vec<HealthIssue>) {
                             if !is_valid_action_name(s) {
                                 issues.push(err(
                                     "keybind",
-                                    format!(
-                                        "Invalid action name '{}' in sequence for key '{}' in mode '{}'",
-                                        s, key_seq, mode
-                                    ),
+                                    format!("Invalid action name '{}' in sequence for key '{}' in mode '{}'", s, key_seq, mode),
                                 ));
                                 found_error = true;
                             }
                         } else {
                             issues.push(err(
                                 "keybind",
-                                format!(
-                                    "Action array item for key '{}' in mode '{}' must be a string",
-                                    key_seq, mode
-                                ),
+                                format!("Action array item for key '{}' in mode '{}' must be a string", key_seq, mode),
                             ));
                             found_error = true;
                         }
@@ -712,10 +605,7 @@ fn check_keybindings(issues: &mut Vec<HealthIssue>) {
     }
 
     if !found_error {
-        issues.push(ok(
-            "keybind",
-            format!("{} custom binding(s) validated OK", total_bindings),
-        ));
+        issues.push(ok("keybind", format!("{} custom binding(s) validated OK", total_bindings)));
     }
 }
 
@@ -726,10 +616,7 @@ fn check_history_file(issues: &mut Vec<HealthIssue>) {
     };
 
     if !path.exists() {
-        issues.push(ok(
-            "history",
-            "No history file yet (will be created on exit)",
-        ));
+        issues.push(ok("history", "No history file yet (will be created on exit)"));
         return;
     }
 
@@ -738,25 +625,16 @@ fn check_history_file(issues: &mut Vec<HealthIssue>) {
             Ok(data) => {
                 let cmd_len = data.command.len();
                 let search_len = data.search.len();
-                issues.push(ok(
-                    "history",
-                    format!("History OK ({} commands, {} searches)", cmd_len, search_len),
-                ));
+                issues.push(ok("history", format!("History OK ({} commands, {} searches)", cmd_len, search_len)));
                 if cmd_len > 800 {
                     issues.push(warn(
                         "history",
-                        format!(
-                            "Command history has {} entries (max 1000, consider pruning)",
-                            cmd_len
-                        ),
+                        format!("Command history has {} entries (max 1000, consider pruning)", cmd_len),
                     ));
                 }
             }
             Err(e) => {
-                issues.push(err(
-                    "history",
-                    format!("Corrupt history file {:?}: {}", path, e),
-                ));
+                issues.push(err("history", format!("Corrupt history file {:?}: {}", path, e)));
             }
         },
         Err(e) => {
@@ -779,11 +657,7 @@ fn check_mru_file(issues: &mut Vec<HealthIssue>) {
     match std::fs::read_to_string(&path) {
         Ok(content) => match serde_json::from_str::<serde_json::Value>(&content) {
             Ok(data) => {
-                let count = data
-                    .get("mru_files")
-                    .and_then(|v| v.as_array())
-                    .map(|a| a.len())
-                    .unwrap_or(0);
+                let count = data.get("mru_files").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
                 issues.push(ok("mru", format!("MRU OK ({} entries)", count)));
 
                 let missing = data
@@ -799,10 +673,7 @@ fn check_mru_file(issues: &mut Vec<HealthIssue>) {
                 if missing > 0 {
                     issues.push(warn(
                         "mru",
-                        format!(
-                            "{} of {} entries point to files that no longer exist",
-                            missing, count
-                        ),
+                        format!("{} of {} entries point to files that no longer exist", missing, count),
                     ));
                 }
             }
@@ -823,31 +694,18 @@ fn check_session_file(issues: &mut Vec<HealthIssue>) {
     };
 
     if !path.exists() {
-        issues.push(ok(
-            "session",
-            "No session file yet (will be created on exit)",
-        ));
+        issues.push(ok("session", "No session file yet (will be created on exit)"));
         return;
     }
 
     match std::fs::read_to_string(&path) {
         Ok(content) => match serde_json::from_str::<serde_json::Value>(&content) {
             Ok(data) => {
-                let count = data
-                    .get("positions")
-                    .and_then(|v| v.as_object())
-                    .map(|o| o.len())
-                    .unwrap_or(0);
-                issues.push(ok(
-                    "session",
-                    format!("Session OK ({} saved position(s))", count),
-                ));
+                let count = data.get("positions").and_then(|v| v.as_object()).map(|o| o.len()).unwrap_or(0);
+                issues.push(ok("session", format!("Session OK ({} saved position(s))", count)));
             }
             Err(e) => {
-                issues.push(warn(
-                    "session",
-                    format!("Corrupt session file {:?}: {}", path, e),
-                ));
+                issues.push(warn("session", format!("Corrupt session file {:?}: {}", path, e)));
             }
         },
         Err(e) => {
@@ -877,33 +735,21 @@ fn check_tool_availability(issues: &mut Vec<HealthIssue>) {
                     Some(v) => format!(" {}", v),
                     None => String::new(),
                 };
-                issues.push(ok(
-                    "tool",
-                    format!("{} ({}) found{}: {:?}", desc, cmd, ver_str, path),
-                ));
+                issues.push(ok("tool", format!("{} ({}) found{}: {:?}", desc, cmd, ver_str, path)));
             }
             Err(_) => {
                 if *required {
-                    issues.push(err(
-                        "tool",
-                        format!("{} ({}) NOT found (required)", desc, cmd),
-                    ));
+                    issues.push(err("tool", format!("{} ({}) NOT found (required)", desc, cmd)));
                     any_required_missing = true;
                 } else {
-                    issues.push(warn(
-                        "tool",
-                        format!("{} ({}) not found on PATH", desc, cmd),
-                    ));
+                    issues.push(warn("tool", format!("{} ({}) not found on PATH", desc, cmd)));
                 }
             }
         }
     }
 
     if any_required_missing {
-        issues.push(err(
-            "tool",
-            "Required tools are missing — some features will not work",
-        ));
+        issues.push(err("tool", "Required tools are missing — some features will not work"));
     }
 }
 
@@ -915,10 +761,7 @@ fn check_terminal_env(issues: &mut Vec<HealthIssue>) {
             if term.contains("256color") || term.contains("256") {
                 issues.push(ok("terminal", "256-color support detected"));
             } else if term.contains("xterm") && !term.contains("256") {
-                issues.push(warn(
-                    "terminal",
-                    format!("$TERM = {} — may not support 256 colors", term),
-                ));
+                issues.push(warn("terminal", format!("$TERM = {} — may not support 256 colors", term)));
             }
         }
         Err(_) => {
@@ -937,19 +780,13 @@ fn check_terminal_env(issues: &mut Vec<HealthIssue>) {
             issues.push(ok("terminal", format!("$COLORTERM = {} (true color)", ct)));
         }
         Err(_) => {
-            issues.push(warn(
-                "terminal",
-                "$COLORTERM not set — true color (24-bit) may not be available",
-            ));
+            issues.push(warn("terminal", "$COLORTERM not set — true color (24-bit) may not be available"));
         }
     }
 
     // Check if stdout is a TTY
     if !atty::is(atty::Stream::Stdout) {
-        issues.push(warn(
-            "terminal",
-            "stdout is not a TTY — editor may not render correctly",
-        ));
+        issues.push(warn("terminal", "stdout is not a TTY — editor may not render correctly"));
     } else {
         issues.push(ok("terminal", "stdout is a TTY"));
     }
@@ -961,10 +798,7 @@ fn check_clipboard(issues: &mut Vec<HealthIssue>) {
             issues.push(ok("clipboard", "System clipboard accessible"));
         }
         Err(e) => {
-            issues.push(warn(
-                "clipboard",
-                format!("System clipboard not available: {}", e),
-            ));
+            issues.push(warn("clipboard", format!("System clipboard not available: {}", e)));
         }
     }
 }
@@ -977,15 +811,9 @@ fn check_locale(issues: &mut Vec<HealthIssue>) {
     if lang.contains("UTF-8") || lang.contains("utf8") || lang.contains("utf-8") {
         issues.push(ok("locale", format!("$LANG = {} (UTF-8)", lang)));
     } else if lang == "(not set)" {
-        issues.push(warn(
-            "locale",
-            "$LANG and $LC_ALL not set — Unicode may not display correctly",
-        ));
+        issues.push(warn("locale", "$LANG and $LC_ALL not set — Unicode may not display correctly"));
     } else {
-        issues.push(warn(
-            "locale",
-            format!("$LANG = {} — may not support UTF-8", lang),
-        ));
+        issues.push(warn("locale", format!("$LANG = {} — may not support UTF-8", lang)));
     }
 }
 
@@ -1027,11 +855,7 @@ fn get_tool_version(cmd: &str) -> Option<String> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let first_line = stdout.lines().next().unwrap_or("");
-    let version = first_line
-        .trim()
-        .trim_start_matches(&format!("{} ", cmd))
-        .trim()
-        .to_string();
+    let version = first_line.trim().trim_start_matches(&format!("{} ", cmd)).trim().to_string();
 
     if version.is_empty() {
         None
@@ -1177,6 +1001,5 @@ fn is_valid_action_name(name: &str) -> bool {
         return false;
     }
 
-    name.chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }

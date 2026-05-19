@@ -295,13 +295,7 @@ pub fn draw_bottom_border(
     Ok(())
 }
 
-fn draw_side_row(
-    stdout: &mut std::io::Stdout,
-    x: u16,
-    y: u16,
-    inner_w: usize,
-    style: &BoxStyle,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn draw_side_row(stdout: &mut std::io::Stdout, x: u16, y: u16, inner_w: usize, style: &BoxStyle) -> Result<(), Box<dyn std::error::Error>> {
     execute!(stdout, MoveTo(x, y))?;
     execute!(stdout, SetForegroundColor(style.border))?;
     execute!(stdout, SetBackgroundColor(style.bg))?;
@@ -383,14 +377,7 @@ pub fn draw_row_text(
     text: &str,
     style: &RowStyle,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    draw_row(
-        stdout,
-        x,
-        y,
-        width,
-        &[Segment::new(text, style.text)],
-        style,
-    )
+    draw_row(stdout, x, y, width, &[Segment::new(text, style.text)], style)
 }
 
 pub fn draw_empty_row(
@@ -474,13 +461,7 @@ pub fn centered_pos(popup_w: u16, popup_h: u16, term_w: u16, term_h: u16) -> (u1
     (x, y)
 }
 
-pub fn centered_in_edit(
-    popup_w: u16,
-    popup_h: u16,
-    term_w: u16,
-    term_h: u16,
-    status_h: u16,
-) -> (u16, u16) {
+pub fn centered_in_edit(popup_w: u16, popup_h: u16, term_w: u16, term_h: u16, status_h: u16) -> (u16, u16) {
     let edit_h = term_h.saturating_sub(status_h);
     let x = term_w.saturating_sub(popup_w) / 2;
     let y = edit_h.saturating_sub(popup_h) / 2;
@@ -510,12 +491,7 @@ pub fn clear_rect(
     }
     let blank = " ".repeat(width as usize);
     for row in 0..height {
-        execute!(
-            stdout,
-            MoveTo(x, y + row),
-            SetBackgroundColor(bg),
-            Print(&blank)
-        )?;
+        execute!(stdout, MoveTo(x, y + row), SetBackgroundColor(bg), Print(&blank))?;
     }
     Ok(())
 }

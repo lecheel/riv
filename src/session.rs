@@ -73,12 +73,7 @@ impl PositionMap {
 
     /// Clean up entries for files that no longer exist on disk.
     pub fn cleanup(&mut self) {
-        let dead: Vec<String> = self
-            .0
-            .keys()
-            .filter(|p| !Path::new(p).exists())
-            .cloned()
-            .collect();
+        let dead: Vec<String> = self.0.keys().filter(|p| !Path::new(p).exists()).cloned().collect();
         for key in dead {
             self.0.remove(&key);
         }

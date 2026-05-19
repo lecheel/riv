@@ -6,9 +6,7 @@
 use std::io::{self, Write};
 
 use crossterm::cursor::{Hide, Show};
-use crossterm::event::{
-    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyEvent, KeyEventKind, MouseEvent,
-};
+use crossterm::event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyEvent, KeyEventKind, MouseEvent};
 use crossterm::terminal::{self, disable_raw_mode, enable_raw_mode};
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 
@@ -199,12 +197,7 @@ impl Drop for Terminal {
     fn drop(&mut self) {
         // Best-effort restore: show cursor, leave alternate screen,
         // disable bracketed paste, then raw mode.
-        let _ = crossterm::execute!(
-            self.stdout,
-            Show,
-            LeaveAlternateScreen,
-            DisableBracketedPaste,
-        );
+        let _ = crossterm::execute!(self.stdout, Show, LeaveAlternateScreen, DisableBracketedPaste,);
         let _ = disable_raw_mode();
     }
 }

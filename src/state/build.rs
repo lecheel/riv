@@ -82,9 +82,7 @@ impl Editor {
             Key::Char('l') => Some(self.build_insert_brace_content()),
             Key::Char('y') => {
                 if self.build.diagnostics.is_empty() {
-                    return Some(CommandResult::Message(
-                        "No errors/warnings to yank".to_string(),
-                    ));
+                    return Some(CommandResult::Message("No errors/warnings to yank".to_string()));
                 }
 
                 let mut yank_text = String::new();
@@ -107,10 +105,7 @@ impl Editor {
                 self.yank_register = yank_text.clone();
 
                 let result = match crate::clipboard::set_text(&yank_text) {
-                    Ok(()) => CommandResult::Message(format!(
-                        "Yanked {} diagnostic(s) to system clipboard",
-                        self.build.diagnostics.len()
-                    )),
+                    Ok(()) => CommandResult::Message(format!("Yanked {} diagnostic(s) to system clipboard", self.build.diagnostics.len())),
                     Err(e) => CommandResult::Error(format!("Clipboard error: {}", e)),
                 };
                 Some(result)

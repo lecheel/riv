@@ -149,11 +149,7 @@ pub enum LlmBackend {
     /// llama.cpp server (OpenAI-compatible)
     LlamaCpp { endpoint: String, model: String },
     /// OpenAI or compatible API
-    OpenAi {
-        endpoint: String,
-        model: String,
-        api_key: String,
-    },
+    OpenAi { endpoint: String, model: String, api_key: String },
 }
 
 impl Default for LlmBackend {
@@ -317,9 +313,7 @@ impl Default for Config {
 impl Config {
     /// Return the config directory path.
     pub fn config_dir() -> Result<PathBuf, ConfigError> {
-        let base = dirs::config_dir().ok_or_else(|| {
-            ConfigError::ConfigDir("Could not determine config directory".to_string())
-        })?;
+        let base = dirs::config_dir().ok_or_else(|| ConfigError::ConfigDir("Could not determine config directory".to_string()))?;
         Ok(base.join("riv"))
     }
 

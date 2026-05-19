@@ -3,8 +3,8 @@
 use crate::keybind::HelpEntry;
 use crate::popup::Scrollable;
 use crate::rounded_box::{
-    catppuccin, centered_in_edit, clamp_height, clamp_width, clear_rect, draw_border,
-    draw_empty_row, draw_row, draw_row_text, BoxStyle, RowStyle, Segment,
+    catppuccin, centered_in_edit, clamp_height, clamp_width, clear_rect, draw_border, draw_empty_row, draw_row, draw_row_text, BoxStyle,
+    RowStyle, Segment,
 };
 use crossterm::execute;
 use crossterm::style::ResetColor;
@@ -118,11 +118,7 @@ pub fn render_keymap_popup(
     clear_rect(stdout, x, y, popup_width, popup_height, catppuccin::MANTLE)?;
 
     let total = popup.total_bindings();
-    let title = format!(
-        " {} Keymap ({} bindings) ",
-        popup.mode_name.to_uppercase(),
-        total
-    );
+    let title = format!(" {} Keymap ({} bindings) ", popup.mode_name.to_uppercase(), total);
     let border_style = BoxStyle::default()
         .with_title(title)
         .with_border(catppuccin::SURFACE0)
@@ -174,23 +170,9 @@ pub fn render_keymap_popup(
                 };
 
                 let segments = [
-                    Segment::new(
-                        &key_display,
-                        if is_selected {
-                            catppuccin::GREEN
-                        } else {
-                            catppuccin::LAVENDER
-                        },
-                    ),
+                    Segment::new(&key_display, if is_selected { catppuccin::GREEN } else { catppuccin::LAVENDER }),
                     Segment::new("  ", catppuccin::SURFACE1),
-                    Segment::new(
-                        &entry.action,
-                        if is_selected {
-                            catppuccin::TEXT
-                        } else {
-                            catppuccin::SUBTEXT
-                        },
-                    ),
+                    Segment::new(&entry.action, if is_selected { catppuccin::TEXT } else { catppuccin::SUBTEXT }),
                 ];
                 draw_row(stdout, x, row_y, popup_width, &segments, &row_style)?;
             }

@@ -61,11 +61,7 @@ impl Editor {
             return CommandResult::Message("No functions found in this buffer".into());
         }
         // Pre-select the function closest to the current cursor line
-        let cursor_line = self
-            .windows
-            .active_window()
-            .map(|w| w.cursor.position.line)
-            .unwrap_or(0);
+        let cursor_line = self.windows.active_window().map(|w| w.cursor.position.line).unwrap_or(0);
 
         let mut popup = crate::popup::FunctionListPopup::new(entries);
         // Find nearest function above or at cursor
@@ -134,12 +130,7 @@ impl Editor {
             if let Some(content) = self.get_named_register(c) {
                 if !content.is_empty() {
                     let is_multiline = content.contains('\n');
-                    let first_line = content
-                        .lines()
-                        .next()
-                        .unwrap_or("")
-                        .replace('\r', "\\r")
-                        .replace('\t', "\\t");
+                    let first_line = content.lines().next().unwrap_or("").replace('\r', "\\r").replace('\t', "\\t");
 
                     let max_len = if is_multiline { 89 } else { 97 };
                     let mut preview = if first_line.chars().count() > max_len {
@@ -172,9 +163,7 @@ impl Editor {
 
         for (&name, &(buffer_id, pos)) in &self.search.marks {
             let buffer = self.buffers.get(&buffer_id);
-            let file_name = buffer
-                .map(|b| b.display_name())
-                .unwrap_or_else(|| "[closed]".into());
+            let file_name = buffer.map(|b| b.display_name()).unwrap_or_else(|| "[closed]".into());
             let line_preview = buffer
                 .and_then(|b| {
                     if pos.line < b.line_count() {
@@ -203,11 +192,7 @@ impl Editor {
         }
 
         // Pre-select mark nearest to current cursor position
-        let cursor_line = self
-            .windows
-            .active_window()
-            .map(|w| w.cursor.position.line)
-            .unwrap_or(0);
+        let cursor_line = self.windows.active_window().map(|w| w.cursor.position.line).unwrap_or(0);
         let cursor_buf = self.windows.active_window().map(|w| w.buffer_id);
 
         let mut popup = crate::popup::MarkListPopup::new(entries);

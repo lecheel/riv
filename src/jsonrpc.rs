@@ -89,10 +89,7 @@ impl Error {
     }
 
     pub fn method_not_found(method: &str) -> Self {
-        Self::new(
-            ErrorCode::MethodNotFound,
-            format!("Method not found: {}", method),
-        )
+        Self::new(ErrorCode::MethodNotFound, format!("Method not found: {}", method))
     }
 }
 
@@ -229,8 +226,7 @@ pub struct MethodCall {
 
 impl MethodCall {
     pub fn new<P: Serialize>(id: Id, method: impl Into<String>, params: P) -> Result<Self, Error> {
-        let params =
-            serde_json::to_value(params).map_err(|e| Error::internal_error(e.to_string()))?;
+        let params = serde_json::to_value(params).map_err(|e| Error::internal_error(e.to_string()))?;
         Ok(Self {
             jsonrpc: Some(Version::V2),
             method: method.into(),
@@ -255,8 +251,7 @@ pub struct Notification {
 
 impl Notification {
     pub fn new<P: Serialize>(method: impl Into<String>, params: P) -> Result<Self, Error> {
-        let params =
-            serde_json::to_value(params).map_err(|e| Error::internal_error(e.to_string()))?;
+        let params = serde_json::to_value(params).map_err(|e| Error::internal_error(e.to_string()))?;
         Ok(Self {
             jsonrpc: Some(Version::V2),
             method: method.into(),
@@ -344,15 +339,8 @@ impl IncomingMessage {
 
 #[derive(Debug, Clone)]
 pub enum OutgoingMessage {
-    Request {
-        id: Id,
-        method: String,
-        params: Value,
-    },
-    Notification {
-        method: String,
-        params: Value,
-    },
+    Request { id: Id, method: String, params: Value },
+    Notification { method: String, params: Value },
     Response(Output),
 }
 
@@ -365,13 +353,11 @@ impl OutgoingMessage {
                 params: Params::from_value(params.clone()),
                 id: id.clone(),
             }),
-            OutgoingMessage::Notification { method, params } => {
-                serde_json::to_value(Notification {
-                    jsonrpc: Some(Version::V2),
-                    method: method.clone(),
-                    params: Params::from_value(params.clone()),
-                })
-            }
+            OutgoingMessage::Notification { method, params } => serde_json::to_value(Notification {
+                jsonrpc: Some(Version::V2),
+                method: method.clone(),
+                params: Params::from_value(params.clone()),
+            }),
             OutgoingMessage::Response(output) => match output {
                 Output::Success(s) => serde_json::to_value(Success {
                     jsonrpc: Some(Version::V2),
@@ -452,8 +438,7 @@ mod tests {
 
     #[test]
     fn test_error_deserialization() {
-        let json =
-            r#"{"jsonrpc":"2.0","error":{"code":-32601,"message":"Method not found"},"id":1}"#;
+        let json = r#"{"jsonrpc":"2.0","error":{"code":-32601,"message":"Method not found"},"id":1}"#;
         let output: Output = serde_json::from_str(json).unwrap();
 
         assert!(matches!(output, Output::Failure(_)));

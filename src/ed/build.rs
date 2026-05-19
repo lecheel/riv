@@ -90,12 +90,7 @@ impl BuildExt for Editor {
         // Spawn background thread for cargo build
         std::thread::spawn(move || {
             let output = std::process::Command::new("cargo")
-                .args([
-                    "build",
-                    "--release",
-                    "--color=never",
-                    "--message-format=short",
-                ])
+                .args(["build", "--release", "--color=never", "--message-format=short"])
                 .current_dir(&root_clone)
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
@@ -193,20 +188,12 @@ impl BuildExt for Editor {
                 self.dirty.mark_all();
                 CommandResult::ViewChanged
             }
-            Err(e) => CommandResult::Error(format!(
-                "Failed to open {}: {}",
-                diag.file_path.display(),
-                e
-            )),
+            Err(e) => CommandResult::Error(format!("Failed to open {}: {}", diag.file_path.display(), e)),
         }
     }
 
     fn build_close(&mut self) -> CommandResult {
-        let other_id = self
-            .buffers
-            .iter()
-            .find(|b| b.kind == BufferKind::Normal)
-            .map(|b| b.id);
+        let other_id = self.buffers.iter().find(|b| b.kind == BufferKind::Normal).map(|b| b.id);
 
         let is_build = self
             .windows
@@ -288,11 +275,7 @@ impl BuildExt for Editor {
         // 2. Extract snippet using multiple strategies
         let snippet = match extract_snippet(&line_text) {
             Some(content) => content,
-            None => {
-                return CommandResult::Message(
-                    "No snippet ({ }, ` `, or | code) found on this line".into(),
-                )
-            }
+            None => return CommandResult::Message("No snippet ({ }, ` `, or | code) found on this line".into()),
         };
 
         if snippet.is_empty() {
@@ -347,11 +330,7 @@ impl BuildExt for Editor {
         goto_result
     }
     fn switch_to_build_buffer(&mut self) -> CommandResult {
-        let build_id = self
-            .buffers
-            .iter()
-            .find(|b| b.kind == BufferKind::Build)
-            .map(|b| b.id);
+        let build_id = self.buffers.iter().find(|b| b.kind == BufferKind::Build).map(|b| b.id);
 
         match build_id {
             Some(id) => {
@@ -429,11 +408,7 @@ impl Editor {
     /// Create or reuse a Build buffer with the given content.
     fn ensure_build_buffer(&mut self, content: &str) -> BufferId {
         // Reuse existing build buffer if one exists
-        let existing_id = self
-            .buffers
-            .iter()
-            .find(|b| b.kind == BufferKind::Build)
-            .map(|b| b.id);
+        let existing_id = self.buffers.iter().find(|b| b.kind == BufferKind::Build).map(|b| b.id);
 
         let id = if let Some(id) = existing_id {
             if let Some(buf) = self.buffers.get_mut(&id) {
@@ -459,10 +434,7 @@ impl Editor {
         let window = self.windows.active_window()?;
         let buffer = self.buffers.get(&window.buffer_id)?;
         let line_idx = window.cursor.position.line;
-        let line_text = buffer
-            .line_text(line_idx)?
-            .trim_end_matches('\n')
-            .to_string();
+        let line_text = buffer.line_text(line_idx)?.trim_end_matches('\n').to_string();
         Some((line_idx, line_text))
     }
 
@@ -539,11 +511,7 @@ impl Editor {
         if self.build.in_progress {
             // 1. Update spinner and elapsed time
             self.build.spinner_idx = (self.build.spinner_idx + 1) % SPINNER_CHARS.len();
-            let elapsed = self
-                .build
-                .start_time
-                .map(|t| t.elapsed().as_secs_f32())
-                .unwrap_or(0.0);
+            let elapsed = self.build.start_time.map(|t| t.elapsed().as_secs_f32()).unwrap_or(0.0);
 
             let spinner = SPINNER_CHARS[self.build.spinner_idx];
             let status_msg = format!("{} Building ({:.1}s)", spinner, elapsed);
@@ -562,7 +530,9 @@ impl Editor {
                 if let Some(buf) = self.buffers.get_mut(&id) {
                     let header = format!(
                         "  [BUILD] cargo build --release — Building... {:.1}s {}\n  {}\n\n  (compiling, please wait...)\n",
-                        elapsed, spinner, "─".repeat(40)
+                        elapsed,
+                        spinner,
+                        "─".repeat(40)
                     );
                     buf.rope = ropey::Rope::from(header);
                     buf.dirty = false; // Don't mark as needing file save
@@ -603,22 +573,14 @@ impl Editor {
             if result.success {
                 self.set_status("Build succeeded ✓".into());
             } else {
-                let errors = self
-                    .build
-                    .diagnostics
-                    .iter()
-                    .filter(|d| d.severity == BuildSeverity::Error)
-                    .count();
+                let errors = self.build.diagnostics.iter().filter(|d| d.severity == BuildSeverity::Error).count();
                 let warns = self
                     .build
                     .diagnostics
                     .iter()
                     .filter(|d| d.severity == BuildSeverity::Warning)
                     .count();
-                self.set_status(format!(
-                    "Build failed: {} error(s), {} warning(s)",
-                    errors, warns
-                ));
+                self.set_status(format!("Build failed: {} error(s), {} warning(s)", errors, warns));
             }
 
             self.dirty.mark_all();
@@ -762,19 +724,10 @@ fn parse_cargo_output(output: &str, project_root: &Path) -> Vec<BuildDiagnostic>
 
 /// Format the build output for display in the build buffer.
 fn format_build_buffer(raw_output: &str, diagnostics: &[BuildDiagnostic]) -> String {
-    let errors = diagnostics
-        .iter()
-        .filter(|d| d.severity == BuildSeverity::Error)
-        .count();
-    let warns = diagnostics
-        .iter()
-        .filter(|d| d.severity == BuildSeverity::Warning)
-        .count();
+    let errors = diagnostics.iter().filter(|d| d.severity == BuildSeverity::Error).count();
+    let warns = diagnostics.iter().filter(|d| d.severity == BuildSeverity::Warning).count();
 
-    let mut buf = format!(
-        "  [BUILD] cargo build --release — {} error(s), {} warning(s)\n",
-        errors, warns
-    );
+    let mut buf = format!("  [BUILD] cargo build --release — {} error(s), {} warning(s)\n", errors, warns);
     buf.push_str(&format!("  {}\n\n", "─".repeat(40)));
 
     // ── Quickfix list with source context ──
@@ -802,9 +755,7 @@ fn format_build_buffer(raw_output: &str, diagnostics: &[BuildDiagnostic]) -> Str
             ));
 
             // ── Source context (like grep -B5 -A3) ──
-            if let Some((start_line, context_lines)) =
-                read_source_context(&diag.file_path, diag.line_number, 5, 3)
-            {
+            if let Some((start_line, context_lines)) = read_source_context(&diag.file_path, diag.line_number, 5, 3) {
                 let last_line = start_line + context_lines.len().saturating_sub(1);
                 let line_num_width = format!("{}", last_line).len().max(3);
 
@@ -813,34 +764,21 @@ fn format_build_buffer(raw_output: &str, diagnostics: &[BuildDiagnostic]) -> Str
                     let is_error_line = line_num == diag.line_number;
 
                     if is_error_line {
-                        buf.push_str(&format!(
-                            "  > {:>width$} │ {}\n",
-                            line_num,
-                            line,
-                            width = line_num_width,
-                        ));
+                        buf.push_str(&format!("  > {:>width$} │ {}\n", line_num, line, width = line_num_width,));
                         // Show a caret at the error column
                         if diag.column > 0 {
-                            let prefix_w =
-                                format!("  > {:>width$} │ ", "", width = line_num_width,).len();
+                            let prefix_w = format!("  > {:>width$} │ ", "", width = line_num_width,).len();
                             // Calculate display width up to the column
                             let col_display: usize = line
                                 .chars()
                                 .take(diag.column.saturating_sub(1))
-                                .map(|c| {
-                                    unicode_width::UnicodeWidthStr::width(c.to_string().as_str())
-                                })
+                                .map(|c| unicode_width::UnicodeWidthStr::width(c.to_string().as_str()))
                                 .sum();
                             let caret_pad = prefix_w + col_display;
                             buf.push_str(&format!("  {:pad$}^\n", "", pad = caret_pad,));
                         }
                     } else {
-                        buf.push_str(&format!(
-                            "    {:>width$} │ {}\n",
-                            line_num,
-                            line,
-                            width = line_num_width,
-                        ));
+                        buf.push_str(&format!("    {:>width$} │ {}\n", line_num, line, width = line_num_width,));
                     }
                 }
             }
@@ -854,11 +792,7 @@ fn format_build_buffer(raw_output: &str, diagnostics: &[BuildDiagnostic]) -> Str
     }
 
     // ── Raw compiler output ──
-    buf.push_str(&format!(
-        "  {} Raw Output {}\n",
-        "─".repeat(14),
-        "─".repeat(14)
-    ));
+    buf.push_str(&format!("  {} Raw Output {}\n", "─".repeat(14), "─".repeat(14)));
     if raw_output.trim().is_empty() {
         buf.push_str("  (no output)\n");
     } else {
@@ -904,12 +838,7 @@ fn extract_snippet(line: &str) -> Option<String> {
     if let Some(pipe_pos) = line.find("| ") {
         let code = line[pipe_pos + 2..].trim();
         // Ignore error underline lines like "   |             ^^^^^^^^^^"
-        if !code.is_empty()
-            && !code.starts_with('^')
-            && !code.starts_with('~')
-            && !code.starts_with('-')
-            && !code.starts_with('|')
-        {
+        if !code.is_empty() && !code.starts_with('^') && !code.starts_with('~') && !code.starts_with('-') && !code.starts_with('|') {
             return Some(code.to_string());
         }
     }
@@ -920,12 +849,7 @@ fn extract_snippet(line: &str) -> Option<String> {
 /// Read source lines around a given line number from a file.
 /// Returns `(start_line_1based, context_lines)` where `start_line_1based`
 /// is the 1-based line number of the first returned line.
-fn read_source_context(
-    path: &Path,
-    center_line: usize,
-    before: usize,
-    after: usize,
-) -> Option<(usize, Vec<String>)> {
+fn read_source_context(path: &Path, center_line: usize, before: usize, after: usize) -> Option<(usize, Vec<String>)> {
     if center_line == 0 {
         return None;
     }
@@ -969,17 +893,12 @@ pub fn find_workspace_root(file_path: &PathBuf) -> PathBuf {
         if file_path.is_absolute() {
             file_path.clone()
         } else {
-            std::env::current_dir()
-                .unwrap_or_else(|_| PathBuf::from("."))
-                .join(file_path)
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(file_path)
         }
     });
 
     let start = if canonical.is_file() {
-        canonical
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| canonical.clone())
+        canonical.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| canonical.clone())
     } else {
         canonical
     };

@@ -18,10 +18,7 @@ impl ShortcutsExt for Editor {
         }
 
         // Capture visual selection before anything clears the anchor
-        if matches!(
-            self.mode,
-            Mode::Visual | Mode::VisualLine | Mode::VisualBlock
-        ) {
+        if matches!(self.mode, Mode::Visual | Mode::VisualLine | Mode::VisualBlock) {
             self.shortcut_visual_context = self.get_selection_text();
         } else {
             self.shortcut_visual_context = None;
@@ -72,12 +69,7 @@ impl ShortcutsExt for Editor {
 
         let popup = FloatPopup::new(" Shortcuts ", lines);
         self.popup.float = Some(popup);
-        self.popup.overlay.float = Some(crate::dirty::Rect {
-            x: 0,
-            y: 0,
-            w: 0,
-            h: 0,
-        });
+        self.popup.overlay.float = Some(crate::dirty::Rect { x: 0, y: 0, w: 0, h: 0 });
         self.shortcut_active = true;
         self.dirty.mark_all();
 

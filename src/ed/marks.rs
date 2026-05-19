@@ -85,10 +85,7 @@ impl MarksExt for Editor {
                 self.search.last_jump_mark = None;
             } else {
                 // Save CURRENT position as the new last_jump_mark (toggle)
-                let current = self
-                    .windows
-                    .active_window()
-                    .map(|w| (w.buffer_id, w.cursor.position));
+                let current = self.windows.active_window().map(|w| (w.buffer_id, w.cursor.position));
                 self.search.last_jump_mark = current;
 
                 // Switch buffer if needed

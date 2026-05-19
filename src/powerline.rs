@@ -161,9 +161,7 @@ pub fn get_effective_mode_colors(editor: &Editor) -> ModeColors {
 }
 
 /// Return mode colors as (fg, bg) crossterm Color pair.
-pub fn get_mode_colors_crossterm(
-    editor: &Editor,
-) -> (crossterm::style::Color, crossterm::style::Color) {
+pub fn get_mode_colors_crossterm(editor: &Editor) -> (crossterm::style::Color, crossterm::style::Color) {
     let mc = get_effective_mode_colors(editor);
     let to_crossterm = |c: ratatui::style::Color| -> crossterm::style::Color {
         match c {
@@ -305,11 +303,7 @@ fn get_git_status_from_dir(dir: &Path) -> GitStatus {
     let mut status = GitStatus::new();
     status.is_repo = true;
 
-    if let Ok(output) = Command::new("git")
-        .args(["status", "--porcelain=v1"])
-        .current_dir(dir)
-        .output()
-    {
+    if let Ok(output) = Command::new("git").args(["status", "--porcelain=v1"]).current_dir(dir).output() {
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             for line in stdout.lines() {

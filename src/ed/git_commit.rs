@@ -114,9 +114,7 @@ impl GitCommitExt for Editor {
 
         let git_root = match find_git_root(&start_dir) {
             Some(root) => root,
-            None => {
-                return CommandResult::Error("Not a git repository (or any parent)".to_string())
-            }
+            None => return CommandResult::Error("Not a git repository (or any parent)".to_string()),
         };
 
         // ── 2. Gather staged + unstaged diff ────────────────
@@ -126,9 +124,7 @@ impl GitCommitExt for Editor {
             .output()
         {
             Ok(o) => String::from_utf8_lossy(&o.stdout).to_string(),
-            Err(e) => {
-                return CommandResult::Error(format!("Failed to run git diff --cached: {}", e))
-            }
+            Err(e) => return CommandResult::Error(format!("Failed to run git diff --cached: {}", e)),
         };
 
         let unstaged_output = match std::process::Command::new("git")
@@ -152,10 +148,7 @@ impl GitCommitExt for Editor {
             format!("Unstaged changes:\n{}", unstaged_output)
         } else {
             // Both staged and unstaged
-            format!(
-                "Staged changes:\n{}\nUnstaged changes:\n{}",
-                staged_output, unstaged_output
-            )
+            format!("Staged changes:\n{}\nUnstaged changes:\n{}", staged_output, unstaged_output)
         };
 
         // ── 3. Gather numstat for the loading animation summary ──
@@ -208,8 +201,7 @@ impl GitCommitExt for Editor {
         // ── 6. Create / reuse GitCommit buffer ──────────────
         self.git.commit_start_time = Some(std::time::Instant::now());
 
-        let buffer_id = if let Some(existing_id) = self.buffers.find_by_kind(BufferKind::GitCommit)
-        {
+        let buffer_id = if let Some(existing_id) = self.buffers.find_by_kind(BufferKind::GitCommit) {
             if let Some(buffer) = self.buffers.get_mut(&existing_id) {
                 buffer.rope = Rope::from_str(&format!(
                     "  [COMMIT] Generating commit message… 0.0s ⠋\n  {}\n\n  (querying LLM, please wait...)\n",
@@ -248,7 +240,8 @@ impl GitCommitExt for Editor {
                 "system".to_string(),
                 "You are a git commit message generator. Generate concise, conventional-commit-style \
                  messages based on diffs. Output ONLY the commit message text — no explanations, \
-                 no markdown code fences, no preamble.".to_string(),
+                 no markdown code fences, no preamble."
+                    .to_string(),
             ),
             ("user".to_string(), prompt),
         ];
@@ -390,9 +383,7 @@ impl GitCommitExt for Editor {
                     .as_ref()
                     .and_then(|p| p.parent())
                     .map(|p| p.to_path_buf())
-                    .unwrap_or_else(|| {
-                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-                    });
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
                 (text, dir)
             }
             None => return CommandResult::Error("Commit buffer not found".to_string()),
@@ -406,9 +397,7 @@ impl GitCommitExt for Editor {
         });
 
         if !has_real_content {
-            return CommandResult::Error(
-                "Aborting commit due to empty commit message.".to_string(),
-            );
+            return CommandResult::Error("Aborting commit due to empty commit message.".to_string());
         }
 
         let git_root = match find_git_root(&start_dir) {
@@ -453,11 +442,7 @@ impl GitCommitExt for Editor {
         match child.wait_with_output() {
             Ok(output) if output.status.success() => {
                 let stdout = String::from_utf8_lossy(&output.stdout);
-                let summary = stdout
-                    .lines()
-                    .next()
-                    .unwrap_or("Committed successfully")
-                    .to_string();
+                let summary = stdout.lines().next().unwrap_or("Committed successfully").to_string();
 
                 // ── Cleanup ──
                 self.git.commit_buffer_id = None;
@@ -584,8 +569,7 @@ impl Editor {
                 if let Some(id) = self.git.commit_buffer_id {
                     if let Some(buf) = self.buffers.get_mut(&id) {
                         // Append the diff summary line beneath the header if available
-                        let summary_block = if let Some(ref summary) = self.git.commit_diff_summary
-                        {
+                        let summary_block = if let Some(ref summary) = self.git.commit_diff_summary {
                             format!("{}\n\n", summary)
                         } else {
                             String::new()
@@ -593,7 +577,10 @@ impl Editor {
 
                         let header = format!(
                             "  [COMMIT] Generating commit message… {:.1}s {}\n  {}\n\n{}  querying LLM, please wait ...\n",
-                            elapsed, spinner, "─".repeat(40), summary_block
+                            elapsed,
+                            spinner,
+                            "─".repeat(40),
+                            summary_block
                         );
                         buf.rope = ropey::Rope::from(header);
                         buf.dirty = false;

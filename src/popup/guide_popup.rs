@@ -30,10 +30,7 @@ pub fn render_guide_popup(
     let popup_height = max_visible as u16 + 4;
 
     let x = (term_width.saturating_sub(popup_width)) / 2;
-    let y = (term_height
-        .saturating_sub(status_height)
-        .saturating_sub(popup_height))
-        / 2;
+    let y = (term_height.saturating_sub(status_height).saturating_sub(popup_height)) / 2;
 
     clear_rect(stdout, x, y, popup_width, popup_height, catppuccin::MANTLE)?;
 
@@ -43,9 +40,7 @@ pub fn render_guide_popup(
         format!("({})", popup.filtered.len())
     };
     let title = format!(" Guide {} ", count_text);
-    let title_style = BoxStyle::default()
-        .with_title(title)
-        .with_bg(catppuccin::MANTLE);
+    let title_style = BoxStyle::default().with_title(title).with_bg(catppuccin::MANTLE);
     draw_top_border(stdout, x, y, popup_width, &title_style)?;
 
     let filter_y = y + 1;
@@ -55,10 +50,7 @@ pub fn render_guide_popup(
         let max_filter_len = content_width(popup_width, &filter_style).saturating_sub(prompt_w + 1);
         let filter_display = truncate_to_width(&popup.filter, max_filter_len);
 
-        let segments = [
-            Segment::new(">", catppuccin::PEACH),
-            Segment::new(filter_display, catppuccin::TEXT),
-        ];
+        let segments = [Segment::new(">", catppuccin::PEACH), Segment::new(filter_display, catppuccin::TEXT)];
         draw_row(stdout, x, filter_y, popup_width, &segments, &filter_style)?;
 
         let cursor_x = x as usize + 1 + prompt_w + str_width(filter_display);
@@ -95,11 +87,7 @@ pub fn render_guide_popup(
             let is_selected = entry_idx == popup.selected;
 
             let kind_str = format!("{:>width$} ", entry.kind, width = max_kind);
-            let short_file = entry
-                .file
-                .rsplit_once('/')
-                .map(|(_, f)| f)
-                .unwrap_or(&entry.file);
+            let short_file = entry.file.rsplit_once('/').map(|(_, f)| f).unwrap_or(&entry.file);
 
             let mut segments = Vec::new();
 
@@ -122,11 +110,7 @@ pub fn render_guide_popup(
                     if match_start > 0 {
                         segments.push(Segment::new(
                             &entry.label[..match_start],
-                            if is_selected {
-                                catppuccin::TEXT
-                            } else {
-                                catppuccin::BLUE
-                            },
+                            if is_selected { catppuccin::TEXT } else { catppuccin::BLUE },
                         ));
                     }
                     segments.push(Segment::new(
@@ -136,31 +120,19 @@ pub fn render_guide_popup(
                     if match_end < entry.label.len() {
                         segments.push(Segment::new(
                             &entry.label[match_end..],
-                            if is_selected {
-                                catppuccin::TEXT
-                            } else {
-                                catppuccin::BLUE
-                            },
+                            if is_selected { catppuccin::TEXT } else { catppuccin::BLUE },
                         ));
                     }
                 } else {
                     segments.push(Segment::new(
                         &entry.label,
-                        if is_selected {
-                            catppuccin::TEXT
-                        } else {
-                            catppuccin::BLUE
-                        },
+                        if is_selected { catppuccin::TEXT } else { catppuccin::BLUE },
                     ));
                 }
             } else {
                 segments.push(Segment::new(
                     &entry.label,
-                    if is_selected {
-                        catppuccin::TEXT
-                    } else {
-                        catppuccin::BLUE
-                    },
+                    if is_selected { catppuccin::TEXT } else { catppuccin::BLUE },
                 ));
             }
 
@@ -168,27 +140,17 @@ pub fn render_guide_popup(
             segments.push(Segment::new(&file_with_spaces, catppuccin::OVERLAY0));
 
             segments.push(Segment::new("  ", catppuccin::SURFACE1));
-            let remaining = popup_width as usize
-                - segments.iter().map(|s| str_width(s.text)).sum::<usize>()
-                - 4;
+            let remaining = popup_width as usize - segments.iter().map(|s| str_width(s.text)).sum::<usize>() - 4;
             let desc_display = truncate_to_width(&entry.desc, remaining);
             segments.push(Segment::new(
                 desc_display,
-                if is_selected {
-                    catppuccin::SUBTEXT
-                } else {
-                    catppuccin::OVERLAY0
-                },
+                if is_selected { catppuccin::SUBTEXT } else { catppuccin::OVERLAY0 },
             ));
 
             let row_style = if is_selected {
-                RowStyle::selected()
-                    .with_border(catppuccin::SURFACE2)
-                    .with_bg(catppuccin::SURFACE0)
+                RowStyle::selected().with_border(catppuccin::SURFACE2).with_bg(catppuccin::SURFACE0)
             } else {
-                RowStyle::normal()
-                    .with_border(catppuccin::SURFACE2)
-                    .with_bg(catppuccin::MANTLE)
+                RowStyle::normal().with_border(catppuccin::SURFACE2).with_bg(catppuccin::MANTLE)
             };
             draw_row(stdout, x, row_y, popup_width, &segments, &row_style)?;
         } else {
@@ -200,30 +162,15 @@ pub fn render_guide_popup(
     let bottom_y = filter_y + 1 + max_visible as u16;
     let footer = format!(
         "[Enter] jump  [Esc] close  {}/{}",
-        if popup.filtered.is_empty() {
-            0
-        } else {
-            popup.selected + 1
-        },
+        if popup.filtered.is_empty() { 0 } else { popup.selected + 1 },
         popup.filtered.len(),
     );
-    let bottom_style = BoxStyle::default()
-        .with_border(catppuccin::SURFACE2)
-        .with_footer(footer);
+    let bottom_style = BoxStyle::default().with_border(catppuccin::SURFACE2).with_footer(footer);
     draw_bottom_border(stdout, x, bottom_y, popup_width, &bottom_style)?;
 
     if let Some(entry) = popup.selected_entry() {
         if entry.hint.is_some() || !entry.desc.is_empty() {
-            render_guide_doc_popup(
-                entry,
-                stdout,
-                x,
-                y,
-                popup_width,
-                popup_height,
-                term_width,
-                term_height,
-            )?;
+            render_guide_doc_popup(entry, stdout, x, y, popup_width, popup_height, term_width, term_height)?;
         }
     }
 
@@ -309,9 +256,7 @@ fn render_guide_doc_popup(
 
     for (i, line) in doc_lines.iter().take(visible_rows).enumerate() {
         let row_y = comp_y + 1 + i as u16;
-        let row_style = RowStyle::normal()
-            .with_border(catppuccin::SURFACE2)
-            .with_bg(catppuccin::MANTLE);
+        let row_style = RowStyle::normal().with_border(catppuccin::SURFACE2).with_bg(catppuccin::MANTLE);
 
         if line.is_empty() {
             draw_empty_row(stdout, x, row_y, doc_width, &row_style)?;
@@ -335,9 +280,7 @@ fn render_guide_doc_popup(
     } else {
         String::new()
     };
-    let bottom_style = BoxStyle::default()
-        .with_border(catppuccin::SURFACE2)
-        .with_footer(footer);
+    let bottom_style = BoxStyle::default().with_border(catppuccin::SURFACE2).with_footer(footer);
     draw_bottom_border(stdout, x, bottom_y, doc_width, &bottom_style)?;
 
     Ok(())

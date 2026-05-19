@@ -1407,10 +1407,7 @@ fn render_separators(
     Ok(())
 }
 
-fn set_cursor_style(
-    editor: &Editor,
-    stdout: &mut std::io::Stdout,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn set_cursor_style(editor: &Editor, stdout: &mut std::io::Stdout) -> Result<(), Box<dyn std::error::Error>> {
     match editor.mode {
         Mode::Normal => {
             // Change from BlinkingBlock to SteadyBlock – no flash
@@ -1426,10 +1423,7 @@ fn set_cursor_style(
             let _ = execute!(stdout, crossterm::cursor::SetCursorStyle::BlinkingBar);
         }
         _ => {
-            let _ = execute!(
-                stdout,
-                crossterm::cursor::SetCursorStyle::BlinkingUnderScore
-            );
+            let _ = execute!(stdout, crossterm::cursor::SetCursorStyle::BlinkingUnderScore);
         }
     }
     Ok(())
@@ -2072,11 +2066,7 @@ fn render_single_buffer_line(
 // -----------------------------------------------------------------------------
 // Main render entry point
 // -----------------------------------------------------------------------------
-pub fn render(
-    editor: &mut Editor,
-    terminal: &mut Terminal,
-    highlighter: &mut Highlighter,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn render(editor: &mut Editor, terminal: &mut Terminal, highlighter: &mut Highlighter) -> Result<(), Box<dyn std::error::Error>> {
     let (term_width, term_height) = terminal.size().unwrap_or((80, 24));
     let stdout = terminal.stdout_mut();
 
@@ -2110,12 +2100,7 @@ pub fn render(
 
         // Always re-render the completion popup on top
         if editor.completion.active && !editor.completion.items.is_empty() {
-            crate::popup::completion_popup::render_completion_popup(
-                editor,
-                stdout,
-                term_width,
-                term_height,
-            )?;
+            crate::popup::completion_popup::render_completion_popup(editor, stdout, term_width, term_height)?;
         }
 
         // Cursor must be repositioned
@@ -2184,13 +2169,7 @@ pub fn render(
     // Register popup (bottom-up)
     if must_draw_all_popups || editor.popup.register.is_some() {
         if let Some(ref lines) = editor.popup.register {
-            crate::popup::register::render_register_popup(
-                &editor.popup.register_title,
-                lines,
-                stdout,
-                term_width,
-                term_height,
-            )?;
+            crate::popup::register::render_register_popup(&editor.popup.register_title, lines, stdout, term_width, term_height)?;
         }
     }
 
@@ -2216,27 +2195,13 @@ pub fn render(
     // Diff popup
     if must_draw_all_popups || editor.dirty.diff {
         if let Some(popup) = &editor.git.diff_popup {
-            crate::popup::diff_popup::render_diff_popup(
-                editor,
-                stdout,
-                popup,
-                term_width,
-                term_height,
-            )?;
+            crate::popup::diff_popup::render_diff_popup(editor, stdout, popup, term_width, term_height)?;
         }
     }
 
     // Completion popup (special: high-frequency, never use clear_rect)
-    if (must_draw_all_popups || editor.dirty.completion)
-        && editor.completion.active
-        && !editor.completion.items.is_empty()
-    {
-        crate::popup::completion_popup::render_completion_popup(
-            editor,
-            stdout,
-            term_width,
-            term_height,
-        )?;
+    if (must_draw_all_popups || editor.dirty.completion) && editor.completion.active && !editor.completion.items.is_empty() {
+        crate::popup::completion_popup::render_completion_popup(editor, stdout, term_width, term_height)?;
     }
 
     // Help popup
@@ -2277,25 +2242,14 @@ pub fn render(
     // Guide popup
     if must_draw_all_popups || editor.dirty.guide {
         if let Some(popup) = &editor.popup.guide {
-            crate::popup::guide_popup::render_guide_popup(
-                editor,
-                stdout,
-                popup,
-                term_width,
-                term_height,
-            )?;
+            crate::popup::guide_popup::render_guide_popup(editor, stdout, popup, term_width, term_height)?;
         }
     }
 
     // Function list popup
     if must_draw_all_popups || editor.dirty.function_list {
         if let Some(_popup) = &editor.popup.function_list {
-            crate::popup::function_list::render_function_list_popup(
-                editor,
-                stdout,
-                term_width,
-                term_height,
-            )?;
+            crate::popup::function_list::render_function_list_popup(editor, stdout, term_width, term_height)?;
         }
     }
 
@@ -2322,8 +2276,7 @@ fn restore_region(
         let wh = window.height;
 
         // Skip windows that don't overlap
-        if rect.x + rect.w <= wx || rect.x >= wx + ww || rect.y + rect.h <= wy || rect.y >= wy + wh
-        {
+        if rect.x + rect.w <= wx || rect.x >= wx + ww || rect.y + rect.h <= wy || rect.y >= wy + wh {
             continue;
         }
 
@@ -2758,10 +2711,7 @@ fn render_fmtinfo(
             }
 
             if visual_rows.len() < max_visual_rows && !current_row.is_empty() {
-                visual_rows.push(VisualRow {
-                    text: current_row,
-                    color,
-                });
+                visual_rows.push(VisualRow { text: current_row, color });
             }
         }
     }
@@ -2769,9 +2719,7 @@ fn render_fmtinfo(
     let visible_count = visual_rows.len().min(max_visual_rows);
     let total_height = visible_count as u16 + 2; // +2 for border top/bottom
 
-    let y = term_height
-        .saturating_sub(status_height)
-        .saturating_sub(total_height);
+    let y = term_height.saturating_sub(status_height).saturating_sub(total_height);
 
     clear_rect(stdout, x, y, popup_width, total_height, catppuccin::MANTLE)?;
 
@@ -2785,21 +2733,14 @@ fn render_fmtinfo(
     for (i, vrow) in visual_rows.iter().take(visible_count).enumerate() {
         let row_y = y + 1 + i as u16;
 
-        let row_style = RowStyle::normal()
-            .with_border(catppuccin::SURFACE2)
-            .with_bg(catppuccin::MANTLE);
+        let row_style = RowStyle::normal().with_border(catppuccin::SURFACE2).with_bg(catppuccin::MANTLE);
         let segments = vec![Segment::new(&vrow.text, vrow.color)];
         draw_row(stdout, x, row_y, popup_width, &segments, &row_style)?;
     }
 
     let bottom_y = y + 1 + visible_count as u16;
-    let footer = format!(
-        "{} lines ({} visible) [Esc/q] close",
-        logical_count, visible_count
-    );
-    let bottom_style = BoxStyle::default()
-        .with_border(catppuccin::SURFACE2)
-        .with_footer(footer);
+    let footer = format!("{} lines ({} visible) [Esc/q] close", logical_count, visible_count);
+    let bottom_style = BoxStyle::default().with_border(catppuccin::SURFACE2).with_footer(footer);
     draw_bottom_border(stdout, x, bottom_y, popup_width, &bottom_style)?;
 
     Ok(())

@@ -43,11 +43,7 @@ impl ReplaceExt for Editor {
             Some(w) => w.buffer_id,
             None => return CommandResult::Error("No active window".into()),
         };
-        let line_count = self
-            .buffers
-            .get(&buffer_id)
-            .map(|b| b.line_count())
-            .unwrap_or(0);
+        let line_count = self.buffers.get(&buffer_id).map(|b| b.line_count()).unwrap_or(0);
         let end_line = end_line.min(line_count.saturating_sub(1));
 
         self.ensure_undo_group();
@@ -81,17 +77,10 @@ impl ReplaceExt for Editor {
                     Some(b) => b,
                     None => return CommandResult::NoOp,
                 };
-                let line_text = buffer
-                    .line_text(line)
-                    .unwrap_or_default()
-                    .trim_end_matches('\n')
-                    .to_string();
+                let line_text = buffer.line_text(line).unwrap_or_default().trim_end_matches('\n').to_string();
                 line_text[start_byte..end_byte].to_string()
             };
-            let replaced_text = state
-                .regex
-                .replace(&matched_text, state.replacement.as_str())
-                .to_string();
+            let replaced_text = state.regex.replace(&matched_text, state.replacement.as_str()).to_string();
             let new_match_end_byte = start_byte + replaced_text.len();
 
             self.substitute_perform_one(line, start_byte, end_byte, &state);
@@ -185,17 +174,10 @@ impl ReplaceExt for Editor {
                     Some(b) => b,
                     None => return CommandResult::NoOp,
                 };
-                let line_text = buffer
-                    .line_text(line)
-                    .unwrap_or_default()
-                    .trim_end_matches('\n')
-                    .to_string();
+                let line_text = buffer.line_text(line).unwrap_or_default().trim_end_matches('\n').to_string();
                 line_text[start_byte..end_byte].to_string()
             };
-            let replaced_text = state
-                .regex
-                .replace(&matched_text, state.replacement.as_str())
-                .to_string();
+            let replaced_text = state.regex.replace(&matched_text, state.replacement.as_str()).to_string();
             let new_match_end_byte = start_byte + replaced_text.len();
 
             self.substitute_perform_one(line, start_byte, end_byte, &state);
@@ -268,10 +250,7 @@ impl ReplaceExt for Editor {
         self.dirty.mark_all();
 
         if subs_made > 0 {
-            CommandResult::Message(format!(
-                "{} substitutions — quit at current match",
-                subs_made
-            ))
+            CommandResult::Message(format!("{} substitutions — quit at current match", subs_made))
         } else {
             CommandResult::Message("Quit — no substitutions made".into())
         }
@@ -314,7 +293,8 @@ impl ReplaceExt for Editor {
 
     /// Get the substitute confirm prompt text, if active.
     fn substitute_confirm_prompt(&self) -> Option<String> {
-        self.search.substitute_confirm
+        self.search
+            .substitute_confirm
             .as_ref()
             .map(|state| format!("replace with \"{}\"? (y/n/a/q/l)", state.replacement))
     }
@@ -405,10 +385,7 @@ impl Editor {
     }
 
     /// Search for the next match starting from `state.next_line` / `next_byte_offset`.
-    fn find_substitute_match(
-        &self,
-        state: &SubstituteConfirmState,
-    ) -> Option<(usize, usize, usize, String)> {
+    fn find_substitute_match(&self, state: &SubstituteConfirmState) -> Option<(usize, usize, usize, String)> {
         let buffer = self.buffers.get(&state.buffer_id)?;
 
         let mut line = state.next_line.max(state.start_line);
@@ -417,10 +394,7 @@ impl Editor {
         while line <= state.end_line && line < buffer.line_count() {
             let line_text = buffer.line_text(line)?.trim_end_matches('\n').to_string();
 
-            let mat = state
-                .regex
-                .find_iter(&line_text)
-                .find(|m| m.start() >= byte_offset);
+            let mat = state.regex.find_iter(&line_text).find(|m| m.start() >= byte_offset);
 
             if let Some(m) = mat {
                 return Some((line, m.start(), m.end(), m.as_str().to_string()));
@@ -434,12 +408,7 @@ impl Editor {
     }
 
     /// Convert a byte offset within a line to a grapheme column.
-    fn byte_offset_to_col(
-        &self,
-        buffer_id: crate::buffer::BufferId,
-        line: usize,
-        byte_offset: usize,
-    ) -> usize {
+    fn byte_offset_to_col(&self, buffer_id: crate::buffer::BufferId, line: usize, byte_offset: usize) -> usize {
         let buffer = match self.buffers.get(&buffer_id) {
             Some(b) => b,
             None => return 0,
@@ -453,36 +422,18 @@ impl Editor {
     }
 
     /// Replace a single match on a line in‑place.
-    fn substitute_perform_one(
-        &mut self,
-        line: usize,
-        start_byte: usize,
-        end_byte: usize,
-        state: &SubstituteConfirmState,
-    ) {
+    fn substitute_perform_one(&mut self, line: usize, start_byte: usize, end_byte: usize, state: &SubstituteConfirmState) {
         let buffer = match self.buffers.get_mut(&state.buffer_id) {
             Some(b) => b,
             None => return,
         };
 
-        let line_text = buffer
-            .line_text(line)
-            .unwrap_or_default()
-            .trim_end_matches('\n')
-            .to_string();
+        let line_text = buffer.line_text(line).unwrap_or_default().trim_end_matches('\n').to_string();
 
         // Build the new line by splicing: prefix + replacement + suffix
         let matched_text = &line_text[start_byte..end_byte];
-        let replaced = state
-            .regex
-            .replace(matched_text, state.replacement.as_str())
-            .to_string();
-        let new_line_text = format!(
-            "{}{}{}",
-            &line_text[..start_byte],
-            replaced,
-            &line_text[end_byte..]
-        );
+        let replaced = state.regex.replace(matched_text, state.replacement.as_str()).to_string();
+        let new_line_text = format!("{}{}{}", &line_text[..start_byte], replaced, &line_text[end_byte..]);
 
         // Swap the entire line content
         let old_len = line_text.graphemes(true).count();
@@ -519,11 +470,7 @@ impl Editor {
             };
 
             let matches: Vec<_> = if state.global {
-                state
-                    .regex
-                    .find_iter(&line_text)
-                    .filter(|m| m.start() >= byte_offset)
-                    .collect()
+                state.regex.find_iter(&line_text).filter(|m| m.start() >= byte_offset).collect()
             } else if byte_offset == 0 {
                 match state.regex.find_iter(&line_text).next() {
                     Some(m) => vec![m],
@@ -544,22 +491,13 @@ impl Editor {
                 if byte_offset > 0 {
                     let prefix = &line_text[..byte_offset];
                     let suffix = &line_text[byte_offset..];
-                    let replaced = state
-                        .regex
-                        .replace_all(suffix, state.replacement.as_str())
-                        .to_string();
+                    let replaced = state.regex.replace_all(suffix, state.replacement.as_str()).to_string();
                     format!("{}{}", prefix, replaced)
                 } else {
-                    state
-                        .regex
-                        .replace_all(&line_text, state.replacement.as_str())
-                        .to_string()
+                    state.regex.replace_all(&line_text, state.replacement.as_str()).to_string()
                 }
             } else {
-                state
-                    .regex
-                    .replace(&line_text, state.replacement.as_str())
-                    .to_string()
+                state.regex.replace(&line_text, state.replacement.as_str()).to_string()
             };
 
             let old_len = line_text.graphemes(true).count();
@@ -581,13 +519,7 @@ impl Editor {
     }
 
     /// Update `next_line` / `next_byte_offset` after a replacement at `(line, start_byte, end_byte)`.
-    fn substitute_update_search_pos(
-        &self,
-        state: &mut SubstituteConfirmState,
-        line: usize,
-        start_byte: usize,
-        end_byte: usize,
-    ) {
+    fn substitute_update_search_pos(&self, state: &mut SubstituteConfirmState, line: usize, start_byte: usize, end_byte: usize) {
         if state.global {
             // After the replacement the byte offset shifts.
             // new_offset = end_byte + (new_line_len − old_line_len)

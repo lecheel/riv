@@ -51,11 +51,7 @@ pub fn dlog_init() {
             categories: Vec::new(),
         }
     } else {
-        let mut cats: Vec<String> = filter
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
+        let mut cats: Vec<String> = filter.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
         cats.sort();
         CategoryFilter {
             all: false,

@@ -3,9 +3,8 @@
 use crate::lsp::Location;
 use crate::popup::Scrollable;
 use crate::rounded_box::{
-    catppuccin, centered_in_edit, clamp_height, clamp_width, clear_rect, draw_bottom_border,
-    draw_empty_row, draw_row, draw_top_border, str_width, truncate_to_width, BoxStyle, RowStyle,
-    Segment,
+    catppuccin, centered_in_edit, clamp_height, clamp_width, clear_rect, draw_bottom_border, draw_empty_row, draw_row, draw_top_border,
+    str_width, truncate_to_width, BoxStyle, RowStyle, Segment,
 };
 use crate::tags::TagEntry;
 use crossterm::execute;
@@ -139,9 +138,7 @@ pub fn render_tag_list_popup(
             format!("({})", popup.entries.len())
         }
     );
-    let title_style = BoxStyle::default()
-        .with_title(title)
-        .with_bg(catppuccin::MANTLE);
+    let title_style = BoxStyle::default().with_title(title).with_bg(catppuccin::MANTLE);
     draw_top_border(stdout, x, y, popup_width, &title_style)?;
 
     // ── Content rows ──
@@ -156,13 +153,9 @@ pub fn render_tag_list_popup(
             let entry = &popup.entries[entry_idx];
             let is_selected = entry_idx == popup.selected;
             let row_style = if is_selected {
-                RowStyle::selected()
-                    .with_border(catppuccin::SURFACE2)
-                    .with_bg(catppuccin::SURFACE0)
+                RowStyle::selected().with_border(catppuccin::SURFACE2).with_bg(catppuccin::SURFACE0)
             } else {
-                RowStyle::normal()
-                    .with_border(catppuccin::SURFACE2)
-                    .with_bg(catppuccin::MANTLE)
+                RowStyle::normal().with_border(catppuccin::SURFACE2).with_bg(catppuccin::MANTLE)
             };
 
             let idx_str = format!("{:>2}", entry_idx + 1);
@@ -174,11 +167,7 @@ pub fn render_tag_list_popup(
                 file_line
             };
 
-            let file_color = if is_selected {
-                catppuccin::TEXT
-            } else {
-                catppuccin::BLUE
-            };
+            let file_color = if is_selected { catppuccin::TEXT } else { catppuccin::BLUE };
 
             let mut segments = Vec::new();
             segments.push(Segment::new(&idx_str, catppuccin::OVERLAY0));
@@ -187,11 +176,7 @@ pub fn render_tag_list_popup(
 
             let displayed_w = str_width(&file_display);
             let padding = file_name_width.saturating_sub(displayed_w);
-            let pad_str = if padding > 0 {
-                " ".repeat(padding)
-            } else {
-                String::new()
-            };
+            let pad_str = if padding > 0 { " ".repeat(padding) } else { String::new() };
             if !pad_str.is_empty() {
                 segments.push(Segment::new(&pad_str, catppuccin::SURFACE1));
             }
@@ -200,11 +185,7 @@ pub fn render_tag_list_popup(
 
             segments.push(Segment::new(
                 &entry.name,
-                if is_selected {
-                    catppuccin::TEXT
-                } else {
-                    catppuccin::MAUVE
-                },
+                if is_selected { catppuccin::TEXT } else { catppuccin::MAUVE },
             ));
 
             if !entry.preview.is_empty() {
@@ -223,16 +204,10 @@ pub fn render_tag_list_popup(
     let bottom_y = y + 1 + content_rows as u16;
     let footer = format!(
         "[Enter] jump  [Esc] close  {}/{}",
-        if popup.entries.is_empty() {
-            0
-        } else {
-            popup.selected + 1
-        },
+        if popup.entries.is_empty() { 0 } else { popup.selected + 1 },
         popup.entries.len(),
     );
-    let footer_style = BoxStyle::default()
-        .with_footer(footer)
-        .with_bg(catppuccin::MANTLE);
+    let footer_style = BoxStyle::default().with_footer(footer).with_bg(catppuccin::MANTLE);
     draw_bottom_border(stdout, x, bottom_y, popup_width, &footer_style)?;
 
     execute!(stdout, ResetColor)?;

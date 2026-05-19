@@ -176,20 +176,14 @@ impl VisualExt for Editor {
             let end = (end_line + 1).min(buffer.line_count());
             for line in start_line..end {
                 let line_text = buffer.line_text(line).unwrap_or_default();
-                let leading: String = line_text
-                    .chars()
-                    .take_while(|c| *c == ' ' || *c == '\t')
-                    .collect();
+                let leading: String = line_text.chars().take_while(|c| *c == ' ' || *c == '\t').collect();
 
                 if leading.is_empty() {
                     min_removed_cols = 0;
                     continue;
                 }
 
-                let ws_cols: usize = leading
-                    .chars()
-                    .map(|c| if c == '\t' { shiftwidth } else { 1 })
-                    .sum();
+                let ws_cols: usize = leading.chars().map(|c| if c == '\t' { shiftwidth } else { 1 }).sum();
 
                 let remove_cols = ws_cols.min(shiftwidth);
 
@@ -228,8 +222,7 @@ impl VisualExt for Editor {
             if let Some(anchor) = window.selection_anchor.as_mut() {
                 anchor.col = anchor.col.saturating_sub(min_removed_cols);
             }
-            window.cursor.position.col =
-                window.cursor.position.col.saturating_sub(min_removed_cols);
+            window.cursor.position.col = window.cursor.position.col.saturating_sub(min_removed_cols);
         }
 
         // ── End undo group AFTER all deletes ──
@@ -295,10 +288,8 @@ impl VisualExt for Editor {
 
                 if left < graphemes.len() && del_count > 0 {
                     let line_start = buffer.rope.try_line_to_char(line).unwrap_or(0);
-                    let col_start = line_start
-                        + crate::misc::grapheme_col_to_char_offset(&buffer.rope, line, left);
-                    let col_end = line_start
-                        + crate::misc::grapheme_col_to_char_offset(&buffer.rope, line, end_col);
+                    let col_start = line_start + crate::misc::grapheme_col_to_char_offset(&buffer.rope, line, left);
+                    let col_end = line_start + crate::misc::grapheme_col_to_char_offset(&buffer.rope, line, end_col);
 
                     ranges.push((col_start, col_end));
                     yanked_parts.push(graphemes[left..end_col].join(""));
@@ -405,10 +396,7 @@ impl VisualExt for Editor {
             let start_char = buffer.rope.try_line_to_char(top_line).unwrap_or(0);
             // End: beginning of line AFTER bot line (includes the newline of bot line)
             let end_char = if bot_line + 1 < line_count {
-                buffer
-                    .rope
-                    .try_line_to_char(bot_line + 1)
-                    .unwrap_or(buffer.rope.len_chars())
+                buffer.rope.try_line_to_char(bot_line + 1).unwrap_or(buffer.rope.len_chars())
             } else {
                 buffer.rope.len_chars()
             };
@@ -438,10 +426,7 @@ impl VisualExt for Editor {
 
         if let Some(w) = self.windows.active_window_mut() {
             let clamped_line = if let Some(buffer) = self.buffers.get(&buffer_id) {
-                w.cursor
-                    .position
-                    .line
-                    .min(buffer.line_count().saturating_sub(1))
+                w.cursor.position.line.min(buffer.line_count().saturating_sub(1))
             } else {
                 top
             };
@@ -499,11 +484,7 @@ impl VisualExt for Editor {
         };
         let head = window.cursor.position;
 
-        let (start, end) = if anchor <= head {
-            (anchor, head)
-        } else {
-            (head, anchor)
-        };
+        let (start, end) = if anchor <= head { (anchor, head) } else { (head, anchor) };
 
         let buffer_id = window.buffer_id;
 
@@ -517,10 +498,10 @@ impl VisualExt for Editor {
             let start_line = start.line.min(line_count.saturating_sub(1));
             let end_line = end.line.min(line_count.saturating_sub(1));
 
-            let start_char = buffer.rope.try_line_to_char(start_line).unwrap_or(0)
-                + grapheme_col_to_char_offset(&buffer.rope, start_line, start.col);
-            let end_char = buffer.rope.try_line_to_char(end_line).unwrap_or(0)
-                + grapheme_col_to_char_offset(&buffer.rope, end_line, end.col);
+            let start_char =
+                buffer.rope.try_line_to_char(start_line).unwrap_or(0) + grapheme_col_to_char_offset(&buffer.rope, start_line, start.col);
+            let end_char =
+                buffer.rope.try_line_to_char(end_line).unwrap_or(0) + grapheme_col_to_char_offset(&buffer.rope, end_line, end.col);
 
             if start_char >= end_char {
                 self.close_undo_group();
@@ -589,11 +570,7 @@ impl VisualExt for Editor {
         };
         let head = window.cursor.position;
 
-        let (start, end) = if anchor <= head {
-            (anchor, head)
-        } else {
-            (head, anchor)
-        };
+        let (start, end) = if anchor <= head { (anchor, head) } else { (head, anchor) };
 
         let buffer_id = window.buffer_id;
         let yanked = if start.line == end.line {
@@ -745,11 +722,7 @@ impl VisualExt for Editor {
                 continue;
             }
             if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
-                let line_text = buffer
-                    .line_text(line)
-                    .unwrap_or_default()
-                    .trim_end_matches('\n')
-                    .to_string();
+                let line_text = buffer.line_text(line).unwrap_or_default().trim_end_matches('\n').to_string();
                 let graphemes: Vec<_> = line_text.graphemes(true).collect();
 
                 // Vim only replays on lines that are at least as wide as the
@@ -770,19 +743,12 @@ impl VisualExt for Editor {
         if let Some(window) = self.windows.active_window_mut() {
             window.selection_anchor = None;
         }
-        self.status_message = Some(format!(
-            "Block insert \"{}\" on {} lines",
-            typed_text,
-            state.target_lines.len()
-        ));
+        self.status_message = Some(format!("Block insert \"{}\" on {} lines", typed_text, state.target_lines.len()));
     }
 
     /// Get selected text if in a visual mode, otherwise None.
     fn get_selection_text(&self) -> Option<String> {
-        if !matches!(
-            self.mode,
-            Mode::Visual | Mode::VisualLine | Mode::VisualBlock
-        ) {
+        if !matches!(self.mode, Mode::Visual | Mode::VisualLine | Mode::VisualBlock) {
             return None;
         }
 
@@ -792,11 +758,7 @@ impl VisualExt for Editor {
 
         let buffer = self.buffers.get(&window.buffer_id)?;
 
-        let (start, end) = if anchor <= head {
-            (anchor, head)
-        } else {
-            (head, anchor)
-        };
+        let (start, end) = if anchor <= head { (anchor, head) } else { (head, anchor) };
 
         // Convert (line, col) to char indices using ropey
         let start_char = buffer.rope.try_line_to_char(start.line).ok()?;

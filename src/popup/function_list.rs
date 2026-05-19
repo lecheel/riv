@@ -46,9 +46,7 @@ impl FunctionListPopup {
     }
 
     pub fn selected_entry(&self) -> Option<&FunctionEntry> {
-        self.filtered
-            .get(self.selected)
-            .and_then(|&i| self.all_entries.get(i))
+        self.filtered.get(self.selected).and_then(|&i| self.all_entries.get(i))
     }
 
     fn apply_filter(&mut self) {
@@ -169,10 +167,7 @@ pub fn render_function_list_popup(
     let popup_height = max_visible as u16 + 4;
 
     let x = (term_width.saturating_sub(popup_width)) / 2;
-    let y = (term_height
-        .saturating_sub(status_height)
-        .saturating_sub(popup_height))
-        / 2;
+    let y = (term_height.saturating_sub(status_height).saturating_sub(popup_height)) / 2;
 
     clear_rect(stdout, x, y, popup_width, popup_height, catppuccin::MANTLE)?;
 
@@ -197,10 +192,7 @@ pub fn render_function_list_popup(
         let max_filter_len = content_width(popup_width, &filter_style).saturating_sub(prompt_w + 1);
         let filter_display = truncate_to_width(&popup.filter, max_filter_len);
 
-        let segments = [
-            Segment::new(">", catppuccin::PEACH),
-            Segment::new(filter_display, catppuccin::TEXT),
-        ];
+        let segments = [Segment::new(">", catppuccin::PEACH), Segment::new(filter_display, catppuccin::TEXT)];
         draw_row(stdout, x, filter_y, popup_width, &segments, &filter_style)?;
 
         // Block cursor after the filter text
@@ -258,11 +250,7 @@ pub fn render_function_list_popup(
                     if match_start > 0 {
                         segments.push(Segment::new(
                             &entry.name[..match_start],
-                            if is_selected {
-                                catppuccin::TEXT
-                            } else {
-                                catppuccin::BLUE
-                            },
+                            if is_selected { catppuccin::TEXT } else { catppuccin::BLUE },
                         ));
                     }
                     segments.push(Segment::new(
@@ -272,31 +260,19 @@ pub fn render_function_list_popup(
                     if match_end < entry.name.len() {
                         segments.push(Segment::new(
                             &entry.name[match_end..],
-                            if is_selected {
-                                catppuccin::TEXT
-                            } else {
-                                catppuccin::BLUE
-                            },
+                            if is_selected { catppuccin::TEXT } else { catppuccin::BLUE },
                         ));
                     }
                 } else {
                     segments.push(Segment::new(
                         &entry.name,
-                        if is_selected {
-                            catppuccin::TEXT
-                        } else {
-                            catppuccin::BLUE
-                        },
+                        if is_selected { catppuccin::TEXT } else { catppuccin::BLUE },
                     ));
                 }
             } else {
                 segments.push(Segment::new(
                     &entry.name,
-                    if is_selected {
-                        catppuccin::TEXT
-                    } else {
-                        catppuccin::BLUE
-                    },
+                    if is_selected { catppuccin::TEXT } else { catppuccin::BLUE },
                 ));
             }
             // Signature snippet (dimmed)
@@ -308,13 +284,9 @@ pub fn render_function_list_popup(
             segments.push(Segment::new(&line_str, catppuccin::OVERLAY0));
 
             let row_style = if is_selected {
-                RowStyle::selected()
-                    .with_border(catppuccin::SURFACE2)
-                    .with_bg(catppuccin::SURFACE0)
+                RowStyle::selected().with_border(catppuccin::SURFACE2).with_bg(catppuccin::SURFACE0)
             } else {
-                RowStyle::normal()
-                    .with_border(catppuccin::SURFACE2)
-                    .with_bg(catppuccin::MANTLE)
+                RowStyle::normal().with_border(catppuccin::SURFACE2).with_bg(catppuccin::MANTLE)
             };
             draw_row(stdout, x, row_y, popup_width, &segments, &row_style)?;
         } else {
@@ -327,16 +299,10 @@ pub fn render_function_list_popup(
     let bottom_y = filter_y + 1 + max_visible as u16;
     let footer_text = format!(
         "[Esc] close  [Enter] jump  {}/{}",
-        if popup.filtered.is_empty() {
-            0
-        } else {
-            popup.selected + 1
-        },
+        if popup.filtered.is_empty() { 0 } else { popup.selected + 1 },
         popup.filtered.len(),
     );
-    let bottom_style = BoxStyle::default()
-        .with_border(catppuccin::SURFACE2)
-        .with_footer(footer_text);
+    let bottom_style = BoxStyle::default().with_border(catppuccin::SURFACE2).with_footer(footer_text);
     draw_bottom_border(stdout, x, bottom_y, popup_width, &bottom_style)?;
 
     execute!(stdout, ResetColor)?;

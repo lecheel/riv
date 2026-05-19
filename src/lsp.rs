@@ -252,21 +252,11 @@ impl SignatureHelpState {
             .params
             .iter()
             .enumerate()
-            .map(|(i, p)| {
-                if i == self.active_param {
-                    format!("[{}]", p)
-                } else {
-                    p.clone()
-                }
-            })
+            .map(|(i, p)| if i == self.active_param { format!("[{}]", p) } else { p.clone() })
             .collect();
         if let Some(open) = self.full_label.find('(') {
             let prefix = &self.full_label[..=open];
-            let suffix = self
-                .full_label
-                .rfind(')')
-                .map(|i| &self.full_label[i..])
-                .unwrap_or(")");
+            let suffix = self.full_label.rfind(')').map(|i| &self.full_label[i..]).unwrap_or(")");
             format!("{}{}{}", prefix, formatted_params.join(", "), suffix)
         } else {
             formatted_params.join(", ")
@@ -278,11 +268,7 @@ impl SignatureHelpState {
         if let Some(signatures) = &self.signatures {
             lines.reserve(signatures.len());
             for (idx, sig) in signatures.iter().enumerate() {
-                let prefix = if idx == self.active_signature {
-                    "→ "
-                } else {
-                    "  "
-                };
+                let prefix = if idx == self.active_signature { "→ " } else { "  " };
                 lines.push(format!("{}{}", prefix, sig.label));
             }
         } else {
@@ -568,14 +554,7 @@ pub enum LspMessage {
         line: u32,
         col: u32,
     },
-    RequestFormatting(
-        PathBuf,
-        String,
-        FormattingOptions,
-        usize,
-        Option<(usize, usize)>,
-        bool,
-    ),
+    RequestFormatting(PathBuf, String, FormattingOptions, usize, Option<(usize, usize)>, bool),
 }
 
 // ============================================================================
@@ -702,68 +681,67 @@ impl LanguageServer {
             supports_completion_resolve: false,
         };
 
-        let init_response = server.blocking_request("initialize", json!(
-            InitializeParams {
-                process_id: Some(std::process::id()),
-                root_path: Some(root_uri.trim_start_matches("file://").to_string()),
-                root_uri: Some(root_uri.to_string()),
-                initialization_options: Some(json!({
-                    "rust-analyzer": {
-                        "inlayHints": {
-                            "bindingModeHints": true,
-                            "closureReturnTypeHints": "always",
-                            "lifetimeElisionHints": "always",
-                            "parameterHints": true,
-                            "reborrowHints": true,
-                            "renderColons": true,
-                            "typeHints": true,
-                            "chainingHints": true
+        let init_response = server
+            .blocking_request(
+                "initialize",
+                json!(InitializeParams {
+                    process_id: Some(std::process::id()),
+                    root_path: Some(root_uri.trim_start_matches("file://").to_string()),
+                    root_uri: Some(root_uri.to_string()),
+                    initialization_options: Some(json!({
+                        "rust-analyzer": {
+                            "inlayHints": {
+                                "bindingModeHints": true,
+                                "closureReturnTypeHints": "always",
+                                "lifetimeElisionHints": "always",
+                                "parameterHints": true,
+                                "reborrowHints": true,
+                                "renderColons": true,
+                                "typeHints": true,
+                                "chainingHints": true
+                            }
                         }
-                    }
-                })),
-                capabilities: ClientCapabilities {
-                    text_document: TextDocumentCapabilities {
-                        synchronization: Some(TextDocumentSyncCapabilities {
-                            dynamic_registration: Some(false),
-                            will_save: Some(true),
-                            will_save_wait_until: Some(false),
-                            did_save: Some(true),
-                        }),
-                        publish_diagnostics: Some(json!({})),
-                        signature_help: Some(SignatureHelpCapability {
-                            dynamic_registration: Some(false),
-                            context_support: Some(true),
-                            signature_information: Some(SignatureInformationCapability {
-                                documentation_format: Some(vec!["plaintext".into()]),
-                                parameter_information: Some(ParameterInformationCapability {
-                                    label_offset_support: Some(true),
+                    })),
+                    capabilities: ClientCapabilities {
+                        text_document: TextDocumentCapabilities {
+                            synchronization: Some(TextDocumentSyncCapabilities {
+                                dynamic_registration: Some(false),
+                                will_save: Some(true),
+                                will_save_wait_until: Some(false),
+                                did_save: Some(true),
+                            }),
+                            publish_diagnostics: Some(json!({})),
+                            signature_help: Some(SignatureHelpCapability {
+                                dynamic_registration: Some(false),
+                                context_support: Some(true),
+                                signature_information: Some(SignatureInformationCapability {
+                                    documentation_format: Some(vec!["plaintext".into()]),
+                                    parameter_information: Some(ParameterInformationCapability {
+                                        label_offset_support: Some(true),
+                                    }),
                                 }),
                             }),
-                        }),
-                        completion: Some(CompletionCapability {
-                            completion_item: Some(json!({
-                                "snippetSupport": true,
-                                "resolveSupport": {
-                                    "properties": ["documentation", "detail", "additionalTextEdits"]
-                                },
-                                "insertReplaceSupport": false,
-                            })),
-                            context_support: Some(true),
+                            completion: Some(CompletionCapability {
+                                completion_item: Some(json!({
+                                    "snippetSupport": true,
+                                    "resolveSupport": {
+                                        "properties": ["documentation", "detail", "additionalTextEdits"]
+                                    },
+                                    "insertReplaceSupport": false,
+                                })),
+                                context_support: Some(true),
+                            }),
+                        },
+                        workspace: WorkspaceCapabilities {
+                            did_change_configuration: Some(json!({})),
+                        },
+                        general: Some(GeneralClientCapabilities {
+                            position_encodings: Some(vec!["utf-8".to_string(), "utf-16".to_string(), "utf-32".to_string(),]),
                         }),
                     },
-                    workspace: WorkspaceCapabilities {
-                        did_change_configuration: Some(json!({})),
-                    },
-                    general: Some(GeneralClientCapabilities {
-                        position_encodings: Some(vec![
-                            "utf-8".to_string(),
-                            "utf-16".to_string(),
-                            "utf-32".to_string(),
-                        ]),
-                    }),
-                },
-            }
-        )).await?;
+                }),
+            )
+            .await?;
 
         if let Some(enc) = init_response
             .get("capabilities")
@@ -789,17 +767,14 @@ impl LanguageServer {
             .get("capabilities")
             .and_then(|c| c.get("completionProvider"))
             .map(|cp| {
-                cp.get("resolveProvider")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false)
+                cp.get("resolveProvider").and_then(|v| v.as_bool()).unwrap_or(false)
                     || cp
                         .get("resolveSupport")
                         .and_then(|rs| rs.get("properties"))
                         .and_then(|p| p.as_array())
                         .map(|arr| {
-                            arr.iter().any(|x| {
-                                x.as_str() == Some("documentation") || x.as_str() == Some("detail")
-                            })
+                            arr.iter()
+                                .any(|x| x.as_str() == Some("documentation") || x.as_str() == Some("detail"))
                         })
                         .unwrap_or(false)
             })
@@ -850,10 +825,7 @@ impl LanguageServer {
         self.next_id
     }
 
-    pub async fn send_raw(
-        &mut self,
-        msg: &Value,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn send_raw(&mut self, msg: &Value) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let content = serde_json::to_string(msg)?;
         let header = format!("Content-Length: {}\r\n\r\n", content.len());
         self.stdin.write_all(header.as_bytes()).await?;
@@ -862,11 +834,7 @@ impl LanguageServer {
         Ok(())
     }
 
-    pub async fn send_request(
-        &mut self,
-        method: &str,
-        params: Value,
-    ) -> Result<i32, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn send_request(&mut self, method: &str, params: Value) -> Result<i32, Box<dyn std::error::Error + Send + Sync>> {
         let id = self.next_id();
         self.send_raw(&json!({
             "jsonrpc": "2.0",
@@ -879,18 +847,11 @@ impl LanguageServer {
     }
 
     /// OPT: Send $/cancelRequest for a pending request.
-    pub async fn cancel_request(
-        &mut self,
-        id: i32,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn cancel_request(&mut self, id: i32) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.notify("$/cancelRequest", json!({ "id": id })).await
     }
 
-    pub async fn notify(
-        &mut self,
-        method: &str,
-        params: Value,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn notify(&mut self, method: &str, params: Value) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.send_raw(&json!({
             "jsonrpc": "2.0",
             "method": method,
@@ -899,11 +860,7 @@ impl LanguageServer {
         .await
     }
 
-    async fn blocking_request(
-        &mut self,
-        method: &str,
-        params: Value,
-    ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+    async fn blocking_request(&mut self, method: &str, params: Value) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
         let id = self.next_id();
         self.send_raw(&json!({
             "jsonrpc": "2.0",
@@ -932,20 +889,13 @@ impl LanguageServer {
 
     pub async fn shutdown(&mut self) {
         let id = self.next_id();
-        let _ = self
-            .send_raw(&json!({"jsonrpc":"2.0","id":id,"method":"shutdown"}))
-            .await;
+        let _ = self.send_raw(&json!({"jsonrpc":"2.0","id":id,"method":"shutdown"})).await;
         let _ = self.notify("exit", json!({})).await;
         let _ = self.process.kill().await;
         let _ = self.process.wait().await;
     }
 
-    pub async fn did_open(
-        &mut self,
-        uri: &str,
-        language_id: &str,
-        text: &str,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn did_open(&mut self, uri: &str, language_id: &str, text: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.notify(
             "textDocument/didOpen",
             json!(DidOpenTextDocumentParams {
@@ -960,12 +910,7 @@ impl LanguageServer {
         .await
     }
 
-    pub async fn did_change(
-        &mut self,
-        uri: &str,
-        new_text: &str,
-        version: i32,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn did_change(&mut self, uri: &str, new_text: &str, version: i32) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.notify(
             "textDocument/didChange",
             json!(DidChangeTextDocumentParams {
@@ -983,17 +928,11 @@ impl LanguageServer {
         .await
     }
 
-    pub async fn did_save(
-        &mut self,
-        uri: &str,
-        text: Option<&str>,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn did_save(&mut self, uri: &str, text: Option<&str>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.notify(
             "textDocument/didSave",
             json!(DidSaveTextDocumentParams {
-                text_document: TextDocumentIdentifier {
-                    uri: uri.to_string()
-                },
+                text_document: TextDocumentIdentifier { uri: uri.to_string() },
                 text: text.map(|s| s.to_string()),
             }),
         )
@@ -1053,9 +992,7 @@ impl LspManager {
             return uri.clone();
         }
         let uri = path_to_uri(path);
-        self.uri_cache
-            .borrow_mut()
-            .insert(path.clone(), uri.clone());
+        self.uri_cache.borrow_mut().insert(path.clone(), uri.clone());
         uri
     }
 
@@ -1106,9 +1043,7 @@ impl LspManager {
         if let Some(method) = msg.get("method").and_then(|m| m.as_str()) {
             if method == "textDocument/publishDiagnostics" {
                 if let Some(params) = msg.get("params") {
-                    if let Ok(dp) =
-                        serde_json::from_value::<PublishDiagnosticsParams>(params.clone())
-                    {
+                    if let Ok(dp) = serde_json::from_value::<PublishDiagnosticsParams>(params.clone()) {
                         let _ = self.app_tx.send(AppMessage::LspDiagnostics {
                             uri: dp.uri.clone(),
                             version: dp.version,
@@ -1139,16 +1074,13 @@ impl LspManager {
                             .collect()
                     } else if let Ok(loc) = serde_json::from_value::<Location>(result.clone()) {
                         vec![loc]
-                    } else if let Ok(locs) = serde_json::from_value::<Vec<Location>>(result.clone())
-                    {
+                    } else if let Ok(locs) = serde_json::from_value::<Vec<Location>>(result.clone()) {
                         locs
                     } else {
                         Vec::new()
                     }
                 };
-                let _ = self
-                    .app_tx
-                    .send(AppMessage::LspGotoDefinitionResult { locations });
+                let _ = self.app_tx.send(AppMessage::LspGotoDefinitionResult { locations });
             }
             PendingKind::Formatting {
                 buffer_idx,
@@ -1156,17 +1088,12 @@ impl LspManager {
                 save_after,
             } => {
                 let result = if is_error {
-                    let err = msg["error"]["message"]
-                        .as_str()
-                        .unwrap_or("unknown")
-                        .to_string();
+                    let err = msg["error"]["message"].as_str().unwrap_or("unknown").to_string();
                     Err(err)
                 } else if result.is_null() {
                     Ok(None)
                 } else {
-                    serde_json::from_value::<Vec<TextEdit>>(result)
-                        .map(Some)
-                        .map_err(|e| e.to_string())
+                    serde_json::from_value::<Vec<TextEdit>>(result).map(Some).map_err(|e| e.to_string())
                 };
                 let _ = self.app_tx.send(AppMessage::LspFormatResult {
                     result,
@@ -1178,11 +1105,7 @@ impl LspManager {
             PendingKind::InlayHints { uri, version } => {
                 if !is_error {
                     if let Ok(hints) = serde_json::from_value::<Vec<InlayHint>>(result) {
-                        let _ = self.app_tx.send(AppMessage::LspInlayHints {
-                            uri,
-                            hints,
-                            version,
-                        });
+                        let _ = self.app_tx.send(AppMessage::LspInlayHints { uri, hints, version });
                     }
                 }
             }
@@ -1202,12 +1125,10 @@ impl LspManager {
                 let items = if is_error || result.is_null() {
                     None
                 } else {
-                    serde_json::from_value::<CompletionResponse>(result)
-                        .ok()
-                        .map(|r| match r {
-                            CompletionResponse::Array(a) => a,
-                            CompletionResponse::List(l) => l.items,
-                        })
+                    serde_json::from_value::<CompletionResponse>(result).ok().map(|r| match r {
+                        CompletionResponse::Array(a) => a,
+                        CompletionResponse::List(l) => l.items,
+                    })
                 };
                 let _ = self.app_tx.send(AppMessage::LspCompletion(items));
             }
@@ -1225,9 +1146,7 @@ impl LspManager {
     fn reject_pending(&self, kind: PendingKind, _reason: &str) {
         match kind {
             PendingKind::GotoDefinition => {
-                let _ = self.app_tx.send(AppMessage::LspGotoDefinitionResult {
-                    locations: Vec::new(),
-                });
+                let _ = self.app_tx.send(AppMessage::LspGotoDefinitionResult { locations: Vec::new() });
             }
             PendingKind::Formatting {
                 buffer_idx,
@@ -1253,15 +1172,11 @@ impl LspManager {
             LspMessage::GotoDefinition { path, line, col } => {
                 let uri = self.cached_path_to_uri(&path);
                 let Some(lsp) = &mut self.active_lsp else {
-                    let _ = self.app_tx.send(AppMessage::LspGotoDefinitionResult {
-                        locations: Vec::new(),
-                    });
+                    let _ = self.app_tx.send(AppMessage::LspGotoDefinitionResult { locations: Vec::new() });
                     return;
                 };
                 if !self.opened_files.contains(&uri) {
-                    let _ = self.app_tx.send(AppMessage::LspGotoDefinitionResult {
-                        locations: Vec::new(),
-                    });
+                    let _ = self.app_tx.send(AppMessage::LspGotoDefinitionResult { locations: Vec::new() });
                     return;
                 }
                 match lsp
@@ -1278,9 +1193,7 @@ impl LspManager {
                         self.pending.insert(id, PendingKind::GotoDefinition);
                     }
                     Err(_) => {
-                        let _ = self.app_tx.send(AppMessage::LspGotoDefinitionResult {
-                            locations: Vec::new(),
-                        });
+                        let _ = self.app_tx.send(AppMessage::LspGotoDefinitionResult { locations: Vec::new() });
                     }
                 }
             }
@@ -1303,9 +1216,7 @@ impl LspManager {
                         diagnostics: vec![],
                     });
                     let _ = lsp
-                        .did_change_incremental(
-                            &uri, version, start_line, start_char, end_line, end_char, &new_text,
-                        )
+                        .did_change_incremental(&uri, version, start_line, start_char, end_line, end_char, &new_text)
                         .await;
                 }
             }
@@ -1330,12 +1241,7 @@ impl LspManager {
                 if let Some(lsp) = &mut self.active_lsp {
                     self.opened_files.remove(&uri);
                     self.uri_cache.borrow_mut().remove(&path);
-                    let _ = lsp
-                        .notify(
-                            "textDocument/didClose",
-                            json!({ "textDocument": { "uri": uri } }),
-                        )
-                        .await;
+                    let _ = lsp.notify("textDocument/didClose", json!({ "textDocument": { "uri": uri } })).await;
                 }
             }
 
@@ -1359,14 +1265,7 @@ impl LspManager {
                 }
             }
 
-            LspMessage::RequestFormatting(
-                path,
-                text,
-                options,
-                buffer_idx,
-                cursor_state,
-                save_after,
-            ) => {
+            LspMessage::RequestFormatting(path, text, options, buffer_idx, cursor_state, save_after) => {
                 let uri = self.cached_path_to_uri(&path);
                 let Some(lsp) = &mut self.active_lsp else {
                     let _ = self.app_tx.send(AppMessage::LspFormatResult {
@@ -1457,8 +1356,7 @@ impl LspManager {
                     },
                 });
                 if let Ok(id) = lsp.send_request("textDocument/inlayHint", params).await {
-                    self.pending
-                        .insert(id, PendingKind::InlayHints { uri, version });
+                    self.pending.insert(id, PendingKind::InlayHints { uri, version });
                 }
             }
 
@@ -1531,10 +1429,7 @@ impl LspManager {
                 if !lsp.supports_completion_resolve || item.data.is_none() {
                     return;
                 }
-                if let Ok(id) = lsp
-                    .send_request("completionItem/resolve", json!(item))
-                    .await
-                {
+                if let Ok(id) = lsp.send_request("completionItem/resolve", json!(item)).await {
                     self.pending.insert(id, PendingKind::ResolveCompletion);
                 }
             }
@@ -1566,16 +1461,10 @@ impl LspManager {
         let root = if root.is_absolute() {
             root
         } else {
-            std::env::current_dir()
-                .unwrap_or_else(|_| PathBuf::from("."))
-                .join(&root)
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(&root)
         };
 
-        log::debug!(
-            "start_lsp_for_file: path={} root={}",
-            path.display(),
-            root.display()
-        );
+        log::debug!("start_lsp_for_file: path={} root={}", path.display(), root.display());
 
         let root_uri = format!("file://{}", root.display());
 
@@ -1593,10 +1482,9 @@ impl LspManager {
                 let _ = self.app_tx.send(AppMessage::LspReady);
             }
             Err(e) => {
-                let _ = self.app_tx.send(AppMessage::LspError(format!(
-                    "Failed to start {}: {}",
-                    command, e
-                )));
+                let _ = self
+                    .app_tx
+                    .send(AppMessage::LspError(format!("Failed to start {}: {}", command, e)));
             }
         }
     }
@@ -1617,11 +1505,7 @@ fn parse_signature_help(result: Value) -> Option<SignatureHelpState> {
     for p in params_list {
         let label_str = match &p.label {
             ParameterLabel::String(s) => s.clone(),
-            ParameterLabel::Offsets([start, end]) => sig
-                .label
-                .get(*start as usize..*end as usize)
-                .unwrap_or("")
-                .to_string(),
+            ParameterLabel::Offsets([start, end]) => sig.label.get(*start as usize..*end as usize).unwrap_or("").to_string(),
         };
         param_labels.push(label_str);
     }
@@ -1702,9 +1586,7 @@ pub fn path_to_uri(path: &PathBuf) -> String {
     let absolute_path = if path.is_absolute() {
         path.clone()
     } else {
-        std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join(path)
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(path)
     };
 
     let canonical = cached_canonicalize(&absolute_path);
@@ -1819,30 +1701,20 @@ pub fn lsp_pos_to_char_idx(doc: &Rope, pos: &Position, encoding: OffsetEncoding)
         }
         OffsetEncoding::Utf16 => {
             let line_start_utf16 = doc.char_to_utf16_cu(line_start_char);
-            doc.try_utf16_cu_to_char(line_start_utf16 + capped_offset)
-                .ok()
+            doc.try_utf16_cu_to_char(line_start_utf16 + capped_offset).ok()
         }
         OffsetEncoding::Utf32 | OffsetEncoding::Unknown => Some(line_start_char + capped_offset),
     }
 }
 
-pub fn range_to_lsp_range(
-    doc: &Rope,
-    start_char: usize,
-    end_char: usize,
-    encoding: OffsetEncoding,
-) -> Range {
+pub fn range_to_lsp_range(doc: &Rope, start_char: usize, end_char: usize, encoding: OffsetEncoding) -> Range {
     Range {
         start: pos_to_lsp_pos(doc, start_char, encoding),
         end: pos_to_lsp_pos(doc, end_char, encoding),
     }
 }
 
-pub fn lsp_range_to_char_indices(
-    doc: &Rope,
-    range: &Range,
-    encoding: OffsetEncoding,
-) -> Option<(usize, usize)> {
+pub fn lsp_range_to_char_indices(doc: &Rope, range: &Range, encoding: OffsetEncoding) -> Option<(usize, usize)> {
     let start = lsp_pos_to_char_idx(doc, &range.start, encoding)?;
     let end = lsp_pos_to_char_idx(doc, &range.end, encoding)?;
     Some((start, end))

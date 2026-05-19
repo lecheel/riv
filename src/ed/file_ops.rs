@@ -87,10 +87,7 @@ impl FileOpsExt for Editor {
         self.ensure_git_gutter();
         self.dirty.mark_all();
 
-        let file_path = self
-            .buffers
-            .get(&buffer_id)
-            .and_then(|b| b.file_path.clone());
+        let file_path = self.buffers.get(&buffer_id).and_then(|b| b.file_path.clone());
 
         if let Some(ref path) = file_path {
             self.lsp_did_open(path);
@@ -150,9 +147,7 @@ impl FileOpsExt for Editor {
             self.dirty.mark_all();
             Ok(())
         } else {
-            Err(BufferError::Io(std::io::Error::other(
-                "No active buffer to save",
-            )))
+            Err(BufferError::Io(std::io::Error::other("No active buffer to save")))
         }
     }
     fn save_as(&mut self, path: &Path) -> Result<(), BufferError> {
@@ -188,9 +183,7 @@ impl FileOpsExt for Editor {
             self.dirty.mark_all();
             Ok(())
         } else {
-            Err(BufferError::Io(std::io::Error::other(
-                "No active buffer to save",
-            )))
+            Err(BufferError::Io(std::io::Error::other("No active buffer to save")))
         }
     }
 
@@ -264,18 +257,12 @@ impl FileOpsExt for Editor {
                 Some(b) => b,
                 None => return Err("No buffer".into()),
             };
-            (
-                window.buffer_id,
-                window.cursor.position,
-                buffer.language,
-                buffer.file_path.clone(),
-            )
+            (window.buffer_id, window.cursor.position, buffer.language, buffer.file_path.clone())
         };
 
         let (cmd, args) = match language {
             Some(crate::buffer::Language::Rust) => ("rustfmt", Vec::new()),
-            Some(crate::buffer::Language::JavaScript)
-            | Some(crate::buffer::Language::TypeScript) => {
+            Some(crate::buffer::Language::JavaScript) | Some(crate::buffer::Language::TypeScript) => {
                 // Use prettier if available, with the file path for parser detection
                 let mut args = vec!["--stdin-filepath".to_string()];
                 if let Some(ref path) = file_path {
@@ -320,11 +307,7 @@ impl FileOpsExt for Editor {
                     // Only update if something changed
                     if formatted_str != text {
                         if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
-                            let cursor_pos = self
-                                .windows
-                                .active_window()
-                                .map(|w| w.cursor.position)
-                                .unwrap_or_default();
+                            let cursor_pos = self.windows.active_window().map(|w| w.cursor.position).unwrap_or_default();
                             buffer.replace_all(&formatted_str, cursor_pos);
 
                             buffer.reparse_tree();
@@ -333,11 +316,9 @@ impl FileOpsExt for Editor {
                         if let Some(window) = self.windows.active_window_mut() {
                             if let Some(buffer) = self.buffers.get(&buffer_id) {
                                 let max_line = buffer.line_count().saturating_sub(1);
-                                window.cursor.position.line =
-                                    window.cursor.position.line.min(max_line);
+                                window.cursor.position.line = window.cursor.position.line.min(max_line);
                                 let max_col = buffer.line_len(window.cursor.position.line);
-                                window.cursor.position.col =
-                                    window.cursor.position.col.min(max_col);
+                                window.cursor.position.col = window.cursor.position.col.min(max_col);
                             }
                         }
                     }
@@ -361,24 +342,11 @@ impl FileOpsExt for Editor {
         let (buffer_id, cursor_pos, language, file_path) = {
             let window = self.windows.active_window().ok_or("No active window")?;
             let buffer = self.buffers.get(&window.buffer_id).ok_or("No buffer")?;
-            (
-                window.buffer_id,
-                window.cursor.position,
-                buffer.language,
-                buffer.file_path.clone(),
-            )
+            (window.buffer_id, window.cursor.position, buffer.language, buffer.file_path.clone())
         };
 
         let (cmd, args): (&'static str, Vec<String>) = match language {
-            Some(Language::Rust) => (
-                "rustfmt",
-                vec![
-                    "--edition".into(),
-                    "2021".into(),
-                    "--emit".into(),
-                    "stdout".into(),
-                ],
-            ),
+            Some(Language::Rust) => ("rustfmt", vec!["--edition".into(), "2021".into(), "--emit".into(), "stdout".into()]),
             Some(Language::JavaScript) | Some(Language::TypeScript) => {
                 let mut a = vec!["--stdin-filepath".into()];
                 if let Some(ref p) = file_path {
@@ -392,19 +360,14 @@ impl FileOpsExt for Editor {
             _ => return Err("No formatter configured for this language".into()),
         };
 
-        let text = self
-            .buffers
-            .get(&buffer_id)
-            .ok_or("Buffer not found")?
-            .text();
+        let text = self.buffers.get(&buffer_id).ok_or("Buffer not found")?.text();
 
         let app_tx = self.app_tx.clone();
         self.lsp.formatting_pending = true;
         self.lsp.formatting_buffer_id = Some(buffer_id);
 
         self.llm.runtime.spawn(async move {
-            let result =
-                tokio::task::spawn_blocking(move || Editor::run_formatter(cmd, &args, &text)).await;
+            let result = tokio::task::spawn_blocking(move || Editor::run_formatter(cmd, &args, &text)).await;
 
             let msg = match result {
                 Ok(Ok(formatted)) => AppMessage::FormatResult {
@@ -438,11 +401,8 @@ impl FileOpsExt for Editor {
             if let Some(buffer) = self.buffers.get(&window.buffer_id) {
                 if let Some(ref path) = buffer.file_path {
                     self.search.position_map.set(path, window.cursor.position);
-                    self.mru.update_position(
-                        path,
-                        window.cursor.position.line,
-                        window.cursor.position.col,
-                    );
+                    self.mru
+                        .update_position(path, window.cursor.position.line, window.cursor.position.col);
                 }
             }
         }
@@ -491,10 +451,7 @@ impl Editor {
         let is_empty_unnamed = self
             .current_buffer()
             .map(|b| {
-                b.file_path.is_none()
-                    && !b.dirty
-                    && b.line_count() <= 1
-                    && b.line_text(0).map(|l| l.trim().is_empty()).unwrap_or(true)
+                b.file_path.is_none() && !b.dirty && b.line_count() <= 1 && b.line_text(0).map(|l| l.trim().is_empty()).unwrap_or(true)
             })
             .unwrap_or(false);
 
@@ -580,8 +537,7 @@ impl Editor {
             .map_err(|e| format!("`{}` did not exit cleanly: {}", cmd, e))?;
 
         if output.status.success() {
-            String::from_utf8(output.stdout)
-                .map_err(|_| format!("`{}` produced non-UTF-8 output", cmd))
+            String::from_utf8(output.stdout).map_err(|_| format!("`{}` produced non-UTF-8 output", cmd))
         } else {
             // Prefer stderr; fall back to a generic message with exit code
             let stderr = String::from_utf8_lossy(&output.stderr);

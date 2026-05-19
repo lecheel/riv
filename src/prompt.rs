@@ -71,11 +71,7 @@ impl MiniInputPrompt {
             }
             Key::Backspace => {
                 if self.cursor > 0 {
-                    let prev = self.buffer[..self.cursor]
-                        .char_indices()
-                        .last()
-                        .map(|(i, _)| i)
-                        .unwrap_or(0);
+                    let prev = self.buffer[..self.cursor].char_indices().last().map(|(i, _)| i).unwrap_or(0);
                     self.buffer.drain(prev..self.cursor);
                     self.cursor = prev;
                     PromptAction::Changed
@@ -98,11 +94,7 @@ impl MiniInputPrompt {
             }
             Key::Left | Key::Ctrl('b') => {
                 if self.cursor > 0 {
-                    self.cursor = self.buffer[..self.cursor]
-                        .char_indices()
-                        .last()
-                        .map(|(i, _)| i)
-                        .unwrap_or(0);
+                    self.cursor = self.buffer[..self.cursor].char_indices().last().map(|(i, _)| i).unwrap_or(0);
                     PromptAction::Changed
                 } else {
                     PromptAction::None

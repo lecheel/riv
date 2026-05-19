@@ -103,9 +103,7 @@ pub fn render_help_entries(entries: &[crate::keybind::HelpEntry], max_width: u16
 /// Helper function (outside the trait impl, at bottom of file)
 pub fn comment_chars(language: &Option<Language>) -> Option<(&'static str, &'static str)> {
     match language {
-        Some(Language::Rust) | Some(Language::JavaScript) | Some(Language::TypeScript) => {
-            Some(("// ", ""))
-        }
+        Some(Language::Rust) | Some(Language::JavaScript) | Some(Language::TypeScript) => Some(("// ", "")),
         Some(Language::Python) => Some(("# ", "")),
         Some(Language::PlainText) | None => None,
         _ => Some(("// ", "")), // fallback
@@ -118,12 +116,7 @@ pub fn get_line_indent(text: &str) -> String {
     let mut indent = String::new();
     for g in text.graphemes(true) {
         // Check both spaces and tabs, but also other Unicode whitespace?
-        if g == " "
-            || g == "\t"
-            || (g.chars().next().map(|c| c.is_whitespace()).unwrap_or(false)
-                && g != "\n"
-                && g != "\r")
-        {
+        if g == " " || g == "\t" || (g.chars().next().map(|c| c.is_whitespace()).unwrap_or(false) && g != "\n" && g != "\r") {
             indent.push_str(g);
         } else {
             break;
@@ -203,11 +196,7 @@ pub fn parse_shortcut_keys(s: &str) -> Option<Vec<crate::terminal::Key>> {
     if s.is_empty() {
         return None;
     }
-    let keys: Vec<crate::terminal::Key> = s
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .map(crate::terminal::Key::Char)
-        .collect();
+    let keys: Vec<crate::terminal::Key> = s.chars().filter(|c| !c.is_whitespace()).map(crate::terminal::Key::Char).collect();
     if keys.is_empty() {
         None
     } else {
@@ -260,11 +249,7 @@ pub fn levenshtein_distance(a: &str, b: &str) -> usize {
 
     for i in 1..=len_a {
         for j in 1..=len_b {
-            let cost = if a_chars[i - 1] == b_chars[j - 1] {
-                0
-            } else {
-                1
-            };
+            let cost = if a_chars[i - 1] == b_chars[j - 1] { 0 } else { 1 };
             dist[i][j] = (dist[i - 1][j] + 1) // deletion
                 .min(dist[i][j - 1] + 1) // insertion
                 .min(dist[i - 1][j - 1] + cost); // substitution

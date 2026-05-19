@@ -155,9 +155,7 @@ impl LlmPreset {
     /// Get the system prompt for this preset
     pub fn system_prompt(&self) -> &'static str {
         match self {
-            LlmPreset::Chat => {
-                "You are a helpful assistant. Be concise and clear in your responses."
-            }
+            LlmPreset::Chat => "You are a helpful assistant. Be concise and clear in your responses.",
             LlmPreset::CheckEnglish => {
                 "You are a grammar checker. Return ONLY the corrected text. \
                  Do not add explanations, prefixes, or quotes."
@@ -463,16 +461,14 @@ impl LlmBuffer {
     pub fn finish_streaming(&mut self) {
         let content = std::mem::take(&mut self.streaming_content);
         if !content.is_empty() {
-            self.messages
-                .push(LlmMessage::new(LlmRole::Assistant, content));
+            self.messages.push(LlmMessage::new(LlmRole::Assistant, content));
         }
         self.state = LlmState::Done;
     }
 
     pub fn set_infobar_message(&mut self, error: impl Into<String>) {
         let err = error.into();
-        self.messages
-            .push(LlmMessage::new(LlmRole::Error, err.clone()));
+        self.messages.push(LlmMessage::new(LlmRole::Error, err.clone()));
         self.state = LlmState::Error(err);
         self.streaming_content.clear();
     }
@@ -485,8 +481,7 @@ impl LlmBuffer {
     pub fn cancel(&mut self) {
         self.cancel_flag.store(true, Ordering::Relaxed);
         if !self.streaming_content.is_empty() {
-            self.messages
-                .push(LlmMessage::new(LlmRole::Assistant, "[cancelled]"));
+            self.messages.push(LlmMessage::new(LlmRole::Assistant, "[cancelled]"));
         }
         self.streaming_content.clear();
         self.state = LlmState::Idle;

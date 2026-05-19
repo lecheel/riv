@@ -56,10 +56,7 @@ pub fn tag_under_cursor(editor: &mut Editor) {
         if editor.search.tag_manager.tag_file_exists() {
             editor.set_infobar_message(format!("Tag '{}' not found", tag_name));
         } else {
-            editor.set_infobar_message(format!(
-                "Tag '{}' not found (run :tags to generate)",
-                tag_name
-            ));
+            editor.set_infobar_message(format!("Tag '{}' not found (run :tags to generate)", tag_name));
         }
         return;
     }
@@ -196,8 +193,7 @@ pub fn tag_jump(editor: &mut Editor, filepath: &PathBuf, line: usize, name: &str
 
     if !same_file || cursor.line != target_line {
         if let Some(ref cur_path) = current_path {
-            editor.search.tag_manager
-                .push_stack(cur_path.clone(), cursor.line, cursor.col);
+            editor.search.tag_manager.push_stack(cur_path.clone(), cursor.line, cursor.col);
         }
     }
 
@@ -244,14 +240,10 @@ fn find_identifier_col(editor: &Editor, line_idx: usize, name: &str) -> usize {
 
     for start in 0..=chars.len().saturating_sub(name_len) {
         let before_ok = start == 0 || !is_tag_word_char(chars[start - 1]);
-        let after_ok =
-            start + name_len >= chars.len() || !is_tag_word_char(chars[start + name_len]);
+        let after_ok = start + name_len >= chars.len() || !is_tag_word_char(chars[start + name_len]);
 
         if before_ok && after_ok {
-            let matches: bool = chars[start..start + name_len]
-                .iter()
-                .zip(name_chars.iter())
-                .all(|(a, b)| a == b);
+            let matches: bool = chars[start..start + name_len].iter().zip(name_chars.iter()).all(|(a, b)| a == b);
             if matches {
                 return start;
             }
@@ -280,20 +272,13 @@ pub fn tag_pop(editor: &mut Editor) -> CommandResult {
     match editor.search.tag_manager.pop_stack() {
         Some(entry) => {
             if let Err(e) = editor.open_file(&entry.file) {
-                return CommandResult::Error(format!(
-                    "Failed to open {}: {}",
-                    entry.file.display(),
-                    e
-                ));
+                return CommandResult::Error(format!("Failed to open {}: {}", entry.file.display(), e));
             }
             // Try to position on the identifier if we know it (otherwise col 0)
             editor.move_to_position(entry.line, entry.col);
             center_current_line(editor);
             editor.ensure_cursor_visible_all();
-            editor.set_status(format!(
-                "Jump back ({} remaining)",
-                editor.search.tag_manager.stack_size()
-            ));
+            editor.set_status(format!("Jump back ({} remaining)", editor.search.tag_manager.stack_size()));
             CommandResult::ViewChanged
         }
         None => {

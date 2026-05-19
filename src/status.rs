@@ -214,10 +214,7 @@ impl StatusBarState {
                 .and_then(|p| p.file_name())
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| "[No Name]".to_string()),
-            language: b
-                .language
-                .map(|l| l.as_str().to_string())
-                .unwrap_or_default(),
+            language: b.language.map(|l| l.as_str().to_string()).unwrap_or_default(),
             dirty: b.dirty,
         });
 

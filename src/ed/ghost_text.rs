@@ -35,11 +35,7 @@ fn get_completion_params(editor: &Editor) -> Option<CompletionParams> {
 
     let full_text = buffer.text();
     let cursor_offset = crate::codeium::cursor_to_offset(&full_text, pos.line, pos.col);
-    let language = buffer
-        .language
-        .map(|l| l.as_str())
-        .unwrap_or("plain")
-        .to_string();
+    let language = buffer.language.map(|l| l.as_str()).unwrap_or("plain").to_string();
     let absolute_path = buffer
         .file_path
         .as_ref()
@@ -84,12 +80,9 @@ impl GhostTextExt for Editor {
             }
         };
 
-        let sent = self.codeium.request(
-            params.full_text,
-            params.cursor_offset,
-            &params.language,
-            params.absolute_path,
-        );
+        let sent = self
+            .codeium
+            .request(params.full_text, params.cursor_offset, &params.language, params.absolute_path);
 
         if sent {
             self.ghost_text.mark_requested();
@@ -119,12 +112,9 @@ impl GhostTextExt for Editor {
         self.ghost_text.clear();
         self.codeium.cancel();
 
-        let sent = self.codeium.request_force(
-            params.full_text,
-            params.cursor_offset,
-            &params.language,
-            params.absolute_path,
-        );
+        let sent = self
+            .codeium
+            .request_force(params.full_text, params.cursor_offset, &params.language, params.absolute_path);
 
         if sent {
             self.ghost_text.mark_requested();
@@ -148,12 +138,7 @@ impl GhostTextExt for Editor {
                 };
                 let pos = window.cursor.position;
 
-                let ghost = GhostText::new(
-                    codeium_result.text,
-                    pos.line,
-                    pos.col,
-                    GhostTextSource::Codeium,
-                );
+                let ghost = GhostText::new(codeium_result.text, pos.line, pos.col, GhostTextSource::Codeium);
                 self.ghost_text.set(ghost);
                 self.dirty.mark_all();
             }
@@ -183,12 +168,7 @@ impl GhostTextExt for Editor {
         let pos = window.cursor.position;
 
         // Compute the already-typed trigger so we can show only the suffix.
-        let trigger = self
-            .completion
-            .context
-            .as_ref()
-            .map(|c| c.trigger.clone())
-            .unwrap_or_default();
+        let trigger = self.completion.context.as_ref().map(|c| c.trigger.clone()).unwrap_or_default();
 
         let ghost_text = if !trigger.is_empty() && insert_text.starts_with(&trigger) {
             insert_text[trigger.len()..].to_string()
@@ -200,12 +180,7 @@ impl GhostTextExt for Editor {
             return;
         }
 
-        let ghost = GhostText::new(
-            ghost_text,
-            pos.line,
-            pos.col,
-            GhostTextSource::LspInlineHint,
-        );
+        let ghost = GhostText::new(ghost_text, pos.line, pos.col, GhostTextSource::LspInlineHint);
         self.ghost_text.set(ghost);
         self.dirty.mark_all();
     }
@@ -311,11 +286,7 @@ impl GhostTextExt for Editor {
         };
 
         if let Some(line_text) = buffer.line_text(pos.line) {
-            let typed_since_trigger: String = line_text
-                .chars()
-                .skip(ghost.start_col)
-                .take(typed_count)
-                .collect();
+            let typed_since_trigger: String = line_text.chars().skip(ghost.start_col).take(typed_count).collect();
 
             let suggestion_prefix: String = ghost.text.chars().take(typed_count).collect();
 

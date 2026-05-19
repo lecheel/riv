@@ -55,8 +55,7 @@ impl LlmState {
             .build()
             .expect("Failed to create tokio runtime for LLM");
 
-        let (response_tx, response_rx) =
-            tokio::sync::mpsc::unbounded_channel::<Result<String, String>>();
+        let (response_tx, response_rx) = tokio::sync::mpsc::unbounded_channel::<Result<String, String>>();
 
         Self {
             buffer: LlmBuffer::new(),
@@ -142,10 +141,7 @@ impl Editor {
                 Key::Ctrl('w') => {
                     let word = self.word_under_cursor_in_current_buffer();
                     if !word.is_empty() {
-                        self.llm
-                            .prompt
-                            .buffer
-                            .insert_str(self.llm.prompt.cursor, &word);
+                        self.llm.prompt.buffer.insert_str(self.llm.prompt.cursor, &word);
                         self.llm.prompt.cursor += word.len();
                         self.dirty.mark_all();
                         return CommandResult::ViewChanged;
@@ -157,10 +153,7 @@ impl Editor {
                 Key::Ctrl('l') => {
                     let line = self.current_line_content();
                     if !line.is_empty() {
-                        self.llm
-                            .prompt
-                            .buffer
-                            .insert_str(self.llm.prompt.cursor, &line);
+                        self.llm.prompt.buffer.insert_str(self.llm.prompt.cursor, &line);
                         self.llm.prompt.cursor += line.len();
                         self.dirty.mark_all();
                         return CommandResult::ViewChanged;
@@ -178,10 +171,7 @@ impl Editor {
                         .unwrap_or_default();
 
                     if !path.is_empty() {
-                        self.llm
-                            .prompt
-                            .buffer
-                            .insert_str(self.llm.prompt.cursor, &path);
+                        self.llm.prompt.buffer.insert_str(self.llm.prompt.cursor, &path);
                         self.llm.prompt.cursor += path.len();
                         self.dirty.mark_all();
                         return CommandResult::ViewChanged;
@@ -192,10 +182,7 @@ impl Editor {
                 }
                 Key::Ctrl('a') => {
                     let line = self.current_line_content();
-                    self.llm
-                        .prompt
-                        .buffer
-                        .insert_str(self.llm.prompt.cursor, &line);
+                    self.llm.prompt.buffer.insert_str(self.llm.prompt.cursor, &line);
                     self.llm.prompt.cursor += line.len();
                     self.dirty.mark_all();
                     return CommandResult::ViewChanged;

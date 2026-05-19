@@ -189,11 +189,7 @@ fn extract_kind_prefix(trimmed: &str) -> String {
         }
     }
     // Fallback: first word
-    trimmed
-        .split_whitespace()
-        .next()
-        .unwrap_or("fn")
-        .to_string()
+    trimmed.split_whitespace().next().unwrap_or("fn").to_string()
 }
 
 /// Extract the function name from a declaration line (text heuristic fallback).
@@ -313,11 +309,7 @@ fn extract_function_name(trimmed: &str, node_kind: &str) -> String {
 // ── Extension trait ─────────────────────────────────────────────────
 
 pub trait TextObjectExt {
-    fn operate_on_function(
-        &mut self,
-        kind: TextObjectKind,
-        operator: TextObjectOperator,
-    ) -> CommandResult;
+    fn operate_on_function(&mut self, kind: TextObjectKind, operator: TextObjectOperator) -> CommandResult;
     fn find_function_lines(&self) -> Option<(usize, usize)>;
 
     fn find_enclosing_pair(
@@ -328,21 +320,11 @@ pub trait TextObjectExt {
         cursor: CursorPosition,
     ) -> Option<(usize, usize)>;
 
-    fn operate_on_pair(
-        &mut self,
-        open: char,
-        close: char,
-        kind: TextObjectKind,
-        operator: TextObjectOperator,
-    ) -> CommandResult;
+    fn operate_on_pair(&mut self, open: char, close: char, kind: TextObjectKind, operator: TextObjectOperator) -> CommandResult;
 }
 
 impl TextObjectExt for Editor {
-    fn operate_on_function(
-        &mut self,
-        kind: TextObjectKind,
-        operator: TextObjectOperator,
-    ) -> CommandResult {
+    fn operate_on_function(&mut self, kind: TextObjectKind, operator: TextObjectOperator) -> CommandResult {
         // ── Extract buffer_id at the top level so it's available everywhere ──
         let buffer_id = match self.windows.active_window() {
             Some(w) => w.buffer_id,
@@ -472,10 +454,7 @@ impl TextObjectExt for Editor {
         };
 
         // ── (c) Defensive reparse at the operation boundary ────────────
-        if matches!(
-            result,
-            CommandResult::ContentChanged | CommandResult::ModeChanged(_)
-        ) {
+        if matches!(result, CommandResult::ContentChanged | CommandResult::ModeChanged(_)) {
             if let Some(buf) = self.buffers.get_mut(&buffer_id) {
                 buf.reparse_tree();
             }
@@ -663,23 +642,14 @@ impl TextObjectExt for Editor {
         None
     }
 
-    fn operate_on_pair(
-        &mut self,
-        open: char,
-        close: char,
-        kind: TextObjectKind,
-        operator: TextObjectOperator,
-    ) -> CommandResult {
+    fn operate_on_pair(&mut self, open: char, close: char, kind: TextObjectKind, operator: TextObjectOperator) -> CommandResult {
         let (buffer_id, pair) = {
             let window = match self.windows.active_window() {
                 Some(w) => w,
                 None => return CommandResult::NoOp,
             };
             let cursor = window.cursor.position;
-            (
-                window.buffer_id,
-                self.find_enclosing_pair(open, close, window.buffer_id, cursor),
-            )
+            (window.buffer_id, self.find_enclosing_pair(open, close, window.buffer_id, cursor))
         };
 
         let (open_idx, close_idx) = match pair {
@@ -698,11 +668,7 @@ impl TextObjectExt for Editor {
         }
 
         // ─── Helper: get char indices (needed for rope positioning) ───
-        let get_char_idx = |byte_idx: usize, buffer: &Buffer| -> usize {
-            buffer
-                .rope
-                .byte_to_char(byte_idx.min(buffer.rope.len_bytes()))
-        };
+        let get_char_idx = |byte_idx: usize, buffer: &Buffer| -> usize { buffer.rope.byte_to_char(byte_idx.min(buffer.rope.len_bytes())) };
 
         match operator {
             TextObjectOperator::Delete => {
@@ -945,11 +911,7 @@ impl Editor {
 /// (e.g. just the body) that excludes the `{` and `}` lines.  This function
 /// detects that and expands the range so `daf`/`dif` always delete the
 /// complete function.
-fn ensure_range_includes_braces(
-    buffer: &Buffer,
-    raw_start: usize,
-    raw_end: usize,
-) -> (usize, usize) {
+fn ensure_range_includes_braces(buffer: &Buffer, raw_start: usize, raw_end: usize) -> (usize, usize) {
     let language = buffer.language.unwrap_or(Language::PlainText);
     if matches!(language, Language::Python) {
         return (raw_start, raw_end);
@@ -1012,12 +974,7 @@ fn ensure_range_includes_braces(
 // After deletion the cursor is clamped to the new buffer end and left at
 // (start_line, 0) — or the last line if start_line is now past EOF.
 
-fn delete_line_range(
-    editor: &mut Editor,
-    buffer_id: crate::buffer::BufferId,
-    start_line: usize,
-    end_line: usize,
-) {
+fn delete_line_range(editor: &mut Editor, buffer_id: crate::buffer::BufferId, start_line: usize, end_line: usize) {
     let buffer = match editor.buffers.get_mut(&buffer_id) {
         Some(b) => b,
         None => return,
@@ -1073,12 +1030,7 @@ fn delete_line_range(
 //         raw_end.  Never more — prevents cascading deletions on repeated daf.
 //
 // Inner:  lines strictly inside the braces, or after the colon (Python).
-fn compute_range(
-    buffer: &Buffer,
-    raw_start: usize,
-    raw_end: usize,
-    kind: TextObjectKind,
-) -> (usize, usize, usize) {
+fn compute_range(buffer: &Buffer, raw_start: usize, raw_end: usize, kind: TextObjectKind) -> (usize, usize, usize) {
     let (open, close) = find_brace_lines(buffer, raw_start, raw_end);
 
     match kind {
@@ -1147,11 +1099,7 @@ fn find_brace_lines(buffer: &Buffer, start: usize, end: usize) -> (Option<usize>
     (open, close)
 }
 
-fn try_find_function_at(
-    root: &tree_sitter::Node,
-    byte_offset: usize,
-    buffer: &Buffer,
-) -> Option<(usize, usize)> {
+fn try_find_function_at(root: &tree_sitter::Node, byte_offset: usize, buffer: &Buffer) -> Option<(usize, usize)> {
     let mut node = root.descendant_for_byte_range(byte_offset, byte_offset)?;
     loop {
         let kind = node.kind();
@@ -1255,10 +1203,6 @@ fn extract_node_name(buffer: &Buffer, node: &tree_sitter::Node) -> String {
     }
 
     // Text-based fallback
-    let line_text = buffer
-        .line_text(node.start_position().row)
-        .unwrap_or_default()
-        .trim()
-        .to_string();
+    let line_text = buffer.line_text(node.start_position().row).unwrap_or_default().trim().to_string();
     extract_function_name_from_text(&line_text, node.kind())
 }

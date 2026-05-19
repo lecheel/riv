@@ -156,9 +156,7 @@ impl Editor {
                 .active_shortcuts
                 .iter()
                 .enumerate()
-                .filter(|(_, (keys, _))| {
-                    keys.len() >= prefix_len && keys[..prefix_len] == new_prefix[..]
-                })
+                .filter(|(_, (keys, _))| keys.len() >= prefix_len && keys[..prefix_len] == new_prefix[..])
                 .map(|(i, _)| i)
                 .collect();
 
@@ -173,12 +171,8 @@ impl Editor {
 
             self.shortcut_pending_keys = new_prefix;
 
-            let exact_idx = matching
-                .iter()
-                .find(|&&i| self.active_shortcuts[i].0.len() == prefix_len);
-            let has_longer = matching
-                .iter()
-                .any(|&i| self.active_shortcuts[i].0.len() > prefix_len);
+            let exact_idx = matching.iter().find(|&&i| self.active_shortcuts[i].0.len() == prefix_len);
+            let has_longer = matching.iter().any(|&i| self.active_shortcuts[i].0.len() > prefix_len);
 
             if let Some(&idx) = exact_idx {
                 if !has_longer {
@@ -349,11 +343,7 @@ impl Editor {
                         }
                     }
 
-                    let buf_name = self
-                        .buffers
-                        .get(&buffer_id)
-                        .map(|b| b.display_name())
-                        .unwrap_or_else(|| "?".into());
+                    let buf_name = self.buffers.get(&buffer_id).map(|b| b.display_name()).unwrap_or_else(|| "?".into());
                     self.set_status(format!("Switched to buffer: {}", buf_name));
                     self.dirty.mark_all();
                 } else {
@@ -420,9 +410,7 @@ impl Editor {
             Key::Home => {
                 popup.selected = 0;
                 popup.scroll = 0;
-                while popup.selected < popup.entries.len()
-                    && popup.entries[popup.selected].is_header
-                {
+                while popup.selected < popup.entries.len() && popup.entries[popup.selected].is_header {
                     popup.selected += 1;
                 }
                 popup.clamp_scroll();
@@ -526,22 +514,9 @@ impl Editor {
                         let query = popup.filter.to_lowercase();
                         popup.filtered.clear();
                         for (i, entry) in popup.entries.iter().enumerate() {
-                            let file_name = entry
-                                .path
-                                .file_name()
-                                .and_then(|n| n.to_str())
-                                .unwrap_or("")
-                                .to_string();
-                            let dir_str = entry
-                                .path
-                                .parent()
-                                .and_then(|p| p.to_str())
-                                .unwrap_or("")
-                                .to_string();
-                            if query.is_empty()
-                                || file_name.to_lowercase().contains(&query)
-                                || dir_str.to_lowercase().contains(&query)
-                            {
+                            let file_name = entry.path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+                            let dir_str = entry.path.parent().and_then(|p| p.to_str()).unwrap_or("").to_string();
+                            if query.is_empty() || file_name.to_lowercase().contains(&query) || dir_str.to_lowercase().contains(&query) {
                                 popup.filtered.push(i);
                             }
                         }
@@ -652,10 +627,7 @@ impl Editor {
                     if let Err(e) = self.open_file(&file_path) {
                         self.popup.guide = None;
                         self.dirty.mark_all();
-                        return Some(CommandResult::Error(format!(
-                            "Cannot open {}: {}",
-                            entry.file, e
-                        )));
+                        return Some(CommandResult::Error(format!("Cannot open {}: {}", entry.file, e)));
                     }
 
                     if let Some(window) = self.windows.active_window() {
@@ -673,10 +645,7 @@ impl Editor {
                                 }
                                 self.set_status(format!("→ {} ({})", entry.label, entry.anchor));
                             } else {
-                                self.set_status(format!(
-                                    "Anchor not found: '{}' in {}",
-                                    entry.anchor, entry.file
-                                ));
+                                self.set_status(format!("Anchor not found: '{}' in {}", entry.anchor, entry.file));
                             }
                         }
                     }
