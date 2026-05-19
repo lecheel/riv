@@ -54,6 +54,7 @@ impl SearchExt for Editor {
     }
 
     fn execute_search(&mut self) -> CommandResult {
+        self.search_highlight_enabled = true;
         let pattern = self.search_prompt.buffer.clone();
         self.search_input_active = false;
 
@@ -136,6 +137,7 @@ impl SearchExt for Editor {
             self.search_matches = self.find_all_matches(&self.search_prompt.buffer);
             self.search_buffer_id = current_buf;
             self.search_matches_dirty = false;
+            self.dirty.windows = true;
 
             if self.search_matches.is_empty() {
                 return Error(format!("Pattern not found: {}", self.search_prompt.buffer));
@@ -436,6 +438,7 @@ impl SearchExt for Editor {
 
     /// `*` — search forward for the whole word under the cursor.
     fn search_word_forward(&mut self) -> CommandResult {
+        self.search_highlight_enabled = true;
         let word = self.word_under_cursor_in_current_buffer();
         if word.is_empty() {
             return Error("No word under cursor".to_string());
@@ -486,6 +489,7 @@ impl SearchExt for Editor {
 
     /// `#` — search backward for the whole word under the cursor.
     fn search_word_backward(&mut self) -> CommandResult {
+        self.search_highlight_enabled = true;
         let word = self.word_under_cursor_in_current_buffer();
         if word.is_empty() {
             return Error("No word under cursor".to_string());

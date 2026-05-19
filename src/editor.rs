@@ -294,6 +294,7 @@ pub struct Editor {
     /// Index of current match in search results.
     pub current_search_match: usize,
     /// Whether search matches need recomputation.
+    pub search_highlight_enabled: bool,
     pub search_matches_dirty: bool,
     /// Buffer ID that the current search belongs to.
     pub search_buffer_id: Option<crate::buffer::BufferId>,
@@ -746,6 +747,7 @@ impl Editor {
             search_history: history_data.search.clone(),
             search_history_idx: search_history_len,
             substitute_confirm: None,
+            search_highlight_enabled: true,
             replace_count: 1,
             jump: JumpState::default(),
             guide_popup: None,

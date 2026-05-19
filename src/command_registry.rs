@@ -526,8 +526,20 @@ fn reg_handler(e: &mut Editor, _args: &str) -> CommandResult {
     CommandResult::ViewChanged
 }
 
-// ── Tag (ctags) handlers ──────────────────────────────────────────
+fn nohlsearch_handler(e: &mut Editor, _args: &str) -> CommandResult {
+    e.search_highlight_enabled = false;
+    e.dirty.windows = true;
+    CommandResult::Message("Search highlight disabled".into())
+}
 
+fn hlsearch_handler(e: &mut Editor, _args: &str) -> CommandResult {
+    e.search_highlight_enabled = true;
+    e.dirty.windows = true;
+    CommandResult::Message("Search highlight enabled".into())
+}
+
+//-- :fn_handle_xxx (anchor dont remove) --//
+// ── Tag (ctags) handlers ──────────────────────────────────────────
 fn tags_generate_handler(e: &mut Editor, _args: &str) -> CommandResult {
     let file_path = e.current_buffer().and_then(|b| b.file_path.clone());
     if let Some(ref path) = file_path {
@@ -1364,6 +1376,18 @@ pub fn build_command_registry() -> CommandRegistry {
     reg.alias("copen", "clist");
     reg.alias("Clist", "clist");
     reg.alias("Copen", "clist");
+
+    // Search highlight toggle
+    reg.register_handler(
+        "nohlsearch",
+        nohlsearch_handler,
+        "Disable search highlight until next search",
+    );
+    reg.alias("noh", "nohlsearch");
+    reg.alias("nohl", "nohlsearch");
+
+    reg.register_handler("hlsearch", hlsearch_handler, "Re-enable search highlight");
+    reg.alias("hls", "hlsearch");
 
     // In build_command_registry()
     reg.register_handler(

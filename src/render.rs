@@ -391,6 +391,7 @@ fn render_window(
             // Calculate which slice of the line to show
             let mut wrap_start_grapheme = 0usize;
             let display = if editor.config.word_wrap {
+                // ── unchanged ──
                 let mut rows_so_far = 0;
                 let mut row_col = 0usize;
                 let mut start_grapheme = 0usize;
@@ -441,6 +442,9 @@ fn render_window(
                 wrap_start_grapheme = start_grapheme;
                 graphemes[start_grapheme..end_grapheme.min(graphemes.len())].join("")
             } else {
+                // ── FIX: set wrap_start_grapheme for non-wrap mode ──
+                wrap_start_grapheme = scroll_col;
+
                 let visible: String = if scroll_col < graphemes.len() {
                     graphemes[scroll_col..].join("")
                 } else {
@@ -634,6 +638,216 @@ fn render_window(
                                     )?;
                                 }
                             }
+                        }
+                    }
+                }
+            }
+
+            // ── Visual selection overlay ─────────────────────────────
+            if let Some((sel_top, sel_bot, sel_left, sel_right)) = selection_rect {
+                // Determine if this line is in the selection.
+                // In Command mode we always render line-wise (VisualLine style)
+                // since :'<,'> operates on full lines.
+                let in_sel_line = match editor.mode {
+                    Mode::VisualLine => line_idx >= sel_top && line_idx <= sel_bot,
+                    Mode::VisualBlock => line_idx >= sel_top && line_idx <= sel_bot,
+                    Mode::Visual => {
+                        if sel_top != sel_bot {
+                            line_idx >= sel_top && line_idx <= sel_bot
+                        } else {
+                            line_idx == sel_top
+                        }
+                    }
+                    Mode::Command => line_idx >= sel_top && line_idx <= sel_bot,
+                    _ => false,
+                };
+                if in_sel_line {
+                    let (vis_left, vis_right) = match editor.mode {
+                        Mode::VisualLine => (0, graphemes.len()),
+                        Mode::VisualBlock => (sel_left, sel_right + 1),
+                        Mode::Visual => {
+                            if sel_top == sel_bot {
+                                (sel_left, sel_right + 1)
+                            } else if line_idx == sel_top {
+                                (sel_left, graphemes.len())
+                            } else if line_idx == sel_bot {
+                                (0, sel_right + 1)
+                            } else {
+                                (0, graphemes.len())
+                            }
+                        }
+                        Mode::Command => (0, graphemes.len()),
+                        _ => continue,
+                    };
+                    let vis_left = vis_left.min(graphemes.len());
+                    let vis_right = vis_right.min(graphemes.len());
+                    if vis_left < vis_right {
+                        let clip_left = vis_left.max(wrap_start_grapheme);
+                        let wrap_end_grapheme =
+                            wrap_start_grapheme + display.graphemes(true).count();
+                        let clip_right = vis_right.min(wrap_end_grapheme);
+
+                        if clip_left < clip_right {
+                            let sel_graphemes: Vec<_> =
+                                graphemes[clip_left..clip_right].iter().collect();
+                            let sel_text: String =
+                                sel_graphemes.iter().map(|g| g.to_string()).collect();
+                            let sel_display_w = UnicodeWidthStr::width(sel_text.as_str());
+                            let content_start_x =
+                                x_offset + gutter_width + mark_gutter_width + git_gutter_width;
+
+                            let mut sel_start_screen_col = 0usize;
+                            for gi in 0..clip_left {
+                                sel_start_screen_col += UnicodeWidthStr::width(graphemes[gi]);
+                            }
+                            if !editor.config.word_wrap {
+                                sel_start_screen_col =
+                                    sel_start_screen_col.saturating_sub(line_scroll_offset_w);
+                            }
+                            let sel_start_x = content_start_x as usize + sel_start_screen_col;
+                            if sel_start_x < content_start_x as usize + content_width
+                                && sel_display_w > 0
+                                && sel_start_x >= content_start_x as usize
+                            {
+                                let max_sel_w =
+                                    content_start_x as usize + content_width - sel_start_x;
+                                let actual_sel_text = if sel_display_w > max_sel_w {
+                                    let mut truncated = String::new();
+                                    let mut w = 0usize;
+                                    for g in sel_graphemes.iter() {
+                                        let gw = g.width();
+                                        if w + gw > max_sel_w {
+                                            break;
+                                        }
+                                        truncated.push_str(g);
+                                        w += gw;
+                                    }
+                                    truncated
+                                } else {
+                                    sel_text
+                                };
+
+                                if !actual_sel_text.is_empty() {
+                                    execute!(
+                                        stdout,
+                                        MoveTo(sel_start_x as u16, y),
+                                        SetBackgroundColor(sel_bg),
+                                        SetForegroundColor(sel_fg),
+                                        Print(&actual_sel_text),
+                                        ResetColor
+                                    )?;
+                                }
+                            }
+                        }
+                    }
+                }
+            } // ← selection rect block ENDS here
+
+            // ── Search highlight overlay ─────────────────────────
+            // NOTE: This MUST be outside the selection_rect block above,
+            // otherwise highlights only appear during visual selection.
+            if editor.search_highlight_enabled
+                && !editor.search_matches.is_empty()
+                && !editor.search_matches_dirty
+                && editor.search_buffer_id == Some(buffer_id)
+            {
+                let pattern_len = editor.search_prompt.buffer.chars().count();
+                if pattern_len > 0 {
+                    for (m_idx, m_pos) in editor.search_matches.iter().enumerate() {
+                        if m_pos.line != line_idx {
+                            continue;
+                        }
+
+                        let vis_left = m_pos.col;
+                        let vis_right = (m_pos.col + pattern_len).min(graphemes.len());
+                        if vis_left >= vis_right {
+                            continue;
+                        }
+
+                        let clip_left = vis_left.max(wrap_start_grapheme);
+                        let wrap_end_grapheme =
+                            wrap_start_grapheme + display.graphemes(true).count();
+                        let clip_right = vis_right.min(wrap_end_grapheme);
+                        if clip_left >= clip_right {
+                            continue;
+                        }
+
+                        let hl_text: String = graphemes[clip_left..clip_right].join("");
+                        let hl_display_w = UnicodeWidthStr::width(hl_text.as_str());
+                        let content_start_x =
+                            x_offset + gutter_width + mark_gutter_width + git_gutter_width;
+
+                        let mut hl_start_screen_col = 0usize;
+                        for gi in 0..clip_left {
+                            hl_start_screen_col += UnicodeWidthStr::width(graphemes[gi]);
+                        }
+                        if !editor.config.word_wrap {
+                            hl_start_screen_col =
+                                hl_start_screen_col.saturating_sub(line_scroll_offset_w);
+                        }
+
+                        let hl_start_x = content_start_x as usize + hl_start_screen_col;
+
+                        if hl_start_x >= content_start_x as usize + content_width
+                            || hl_display_w == 0
+                            || hl_start_x < content_start_x as usize
+                        {
+                            continue;
+                        }
+
+                        let max_hl_w = content_start_x as usize + content_width - hl_start_x;
+                        let actual_hl_text = if hl_display_w > max_hl_w {
+                            let mut truncated = String::new();
+                            let mut w = 0usize;
+                            for g in graphemes[clip_left..clip_right].iter() {
+                                let gw = UnicodeWidthStr::width(*g);
+                                if w + gw > max_hl_w {
+                                    break;
+                                }
+                                truncated.push_str(g);
+                                w += gw;
+                            }
+                            truncated
+                        } else {
+                            hl_text
+                        };
+
+                        if !actual_hl_text.is_empty() {
+                            let (hl_bg, hl_fg) = if m_idx == editor.current_search_match {
+                                (
+                                    Color::Rgb {
+                                        r: 249,
+                                        g: 226,
+                                        b: 175,
+                                    }, // Catppuccin Yellow
+                                    Color::Rgb {
+                                        r: 30,
+                                        g: 30,
+                                        b: 46,
+                                    }, // Catppuccin Mantle
+                                )
+                            } else {
+                                (
+                                    Color::Rgb {
+                                        r: 55,
+                                        g: 50,
+                                        b: 35,
+                                    }, // Dark warm
+                                    Color::Rgb {
+                                        r: 249,
+                                        g: 226,
+                                        b: 175,
+                                    }, // Catppuccin Yellow
+                                )
+                            };
+                            execute!(
+                                stdout,
+                                MoveTo(hl_start_x as u16, y),
+                                SetBackgroundColor(hl_bg),
+                                SetForegroundColor(hl_fg),
+                                Print(&actual_hl_text),
+                                ResetColor
+                            )?;
                         }
                     }
                 }
@@ -1598,8 +1812,13 @@ fn render_single_buffer_line(
         }
 
         // Calculate display text (same logic as render_window)
+
+        // In render_window, inside the `for wrap_row` loop,
+        // replace the non-word-wrap branch of the display computation:
+
         let mut wrap_start_grapheme = 0usize;
         let display = if editor.config.word_wrap {
+            // ── unchanged ──
             let mut rows_so_far = 0;
             let mut row_col = 0usize;
             let mut start_grapheme = 0usize;
@@ -1650,6 +1869,9 @@ fn render_single_buffer_line(
             wrap_start_grapheme = start_grapheme;
             graphemes[start_grapheme..end_grapheme.min(graphemes.len())].join("")
         } else {
+            // ── FIX: set wrap_start_grapheme for non-wrap mode ──
+            wrap_start_grapheme = scroll_col;
+
             let visible: String = if scroll_col < graphemes.len() {
                 graphemes[scroll_col..].join("")
             } else {
@@ -1723,7 +1945,126 @@ fn render_single_buffer_line(
         if is_cursor_line {
             execute!(stdout, ResetColor)?;
         }
-    }
+
+        // Clear rest of line
+        let display_w = UnicodeWidthStr::width(display.as_str());
+        let remaining = content_width.saturating_sub(display_w);
+        if is_cursor_line {
+            execute!(stdout, SetBackgroundColor(Color::DarkGrey))?;
+        }
+        if remaining > 0 {
+            execute!(stdout, Print(&" ".repeat(remaining)))?;
+        }
+        if is_cursor_line {
+            execute!(stdout, ResetColor)?;
+        }
+
+        // ── Search highlight overlay ─────────────────────────
+        if !editor.search_matches.is_empty()
+            && !editor.search_matches_dirty
+            && editor.search_buffer_id == Some(buffer_id)
+        {
+            let pattern_len = editor.search_prompt.buffer.chars().count();
+            if pattern_len > 0 {
+                for (m_idx, m_pos) in editor.search_matches.iter().enumerate() {
+                    if m_pos.line != abs_line {
+                        continue;
+                    }
+
+                    let vis_left = m_pos.col;
+                    let vis_right = (m_pos.col + pattern_len).min(graphemes.len());
+                    if vis_left >= vis_right {
+                        continue;
+                    }
+
+                    let clip_left = vis_left.max(wrap_start_grapheme);
+                    let wrap_end_grapheme = wrap_start_grapheme + display.graphemes(true).count();
+                    let clip_right = vis_right.min(wrap_end_grapheme);
+                    if clip_left >= clip_right {
+                        continue;
+                    }
+
+                    let hl_text: String = graphemes[clip_left..clip_right].join("");
+                    let hl_display_w = UnicodeWidthStr::width(hl_text.as_str());
+                    let content_start_x =
+                        window.x_offset + gutter_width + mark_gutter_width + git_gutter_width;
+
+                    let mut hl_start_screen_col = 0usize;
+                    for gi in 0..clip_left {
+                        hl_start_screen_col += UnicodeWidthStr::width(graphemes[gi]);
+                    }
+                    if !editor.config.word_wrap {
+                        hl_start_screen_col =
+                            hl_start_screen_col.saturating_sub(line_scroll_offset_w);
+                    }
+
+                    let hl_start_x = content_start_x as usize + hl_start_screen_col;
+
+                    if hl_start_x >= content_start_x as usize + content_width
+                        || hl_display_w == 0
+                        || hl_start_x < content_start_x as usize
+                    {
+                        continue;
+                    }
+
+                    let max_hl_w = content_start_x as usize + content_width - hl_start_x;
+                    let actual_hl_text = if hl_display_w > max_hl_w {
+                        let mut truncated = String::new();
+                        let mut w = 0usize;
+                        for g in graphemes[clip_left..clip_right].iter() {
+                            let gw = UnicodeWidthStr::width(*g);
+                            if w + gw > max_hl_w {
+                                break;
+                            }
+                            truncated.push_str(g);
+                            w += gw;
+                        }
+                        truncated
+                    } else {
+                        hl_text
+                    };
+
+                    if !actual_hl_text.is_empty() {
+                        let (hl_bg, hl_fg) = if m_idx == editor.current_search_match {
+                            (
+                                Color::Rgb {
+                                    r: 249,
+                                    g: 226,
+                                    b: 175,
+                                },
+                                Color::Rgb {
+                                    r: 30,
+                                    g: 30,
+                                    b: 46,
+                                },
+                            )
+                        } else {
+                            (
+                                Color::Rgb {
+                                    r: 55,
+                                    g: 50,
+                                    b: 35,
+                                },
+                                Color::Rgb {
+                                    r: 249,
+                                    g: 226,
+                                    b: 175,
+                                },
+                            )
+                        };
+                        execute!(
+                            stdout,
+                            MoveTo(hl_start_x as u16, y),
+                            SetBackgroundColor(hl_bg),
+                            SetForegroundColor(hl_fg),
+                            Print(&actual_hl_text),
+                            ResetColor
+                        )?;
+                    }
+                }
+            }
+        }
+    } // end wrap_row loop
 
     Ok(())
 }
