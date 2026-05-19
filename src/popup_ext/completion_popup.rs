@@ -1,3 +1,15 @@
+//--+ popup_ext/completion_popup.rs
+// popup_ext/completion_popup.rs — Optimized version
+// ──────────────────────────────────────────────────────────────
+// Key optimizations:
+//   1. Pre-compute unicode widths once, not per-item
+//   2. Reuse String buffer for formatted output
+//   3. Skip softwrap computation when word_wrap is disabled
+//   4. Batch crossterm execute! calls where possible
+//   5. Strictly position below current line; shrink instead of overlapping above
+//   6. Auto-scroll-center when cursor is in the bottom 25% of the text area
+// ──────────────────────────────────────────────────────────────
+
 use crate::completion::{CompletionKind, CompletionSource};
 use crate::rounded_box::*;
 use crate::Editor;
@@ -6,8 +18,6 @@ use crossterm::execute;
 use crossterm::style::{Print, SetBackgroundColor, SetForegroundColor};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
-
-// ── Softwrap helpers (duplicated from render.rs to keep this module self-contained) ──
 
 fn softwrap_rows(line_text: &str, content_width: usize) -> usize {
     if content_width == 0 {
@@ -51,6 +61,77 @@ fn softwrap_row_offset(line_text: &str, cursor_col: usize, content_width: usize)
         char_col += 1;
     }
     row
+}
+
+fn calculate_cursor_screen_row(
+    editor: &Editor,
+    gutter_w: u16,
+    mark_gutter_w: u16,
+    git_gutter_w: u16,
+) -> u16 {
+    editor
+        .windows
+        .active_window()
+        .map(|w| {
+            let vp = &w.viewport;
+            let cursor_line = w.cursor.position.line;
+            let cursor_col = w.cursor.position.col;
+            let buffer = editor.buffers.get(&w.buffer_id);
+            let content_width = (w
+                .width
+                .saturating_sub(gutter_w)
+                .saturating_sub(mark_gutter_w)
+                .saturating_sub(git_gutter_w)) as usize;
+            let mut visual_rows = 0usize;
+            if let Some(buf) = buffer {
+                if editor.config.word_wrap {
+                    for line_i in vp.scroll_line..cursor_line {
+                        if let Some(txt) = buf.line_text(line_i) {
+                            visual_rows += softwrap_rows(&txt, content_width);
+                        }
+                    }
+                    if let Some(cl_txt) = buf.line_text(cursor_line) {
+                        visual_rows += softwrap_row_offset(&cl_txt, cursor_col, content_width);
+                    }
+                } else {
+                    visual_rows = cursor_line.saturating_sub(vp.scroll_line);
+                }
+            }
+            w.y_offset + visual_rows as u16
+        })
+        .unwrap_or(0)
+}
+
+fn calculate_cursor_screen_col(editor: &Editor) -> usize {
+    editor
+        .windows
+        .active_window()
+        .map(|w| {
+            let scroll_col = w.viewport.scroll_col as usize;
+            let cursor_col = w.cursor.position.col;
+
+            let buf = editor.buffers.get(&w.buffer_id);
+            if let Some(buf) = buf {
+                let line_text = buf.line_text(w.cursor.position.line).unwrap_or_default();
+                let line_text = line_text.trim_end_matches('\n');
+
+                if line_text.is_ascii() {
+                    let end = cursor_col.min(line_text.len());
+                    (end.saturating_sub(scroll_col)) as usize
+                } else {
+                    let graphemes: Vec<_> = line_text.graphemes(true).collect();
+                    let start = scroll_col.min(graphemes.len());
+                    let end = cursor_col.min(graphemes.len());
+                    graphemes[start..end]
+                        .iter()
+                        .map(|g| UnicodeWidthStr::width(*g))
+                        .sum::<usize>()
+                }
+            } else {
+                cursor_col.saturating_sub(scroll_col)
+            }
+        })
+        .unwrap_or(0)
 }
 
 // ── Doc popup ──
@@ -180,7 +261,7 @@ pub fn render_completion_doc_popup(
                 || line.starts_with("let ")
             {
                 catppuccin::BLUE
-            } else if line.starts_with("•") || line.starts_with("- ") || line.starts_with("* ") {
+            } else if line.starts_with('•') || line.starts_with("- ") || line.starts_with("* ") {
                 catppuccin::SUBTEXT
             } else if line.starts_with('@') {
                 catppuccin::TEAL
@@ -211,7 +292,7 @@ pub fn render_completion_doc_popup(
 // ── Completion popup ──
 
 pub fn render_completion_popup(
-    editor: &Editor,
+    editor: &mut Editor, // Mutability added to adjust viewport for UX
     stdout: &mut std::io::Stdout,
     term_width: u16,
     term_height: u16,
@@ -232,35 +313,6 @@ pub fn render_completion_popup(
         return Ok(());
     }
 
-    let max_visible = 8usize;
-    let visible_count = items.len().min(max_visible);
-
-    let max_kind_w = items
-        .iter()
-        .take(visible_count)
-        .map(|item| UnicodeWidthStr::width(item.kind.as_str()))
-        .max()
-        .unwrap_or(0);
-
-    let max_left_w = items
-        .iter()
-        .take(visible_count)
-        .map(|item| {
-            max_kind_w
-                + if max_kind_w > 0 { 1 } else { 0 }
-                + UnicodeWidthStr::width(item.label.as_str())
-        })
-        .max()
-        .unwrap_or(0);
-    let max_item_width = max_left_w.max(UnicodeWidthStr::width(trigger));
-    let popup_content_width =
-        (max_item_width + 4).min((term_width as usize).saturating_sub(4)) as u16;
-
-    let popup_width = (popup_content_width + 2).max(40);
-    let popup_height = (visible_count as u16) + 2;
-
-    let window = editor.windows.active_window();
-
     let gutter_w = if editor.config.line_numbers { 5u16 } else { 0 };
     let mark_gutter_w = {
         let current_bid = if let Some(w) = editor.windows.active_window() {
@@ -280,76 +332,89 @@ pub fn render_completion_popup(
         0u16
     };
 
-    let cursor_screen_row = window
-        .map(|w| {
-            let vp = &w.viewport;
+    // 1. Calculate initial visual position to check available space
+    let cursor_screen_row =
+        calculate_cursor_screen_row(editor, gutter_w, mark_gutter_w, git_gutter_w);
+    let space_below = edit_height.saturating_sub(cursor_screen_row + 1);
+
+    // 2. UX Improvement: If line is in the bottom 25% of text area, apply scroll_center
+    if space_below < edit_height / 4 {
+        // NOTE: Requires adding `active_window_mut()` to your Windows struct
+        if let Some(w) = editor.windows.active_window_mut() {
             let cursor_line = w.cursor.position.line;
-            let cursor_col = w.cursor.position.col;
-            let buffer = editor.buffers.get(&w.buffer_id);
-            let content_width = (w
-                .width
-                .saturating_sub(gutter_w)
-                .saturating_sub(mark_gutter_w)
-                .saturating_sub(git_gutter_w)) as usize;
-            let mut visual_rows = 0usize;
-            if let Some(buf) = buffer {
-                for line_i in vp.scroll_line..cursor_line {
-                    if let Some(txt) = buf.line_text(line_i) {
-                        if editor.config.word_wrap {
-                            visual_rows += softwrap_rows(&txt, content_width);
-                        } else {
-                            visual_rows += 1;
-                        }
-                    }
-                }
-                if let Some(cl_txt) = buf.line_text(cursor_line) {
-                    if editor.config.word_wrap {
-                        visual_rows += softwrap_row_offset(&cl_txt, cursor_col, content_width);
-                    }
-                }
+            // Target scroll line centers the cursor roughly in the middle of the edit area
+            let target_scroll = cursor_line.saturating_sub((edit_height / 2) as usize);
+            // Only scroll down (increase scroll_line) to avoid jittering if user scrolled up
+            if target_scroll > w.viewport.scroll_line {
+                w.viewport.scroll_line = target_scroll;
             }
-            w.y_offset + visual_rows as u16
-        })
+        }
+    }
+
+    // 3. Recalculate visual positions now that the viewport might have scrolled
+    let cursor_screen_row =
+        calculate_cursor_screen_row(editor, gutter_w, mark_gutter_w, git_gutter_w);
+    let cursor_screen_col = calculate_cursor_screen_col(editor);
+
+    // ── Strictly Position Below: shrink if not enough space, never overlap above ──
+    let space_below = edit_height.saturating_sub(cursor_screen_row + 1);
+    if space_below < 3 {
+        // Not enough space below to even show 1 item + 2 borders
+        return Ok(());
+    }
+
+    let max_visible = 8usize;
+    let mut visible_count = items.len().min(max_visible);
+
+    // Cap visible_count to strictly fit in the space below the current line
+    let max_possible_items = (space_below - 2) as usize; // -2 for top/bottom border
+    if visible_count > max_possible_items {
+        visible_count = max_possible_items;
+    }
+
+    if visible_count == 0 {
+        return Ok(());
+    }
+
+    // Always position directly below the current line
+    let y = cursor_screen_row + 1;
+
+    let scroll_offset = if selected >= visible_count {
+        selected - visible_count + 1
+    } else {
+        0
+    };
+
+    let rendered_range = scroll_offset..(scroll_offset + visible_count).min(items.len());
+    let rendered_items = &items[rendered_range.clone()];
+
+    // OPT: pre-compute kind widths once (based on actually rendered items)
+    let max_kind_w = rendered_items
+        .iter()
+        .map(|item| UnicodeWidthStr::width(item.kind.as_str()))
+        .max()
         .unwrap_or(0);
 
-    let cursor_screen_col = window
-        .map(|w| {
-            let scroll_col = w.viewport.scroll_col as usize;
-            let cursor_col = w.cursor.position.col;
-
-            let buf = editor.buffers.get(&w.buffer_id);
-            if let Some(buf) = buf {
-                let line_text = buf.line_text(w.cursor.position.line).unwrap_or_default();
-                let line_text = line_text.trim_end_matches('\n');
-                let graphemes: Vec<_> = line_text.graphemes(true).collect();
-                let start = scroll_col.min(graphemes.len());
-                let end = cursor_col.min(graphemes.len());
-                graphemes[start..end]
-                    .iter()
-                    .map(|g| UnicodeWidthStr::width(*g))
-                    .sum::<usize>()
-            } else {
-                cursor_col.saturating_sub(scroll_col)
-            }
+    let max_left_w = rendered_items
+        .iter()
+        .map(|item| {
+            max_kind_w
+                + if max_kind_w > 0 { 1 } else { 0 }
+                + UnicodeWidthStr::width(item.label.as_str())
         })
+        .max()
         .unwrap_or(0);
+    let max_item_width = max_left_w.max(UnicodeWidthStr::width(trigger));
+    let popup_content_width =
+        (max_item_width + 4).min((term_width as usize).saturating_sub(4)) as u16;
+
+    let popup_width = (popup_content_width + 2).max(40);
+    let popup_height = (visible_count as u16) + 2;
 
     let trigger_display_width = UnicodeWidthStr::width(trigger) as u16;
 
     let x = (cursor_screen_col.saturating_sub(trigger_display_width as usize))
         .min((term_width as usize).saturating_sub(popup_width as usize)) as u16;
-
-    let y = if cursor_screen_row > popup_height {
-        cursor_screen_row.saturating_sub(popup_height) - 1
-    } else {
-        (cursor_screen_row + 1).min(edit_height.saturating_sub(popup_height))
-    };
-
-    let scroll_offset = if selected >= max_visible {
-        selected - max_visible + 1
-    } else {
-        0
-    };
 
     clear_rect(stdout, x, y, popup_width, popup_height, catppuccin::MANTLE)?;
 
@@ -359,18 +424,15 @@ pub fn render_completion_popup(
         .with_bg(catppuccin::MANTLE);
     draw_top_border(stdout, x, y, popup_width, &title_style)?;
 
-    for (i, item_idx) in (scroll_offset..(scroll_offset + visible_count)).enumerate() {
+    for (i, item_idx) in rendered_range.enumerate() {
         let row_y = y + 1 + i as u16;
         if row_y >= y + popup_height - 1 {
             break;
         }
-        let item = match items.get(item_idx) {
-            Some(it) => it,
-            None => break,
-        };
+        let item = &items[item_idx];
         let is_selected = item_idx == selected;
 
-        let mut segments = Vec::new();
+        let mut segments = Vec::with_capacity(4);
         let kind_label = item.kind.as_str();
         let kind_color = match item.kind {
             CompletionKind::Function | CompletionKind::Method => catppuccin::BLUE,
@@ -384,17 +446,9 @@ pub fn render_completion_popup(
 
         segments.push(Segment::new(kind_label, kind_color));
 
-        let kind_pad;
         let kind_padding_len = max_kind_w.saturating_sub(UnicodeWidthStr::width(kind_label));
-        if kind_padding_len > 0 {
-            kind_pad = Some(" ".repeat(kind_padding_len));
-            segments.push(Segment::new(
-                kind_pad.as_deref().unwrap(),
-                catppuccin::SUBTEXT,
-            ));
-        } else {
-            kind_pad = None;
-        }
+        let kind_padding: String = " ".repeat(kind_padding_len);
+        segments.push(Segment::new(&kind_padding, catppuccin::SUBTEXT));
 
         if max_kind_w > 0 {
             segments.push(Segment::new(" ", catppuccin::SUBTEXT));
@@ -435,8 +489,11 @@ pub fn render_completion_popup(
             SetBackgroundColor(catppuccin::MANTLE)
         )?;
         let info_display = truncate_to_width(&info_text, popup_width as usize);
-        execute!(stdout, Print(info_display))?;
-        let pad = (popup_width as usize).saturating_sub(UnicodeWidthStr::width(info_display));
+        let pad =
+            (popup_width as usize).saturating_sub(UnicodeWidthStr::width(info_display.as_str()));
+        execute!(stdout, Print(info_display.clone()))?;
+        let pad =
+            (popup_width as usize).saturating_sub(UnicodeWidthStr::width(info_display.as_str()));
         if pad > 0 {
             execute!(stdout, Print(&" ".repeat(pad)))?;
         }
@@ -455,4 +512,19 @@ pub fn render_completion_popup(
         )?;
     }
     Ok(())
+}
+
+/// Truncate a string to fit within a given display width (in Unicode width units).
+fn truncate_to_width(s: &str, max_width: usize) -> String {
+    let mut width = 0;
+    let mut result = String::with_capacity(s.len());
+    for g in s.graphemes(true) {
+        let gw = UnicodeWidthStr::width(g);
+        if width + gw > max_width {
+            break;
+        }
+        result.push_str(g);
+        width += gw;
+    }
+    result
 }

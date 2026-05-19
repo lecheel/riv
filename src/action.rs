@@ -115,6 +115,18 @@ pub enum Action {
     IndentTsToFileEnd,
     Register,
 
+    // ── Text object deletions ──────────────────────────────
+    DeleteAroundBraces,
+    DeleteInsideBraces,
+    DeleteAroundBrackets,
+    DeleteInsideBrackets,
+    DeleteAroundParens,
+    DeleteInsideParens,
+    DeleteAroundQuotes,
+    DeleteInsideQuotes,
+    DeleteTill,
+    DeleteFind,
+    //-- action enum (anchor dont remove) --//
     // ── Visual mode block operations ────────────────────
     BlockInsert,
     BlockAppend,
@@ -329,6 +341,16 @@ impl Action {
             | Self::ToggleComment
             | Self::ToggleCommentAndMoveDown
             | Self::DeleteAroundFunction
+            | Self::DeleteAroundBraces
+            | Self::DeleteInsideBraces
+            | Self::DeleteAroundBrackets
+            | Self::DeleteInsideBrackets
+            | Self::DeleteAroundParens
+            | Self::DeleteInsideParens
+            | Self::DeleteAroundQuotes
+            | Self::DeleteInsideQuotes
+            | Self::DeleteTill
+            | Self::DeleteFind
             | Self::IndentTs
             | Self::IndentTsToFileEnd
             | Self::BlockInsert

@@ -391,16 +391,12 @@ impl CommandExt for Editor {
         // ── Parse range prefix ──
         let (range, cmd_body) = parse_command_range(&cmd);
 
-        // ── Bare line number without range (fallback, shouldn't normally be reached) ──
-        if range.is_none() {
-            if let Ok(line_num) = cmd_body.trim().parse::<usize>() {
-                self.command_prompt
-                    .history
-                    .retain(|c: &String| c.parse::<usize>().is_err());
-                self.command_prompt.push_history(cmd.clone());
-                self.enter_mode(crate::editor::Mode::Normal);
-                return self.move_to_line(line_num);
-            }
+        // ── Deduplicate digit-prefixed entries — keep only the latest ──
+        // Covers bare line jumps (:888), ranged deletes (:5d), and substitutes (:10,20s/..)
+        if cmd.trim_start().starts_with(|c: char| c.is_ascii_digit()) {
+            self.command_prompt
+                .history
+                .retain(|c| !c.trim_start().starts_with(|ch: char| ch.is_ascii_digit()));
         }
 
         // Record in history

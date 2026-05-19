@@ -91,6 +91,8 @@ pub trait EditingExt {
     fn handle_paste(&mut self, text: String) -> CommandResult;
     fn set_yank_register(&mut self, text: String);
 
+    fn delete_inline_target(&mut self, target: char, inclusive: bool) -> CommandResult;
+
     fn store_yank(&mut self, text: String);
     fn paste_named_register(&mut self, name: char) -> CommandResult;
     fn get_named_register(&self, name: char) -> Option<&str>;
@@ -1748,5 +1750,59 @@ impl EditingExt for Editor {
             self.set_named_register(reg, text);
         }
         self.pending_register = None;
+    }
+
+    /// Delete from cursor up to (exclusive) or including (inclusive) a target character on the same line.
+    fn delete_inline_target(&mut self, target: char, inclusive: bool) -> CommandResult {
+        let (buffer_id, cursor, line_text) = {
+            let window = match self.windows.active_window() {
+                Some(w) => w,
+                None => return CommandResult::NoOp,
+            };
+            let buffer_id = window.buffer_id;
+            let cursor = window.cursor.position;
+            let buffer = match self.buffers.get(&buffer_id) {
+                Some(b) => b,
+                None => return CommandResult::NoOp,
+            };
+            let line_text = buffer
+                .line_text(cursor.line)
+                .unwrap_or_default()
+                .to_string();
+            (buffer_id, cursor, line_text)
+        };
+
+        let graphemes: Vec<&str> = line_text.graphemes(true).collect();
+        if cursor.col >= graphemes.len() {
+            return CommandResult::NoOp;
+        }
+
+        // Search forward for the target character
+        let mut target_col = None;
+        for (i, g) in graphemes.iter().enumerate() {
+            if i > cursor.col {
+                // Graphemes can be multi-char, but our target is a single Key::Char
+                if g.chars().next() == Some(target) {
+                    target_col = Some(i);
+                    break;
+                }
+            }
+        }
+
+        if let Some(end_col) = target_col {
+            let delete_end = if inclusive { end_col + 1 } else { end_col };
+            let count = delete_end - cursor.col;
+
+            self.with_undo_group(|s| {
+                if let Some(buffer) = s.buffers.get_mut(&buffer_id) {
+                    buffer.delete_at(cursor, count);
+                    buffer.dirty = true;
+                }
+                CommandResult::ContentChanged
+            })
+        } else {
+            // Target character not found on this line
+            CommandResult::NoOp
+        }
     }
 }

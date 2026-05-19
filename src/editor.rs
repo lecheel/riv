@@ -265,6 +265,8 @@ pub struct Editor {
     pub insert_register_pending: bool,
     /// Pending state for multi-key sequences (Brief mode, etc.).
     pub pending: PendingState,
+    /// Whether we're waiting for a character target after pressing dt/df    
+    pub inline_delete_pending: Option<char>,
     /// Current which-key hints (for rendering).
     pub which_key_hints: Vec<(String, String)>,
     /// Debounce timeout for which-key popup (milliseconds).
@@ -389,6 +391,7 @@ pub struct Editor {
     pub lsp_tx: mpsc::UnboundedSender<crate::lsp::LspMessage>,
     /// Whether an LSP completion request is in flight.
     pub lsp_completion_pending: bool,
+    pub lsp_completion_was_trigger: bool,
     /// Whether the LSP server has connected and initialized.
     pub lsp_connected: bool,
     /// Cached LSP diagnostics per URI.
@@ -720,7 +723,8 @@ impl Editor {
             pending_motion: None,
             pending_count: String::new(),
             current_count: 1,
-            pending_register: None,  // for "a
+            pending_register: None, // for "a
+            inline_delete_pending: None,
             register_pending: false, // waiting for a key after pressing
             insert_register_pending: false,
             pending: PendingState::default(),
@@ -788,6 +792,7 @@ impl Editor {
             // LSP Integration
             lsp_tx,
             lsp_completion_pending: false,
+            lsp_completion_was_trigger: false,
             lsp_connected: false,
             lsp_diagnostics: std::collections::HashMap::new(),
             lsp_signature_help: None,
@@ -1870,6 +1875,24 @@ impl Editor {
             return CommandResult::NoOp;
         }
 
+        // ── Inline delete pending (waiting for target char after dt/df) ──
+        if let Some(mode) = self.inline_delete_pending.take() {
+            match key {
+                Key::Char(c) => {
+                    let inclusive = mode == 'f';
+                    return self.delete_inline_target(c, inclusive);
+                }
+                Key::Escape | Key::Ctrl('c') => {
+                    // Cancel
+                    return CommandResult::NoOp;
+                }
+                _ => {
+                    // Invalid key — cancel pending state
+                    return CommandResult::NoOp;
+                }
+            }
+        }
+
         // ── Replace char pending (waiting for char after r) ──
         if self.replace_char_pending {
             self.replace_char_pending = false;
@@ -2554,7 +2577,7 @@ impl Editor {
                 }
             }
         }
-        // ── Escape in Normal mode (ESCAPE) ──
+        //-- Escape in Normal mode (ESCAPE) --//
         if self.mode == Mode::Normal && key == Key::Escape {
             self.clear_messages();
             self.pending_count.clear();
@@ -2578,6 +2601,9 @@ impl Editor {
             }
             if self.replace_char_pending {
                 self.replace_char_pending = false;
+            }
+            if self.inline_delete_pending.is_some() {
+                self.inline_delete_pending = None;
             }
             self.dirty.cursor = true;
             self.dirty.status_infobar = true;
@@ -3328,6 +3354,31 @@ impl Editor {
                 CommandResult::ContentChanged
             }
 
+            Action::DeleteAroundBraces => {
+                self.operate_on_pair('{', '}', TextObjectKind::Around, TextObjectOperator::Delete)
+            }
+            Action::DeleteInsideBraces => {
+                self.operate_on_pair('{', '}', TextObjectKind::Inner, TextObjectOperator::Delete)
+            }
+            Action::DeleteAroundBrackets => {
+                self.operate_on_pair('[', ']', TextObjectKind::Around, TextObjectOperator::Delete)
+            }
+            Action::DeleteInsideBrackets => {
+                self.operate_on_pair('[', ']', TextObjectKind::Inner, TextObjectOperator::Delete)
+            }
+            Action::DeleteAroundParens => {
+                self.operate_on_pair('(', ')', TextObjectKind::Around, TextObjectOperator::Delete)
+            }
+            Action::DeleteInsideParens => {
+                self.operate_on_pair('(', ')', TextObjectKind::Inner, TextObjectOperator::Delete)
+            }
+            Action::DeleteAroundQuotes => {
+                self.operate_on_pair('"', '"', TextObjectKind::Around, TextObjectOperator::Delete)
+            }
+            Action::DeleteInsideQuotes => {
+                self.operate_on_pair('"', '"', TextObjectKind::Inner, TextObjectOperator::Delete)
+            }
+
             Action::DeleteBuffer => {
                 // Save cursor position before closing
                 if let Some(window) = self.windows.active_window() {
@@ -3899,6 +3950,15 @@ impl Editor {
                     Ok(msg) => CommandResult::Message(msg),
                     Err(err) => CommandResult::Error(err),
                 }
+            }
+
+            Action::DeleteTill => {
+                self.inline_delete_pending = Some('t');
+                CommandResult::NoOp
+            }
+            Action::DeleteFind => {
+                self.inline_delete_pending = Some('f');
+                CommandResult::NoOp
             }
 
             //-- process_action Action::RipgrepLast (anchor dont remove) --//

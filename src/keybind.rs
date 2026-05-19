@@ -474,7 +474,6 @@ fn format_key_sequence(seq: &[Key]) -> String {
 /// Create the default Normal mode key map.
 pub fn default_normal_keymap() -> KeyMap {
     let mut km = KeyMap::new();
-
     // Movement
     km.bind_with_desc(vec![Key::Up], Action::MoveUp, "Move up");
     km.bind_with_desc(vec![Key::Down], Action::MoveDown, "Move down");
@@ -507,6 +506,7 @@ pub fn default_normal_keymap() -> KeyMap {
     km.bind_with_desc(vec![Key::PageDown], Action::PageDown, "Page down");
     km.bind_with_desc(vec![Key::Char('z'), Key::Char('z')], Action::ScrollCenter, "Center cursor on screen");
 
+    //-- normal keymap (anchor dont remove) --//
     // Editing
     km.bind_with_desc(vec![Key::Char('i')], Action::EnterInsertMode, "Enter insert mode");
     km.bind_with_desc(vec![Key::Char('a')], Action::EnterAppendMode, "Enter append mode");
@@ -522,6 +522,41 @@ pub fn default_normal_keymap() -> KeyMap {
     km.bind_with_desc(vec![Key::Char('d'), Key::Char('$')], Action::DeleteToLineEnd, "Del EOL");
     km.bind_with_desc(vec![Key::Char('d'), Key::Char('G')], Action::DeleteToFileEnd, "Del EOF");
     km.bind_with_desc(vec![Key::Char('d'), Key::Char('a'), Key::Char('f')], Action::DeleteAroundFunction, "Delete around function");
+    // Text objects (delete around / inside)
+     // Text objects: Braces { }
+    km.bind_with_desc(vec![Key::Char('d'), Key::Char('a'), Key::Char('{')], Action::DeleteAroundBraces, "Delete around {}");
+    km.bind_with_desc(vec![Key::Char('d'), Key::Char('a'), Key::Char('}')], Action::DeleteAroundBraces, "Delete around {}");
+    km.bind_with_desc(vec![Key::Char('d'), Key::Char('i'), Key::Char('{')], Action::DeleteInsideBraces, "Delete inside {}");
+    km.bind_with_desc(vec![Key::Char('d'), Key::Char('i'), Key::Char('}')], Action::DeleteInsideBraces, "Delete inside {}");
+
+    // Text objects: Brackets [ ]
+    km.bind_with_desc(vec![Key::Char('d'), Key::Char('a'), Key::Char('[')], Action::DeleteAroundBrackets, "Delete around []");
+    km.bind_with_desc(vec![Key::Char('d'), Key::Char('a'), Key::Char(']')], Action::DeleteAroundBrackets, "Delete around []");
+    km.bind_with_desc(vec![Key::Char('d'), Key::Char('i'), Key::Char('[')], Action::DeleteInsideBrackets, "Delete inside []");
+    km.bind_with_desc(vec![Key::Char('d'), Key::Char('i'), Key::Char(']')], Action::DeleteInsideBrackets, "Delete inside []");
+
+    // Text objects: Parentheses ( )
+    km.bind_with_desc(vec![Key::Char('d'), Key::Char('a'), Key::Char('(')], Action::DeleteAroundParens, "Delete around ()");
+    km.bind_with_desc(vec![Key::Char('d'), Key::Char('a'), Key::Char(')')], Action::DeleteAroundParens, "Delete around ()");
+    km.bind_with_desc(vec![Key::Char('d'), Key::Char('i'), Key::Char('(')], Action::DeleteInsideParens, "Delete inside ()");
+    km.bind_with_desc(vec![Key::Char('d'), Key::Char('i'), Key::Char(')')], Action::DeleteInsideParens, "Delete inside ()");
+
+    // Text objects: Quotes " '
+    km.bind_with_desc(vec![Key::Char('d'), Key::Char('a'), Key::Char('"')], Action::DeleteAroundQuotes, "Delete around \"\"");
+    km.bind_with_desc(vec![Key::Char('d'), Key::Char('i'), Key::Char('"')], Action::DeleteInsideQuotes, "Delete inside \"\"");
+    km.bind_with_desc(vec![Key::Char('d'), Key::Char('a'), Key::Char('\'')], Action::DeleteAroundQuotes, "Delete around ''");
+    km.bind_with_desc(vec![Key::Char('d'), Key::Char('i'), Key::Char('\'')], Action::DeleteInsideQuotes, "Delete inside ''");
+
+    // Vim aliases (b = block, B = Block)
+    km.bind_with_desc(vec![Key::Char('d'), Key::Char('a'), Key::Char('b')], Action::DeleteAroundParens, "Delete around ()");
+    km.bind_with_desc(vec![Key::Char('d'), Key::Char('i'), Key::Char('b')], Action::DeleteInsideParens, "Delete inside ()");
+    km.bind_with_desc(vec![Key::Char('d'), Key::Char('a'), Key::Char('B')], Action::DeleteAroundBraces, "Delete around {}");
+    km.bind_with_desc(vec![Key::Char('d'), Key::Char('i'), Key::Char('B')], Action::DeleteInsideBraces, "Delete inside {}");   
+    
+    // Inline delete dt(x) / df(x)
+    km.bind_with_desc(vec![Key::Char('d'), Key::Char('t')], Action::DeleteTill, "Delete till char");
+    km.bind_with_desc(vec![Key::Char('d'), Key::Char('f')], Action::DeleteFind, "Delete find char");    
+    
     km.bind_with_desc(vec![Key::Char('y'), Key::Char('y')], Action::YankLine, "Yank (copy) line");
     km.bind_with_desc(vec![Key::Char('p')], Action::PasteAfter, "Paste after cursor");
     km.bind_with_desc(vec![Key::Char('P')], Action::PasteBefore, "Paste before cursor");

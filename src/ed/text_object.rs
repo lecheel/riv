@@ -319,6 +319,22 @@ pub trait TextObjectExt {
         operator: TextObjectOperator,
     ) -> CommandResult;
     fn find_function_lines(&self) -> Option<(usize, usize)>;
+
+    fn find_enclosing_pair(
+        &self,
+        open: char,
+        close: char,
+        buffer_id: crate::buffer::BufferId,
+        cursor: CursorPosition,
+    ) -> Option<(usize, usize)>;
+
+    fn operate_on_pair(
+        &mut self,
+        open: char,
+        close: char,
+        kind: TextObjectKind,
+        operator: TextObjectOperator,
+    ) -> CommandResult;
 }
 
 impl TextObjectExt for Editor {
@@ -544,6 +560,220 @@ impl TextObjectExt for Editor {
         }
 
         None
+    }
+
+    fn find_enclosing_pair(
+        &self,
+        open: char,
+        close: char,
+        buffer_id: crate::buffer::BufferId,
+        cursor: CursorPosition,
+    ) -> Option<(usize, usize)> {
+        let buffer = self.buffers.get(&buffer_id)?;
+        let cursor_byte = cursor_pos_to_byte(buffer, cursor)?;
+        let total_bytes = buffer.rope.len_bytes();
+        let open_byte = open as u8;
+        let close_byte = close as u8;
+
+        let byte_at = |idx: usize| -> Option<u8> {
+            if idx < total_bytes {
+                Some(buffer.rope.byte(idx))
+            } else {
+                None
+            }
+        };
+
+        // 1) Cursor on an opening bracket → scan forward for its closing match.
+        if byte_at(cursor_byte) == Some(open_byte) {
+            let mut level = 1;
+            let mut idx = cursor_byte;
+            while idx + 1 < total_bytes {
+                idx += 1;
+                match byte_at(idx) {
+                    Some(b) if b == close_byte => {
+                        level -= 1;
+                        if level == 0 {
+                            return Some((cursor_byte, idx));
+                        }
+                    }
+                    Some(b) if b == open_byte => level += 1,
+                    _ => {}
+                }
+            }
+            return None;
+        }
+
+        // 2) Cursor on a closing bracket → scan backward for its opening match.
+        if byte_at(cursor_byte) == Some(close_byte) {
+            let mut level = 1;
+            let mut idx = cursor_byte;
+            while idx > 0 {
+                idx -= 1;
+                match byte_at(idx) {
+                    Some(b) if b == open_byte => {
+                        level -= 1;
+                        if level == 0 {
+                            return Some((idx, cursor_byte));
+                        }
+                    }
+                    Some(b) if b == close_byte => level += 1,
+                    _ => {}
+                }
+            }
+            return None;
+        }
+
+        // 3) Cursor not on a bracket → find the enclosing pair.
+        // Scan backward for an unmatched opening bracket.
+        let mut level = 0;
+        let mut idx = cursor_byte;
+        let open_idx = loop {
+            if idx == 0 {
+                return None; // no opening bracket before cursor
+            }
+            idx -= 1;
+            match byte_at(idx) {
+                Some(b) if b == close_byte => level += 1,
+                Some(b) if b == open_byte => {
+                    if level == 0 {
+                        break Some(idx);
+                    }
+                    level -= 1;
+                }
+                _ => {}
+            }
+        }?;
+
+        // Scan forward for the matching closing bracket.
+        let mut level = 1;
+        let mut idx = open_idx;
+        while idx + 1 < total_bytes {
+            idx += 1;
+            match byte_at(idx) {
+                Some(b) if b == close_byte => {
+                    level -= 1;
+                    if level == 0 {
+                        return Some((open_idx, idx));
+                    }
+                }
+                Some(b) if b == open_byte => level += 1,
+                _ => {}
+            }
+        }
+        None
+    }
+
+    fn operate_on_pair(
+        &mut self,
+        open: char,
+        close: char,
+        kind: TextObjectKind,
+        operator: TextObjectOperator,
+    ) -> CommandResult {
+        let (buffer_id, pair) = {
+            let window = match self.windows.active_window() {
+                Some(w) => w,
+                None => return CommandResult::NoOp,
+            };
+            let cursor = window.cursor.position;
+            (
+                window.buffer_id,
+                self.find_enclosing_pair(open, close, window.buffer_id, cursor),
+            )
+        };
+
+        let (open_idx, close_idx) = match pair {
+            Some(p) => p,
+            None => return CommandResult::Error("No matching pair found".into()),
+        };
+
+        // Byte offsets of the region to operate on
+        let (start_idx, end_idx) = match kind {
+            TextObjectKind::Inner => (open_idx + 1, close_idx),
+            TextObjectKind::Around => (open_idx, close_idx + 1),
+        };
+
+        if start_idx >= end_idx {
+            return CommandResult::NoOp;
+        }
+
+        // ─── Helper: get char indices (needed for rope positioning) ───
+        let get_char_idx = |byte_idx: usize, buffer: &Buffer| -> usize {
+            buffer
+                .rope
+                .byte_to_char(byte_idx.min(buffer.rope.len_bytes()))
+        };
+
+        match operator {
+            TextObjectOperator::Delete => {
+                self.ensure_undo_group();
+                let new_cursor_line = if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
+                    buffer.rope.remove(start_idx..end_idx);
+                    buffer.dirty = true;
+                    if buffer.rope.len_chars() == 0 {
+                        buffer.rope.insert(0, "\n");
+                    }
+                    let cursor_char = get_char_idx(start_idx, buffer);
+                    buffer.rope.char_to_line(cursor_char)
+                } else {
+                    0
+                };
+                self.close_undo_group();
+                self.invalidate_git_gutter();
+                if let Some(window) = self.windows.active_window_mut() {
+                    window.cursor.position = CursorPosition::new(new_cursor_line, 0);
+                    window.cursor.desired_col = None;
+                }
+                self.ensure_cursor_visible(&buffer_id);
+                CommandResult::ContentChanged
+            }
+            TextObjectOperator::Change => {
+                self.ensure_undo_group();
+                let new_cursor_line = if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
+                    buffer.rope.remove(start_idx..end_idx);
+                    buffer.dirty = true;
+                    if buffer.rope.len_chars() == 0 {
+                        buffer.rope.insert(0, "\n");
+                    }
+                    let cursor_char = get_char_idx(start_idx, buffer);
+                    buffer.rope.char_to_line(cursor_char)
+                } else {
+                    0
+                };
+                self.close_undo_group();
+                self.invalidate_git_gutter();
+                if let Some(window) = self.windows.active_window_mut() {
+                    window.cursor.position = CursorPosition::new(new_cursor_line, 0);
+                    window.cursor.desired_col = None;
+                }
+                self.ensure_cursor_visible(&buffer_id);
+                self.mode = Mode::Insert;
+                CommandResult::ModeChanged(Mode::Insert)
+            }
+            TextObjectOperator::Select => {
+                if let Some(buffer) = self.buffers.get(&buffer_id) {
+                    let start_char = buffer.rope.byte_to_char(start_idx);
+                    let end_char = buffer.rope.byte_to_char(end_idx);
+                    let start_pos = self.char_idx_to_cursor_position(buffer, start_char);
+                    let end_pos = self.char_idx_to_cursor_position(buffer, end_char);
+                    if let Some(window) = self.windows.active_window_mut() {
+                        window.selection_anchor = Some(start_pos);
+                        window.cursor.position = end_pos;
+                        window.cursor.desired_col = None;
+                    }
+                }
+                self.mode = Mode::Visual;
+                CommandResult::ModeChanged(Mode::Visual)
+            }
+            TextObjectOperator::Yank => {
+                // Yank the byte range as text
+                if let Some(buffer) = self.buffers.get(&buffer_id) {
+                    let text = buffer.rope.slice(start_idx..end_idx).to_string();
+                    self.yank_register = text;
+                }
+                CommandResult::Message("Yanked pair".into())
+            }
+        }
     }
 }
 

@@ -295,6 +295,7 @@ impl GitExt for Editor {
             .unwrap_or(hunk_range.start);
 
         self.move_to_position(target_line, 0);
+        self.scroll_bottom_third();
 
         // Show the diff popup for the new hunk
         let diff_hunk_clone = self.cached_diff_hunks.get(idx).cloned();
@@ -380,6 +381,7 @@ impl GitExt for Editor {
             .unwrap_or(hunk_range.start);
 
         self.move_to_position(target_line, 0);
+        self.scroll_bottom_third();
 
         let diff_hunk_clone = self.cached_diff_hunks.get(idx).cloned();
         if let Some(hunk) = diff_hunk_clone {

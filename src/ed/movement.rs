@@ -1,3 +1,4 @@
+//--+ ed/movement.rs
 // src/ed/movement.rs
 //! Editor movement and scrolling extensions.
 
@@ -38,6 +39,7 @@ pub trait MovementExt {
     fn scroll_left(&mut self) -> CommandResult;
     fn scroll_right(&mut self) -> CommandResult;
     fn scroll_center(&mut self) -> CommandResult;
+    fn scroll_bottom_third(&mut self) -> CommandResult;
 
     // ── Viewport helpers (called after movement) ──
     fn ensure_cursor_visible(&mut self, buffer_id: &crate::buffer::BufferId);
@@ -111,27 +113,6 @@ impl MovementExt for Editor {
         CommandResult::ViewChanged
     }
 
-    fn move_cursor_up(&mut self) -> CommandResult {
-        if let Some(window) = self.windows.active_window_mut() {
-            let buffer_id = window.buffer_id;
-            let pos = &mut window.cursor.position;
-            let desired = window.cursor.desired_col.unwrap_or(pos.col);
-
-            if pos.line > 0 {
-                pos.line -= 1;
-            }
-
-            let max_col = self
-                .buffers
-                .get(&buffer_id)
-                .map(|b| b.line_len(pos.line))
-                .unwrap_or(0);
-            pos.col = desired.min(max_col);
-            window.cursor.desired_col = Some(desired);
-        }
-        CommandResult::ViewChanged
-    }
-
     fn move_cursor_down(&mut self) -> CommandResult {
         if let Some(window) = self.windows.active_window_mut() {
             let buffer_id = window.buffer_id;
@@ -154,6 +135,49 @@ impl MovementExt for Editor {
                 .unwrap_or(0);
             pos.col = desired.min(max_col);
             window.cursor.desired_col = Some(desired);
+
+            // ── Scroll offset: keep at least `scroll_offset` lines below cursor ──
+            let scroll_offset = self.config.scroll_offset;
+            let edit_height = (window.height as usize).saturating_sub(1);
+            if scroll_offset > 0 && edit_height > 2 * scroll_offset {
+                // lower_bound = minimum scroll_line so that
+                //   (scroll_line + edit_height - 1) - cursor_line >= scroll_offset
+                let lower_bound = (pos.line + scroll_offset + 1).saturating_sub(edit_height);
+                let max_scroll = max_line.saturating_sub(edit_height.min(max_line));
+                window.viewport.scroll_line =
+                    window.viewport.scroll_line.max(lower_bound).min(max_scroll);
+            }
+        }
+        CommandResult::ViewChanged
+    }
+
+    fn move_cursor_up(&mut self) -> CommandResult {
+        if let Some(window) = self.windows.active_window_mut() {
+            let buffer_id = window.buffer_id;
+            let pos = &mut window.cursor.position;
+            let desired = window.cursor.desired_col.unwrap_or(pos.col);
+
+            if pos.line > 0 {
+                pos.line -= 1;
+            }
+
+            let max_col = self
+                .buffers
+                .get(&buffer_id)
+                .map(|b| b.line_len(pos.line))
+                .unwrap_or(0);
+            pos.col = desired.min(max_col);
+            window.cursor.desired_col = Some(desired);
+
+            // ── Scroll offset: keep at least `scroll_offset` lines above cursor ──
+            let scroll_offset = self.config.scroll_offset;
+            let edit_height = (window.height as usize).saturating_sub(1);
+            if scroll_offset > 0 && edit_height > 2 * scroll_offset {
+                // upper_bound = maximum scroll_line so that
+                //   cursor_line - scroll_line >= scroll_offset
+                let upper_bound = pos.line.saturating_sub(scroll_offset);
+                window.viewport.scroll_line = window.viewport.scroll_line.min(upper_bound);
+            }
         }
         CommandResult::ViewChanged
     }
@@ -419,6 +443,15 @@ impl MovementExt for Editor {
         CommandResult::ViewChanged
     }
 
+    fn scroll_bottom_third(&mut self) -> CommandResult {
+        if let Some(window) = self.windows.active_window_mut() {
+            let third = window.height as usize / 3;
+            let cursor_line = window.cursor.position.line;
+            // Place cursor at bottom third => 2/3 down from top
+            window.viewport.scroll_line = cursor_line.saturating_sub(2 * third);
+        }
+        CommandResult::ViewChanged
+    }
     // ── Viewport helpers (used inside movement methods) ──
 
     fn ensure_cursor_visible(&mut self, buffer_id: &crate::buffer::BufferId) {
@@ -579,7 +612,7 @@ impl MovementExt for Editor {
 
 // Add this separate impl block for private helpers
 impl Editor {
-    fn char_idx_to_cursor_position(
+    pub fn char_idx_to_cursor_position(
         &self,
         buffer: &crate::buffer::Buffer,
         char_idx: usize,

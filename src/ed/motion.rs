@@ -1,7 +1,7 @@
+//--+ ed/motion.rs
 // src/ed/motion.rs
 //! 2-character EasyMotion/AceJump style jumping.
 
-use crate::ed::movement::MovementExt;
 use crate::editor::Editor;
 
 const LABEL_CHARS: &str = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -51,11 +51,12 @@ pub fn handle_jump_key(editor: &mut Editor, c: char) -> bool {
             if targets.len() == 1 {
                 let target = targets[0].clone();
                 if let Some(window) = editor.windows.active_window_mut() {
+                    let buffer_id = window.buffer_id;
                     window.cursor.position.line = target.line;
                     window.cursor.position.col = target.col;
                     window.cursor.desired_col = None;
+                    editor.ensure_cursor_visible(&buffer_id);
                 }
-                editor.scroll_center();
                 cancel_jump(editor); // Clears targets since we're done
                 return false;
             }
@@ -92,11 +93,12 @@ pub fn handle_jump_key(editor: &mut Editor, c: char) -> bool {
             if let Some(idx) = target_idx {
                 let target = editor.jump.targets[idx].clone();
                 if let Some(window) = editor.windows.active_window_mut() {
+                    let buffer_id = window.buffer_id;
                     window.cursor.position.line = target.line;
                     window.cursor.position.col = target.col;
                     window.cursor.desired_col = None;
+                    editor.ensure_cursor_visible(&buffer_id);
                 }
-                editor.scroll_center();
             }
 
             cancel_jump(editor);
