@@ -417,76 +417,63 @@ impl EditingExt for Editor {
             }
         }
     }
-
     fn delete_to_file_end(&mut self) -> CommandResult {
-        let buffer_id = match self.windows.active_window().map(|w| w.buffer_id) {
-            Some(id) => id,
+        // 1. Extract window state
+        let (buffer_id, cursor) = match self.windows.active_window() {
+            Some(w) => (w.buffer_id, w.cursor.position),
             None => return CommandResult::NoOp,
         };
-        let cursor = self.windows.active_window().unwrap().cursor.position;
 
-        // Determine target line (0‑based)
+        // 2. Resolve buffer and target line
+        let buffer = match self.buffers.get(&buffer_id) {
+            Some(b) => b,
+            None => return CommandResult::NoOp,
+        };
+
+        let last_line = buffer.line_count().saturating_sub(1);
         let target_line = if self.current_count <= 1 {
-            let buffer = match self.buffers.get(&buffer_id) {
-                Some(b) => b,
-                None => return CommandResult::NoOp,
-            };
-            buffer.line_count().saturating_sub(1)
+            last_line
         } else {
-            let line = self.current_count.saturating_sub(1);
-            let max_line = self
-                .buffers
-                .get(&buffer_id)
-                .map(|b| b.line_count().saturating_sub(1))
-                .unwrap_or(0);
-            line.min(max_line)
+            self.current_count.saturating_sub(1).min(last_line)
         };
 
         if target_line < cursor.line {
-            self.set_infobar_message("Target line is before cursor".to_string());
+            self.set_infobar_message("Target line is before cursor".into());
             return CommandResult::NoOp;
         }
 
-        // Compute start and end character indices (immutable borrow)
-        let (start_char, end_char) = {
-            let buffer = match self.buffers.get(&buffer_id) {
-                Some(b) => b,
-                None => return CommandResult::NoOp,
-            };
-            let start = buffer.rope.line_to_char(cursor.line) + cursor.col;
-            let end = if target_line == cursor.line {
-                buffer.rope.line_to_char(cursor.line) + buffer.line_len(cursor.line)
-            } else {
-                buffer.rope.line_to_char(target_line) + buffer.line_len(target_line)
-            };
-            (start, end)
+        // 3. Compute char range (immutable borrow of buffer)
+        let start_char = buffer.rope.line_to_char(cursor.line) + cursor.col;
+        let end_char = if target_line == cursor.line {
+            buffer.rope.line_to_char(cursor.line) + buffer.line_len(cursor.line)
+        } else {
+            buffer.rope.line_to_char(target_line) + buffer.line_len(target_line)
         };
 
         if start_char >= end_char {
             return CommandResult::NoOp;
         }
 
-        // Perform deletion (mutable borrow – short lived)
+        // 4. Perform deletion (mutable borrow of self.buffers only)
         {
-            if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
-                buffer.rope.remove(start_char..end_char);
-                buffer.dirty = true;
-            } else {
-                return CommandResult::NoOp;
-            }
-        } // mutable borrow of `self.buffers` ends here
+            let buffer = match self.buffers.get_mut(&buffer_id) {
+                Some(b) => b,
+                None => return CommandResult::NoOp,
+            };
+            buffer.rope.remove(start_char..end_char);
+            buffer.dirty = true;
+        }
 
-        // Now we can safely borrow `self` mutably again
+        // 5. Side effects and cursor update (mutable borrow of self)
         self.invalidate_git_gutter();
 
-        // Update cursor position after deletion
         let buffer = match self.buffers.get(&buffer_id) {
             Some(b) => b,
             None => return CommandResult::NoOp,
         };
         let new_line = buffer.rope.char_to_line(start_char);
-        let line_start = buffer.rope.line_to_char(new_line);
-        let new_col = start_char - line_start;
+        let new_col = start_char - buffer.rope.line_to_char(new_line);
+
         if let Some(window) = self.windows.active_window_mut() {
             window.cursor.position = CursorPosition::new(new_line, new_col);
             window.cursor.desired_col = None;
@@ -494,7 +481,6 @@ impl EditingExt for Editor {
 
         CommandResult::ContentChanged
     }
-
     fn delete_to_line_start(&mut self) {
         if let Some(window) = self.windows.active_window_mut() {
             let buffer_id = window.buffer_id;

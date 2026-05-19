@@ -1,4 +1,3 @@
-//--+ highlight.rs
 //! Syntax highlighting using tree-sitter.
 //!
 //! Provides a `Highlighter` that can highlight lines of text using tree-sitter
@@ -335,6 +334,11 @@ impl RegexHighlighter {
         let mut i = 0usize;
         let len = chars.len();
 
+        // ── Special handling for Markdown ──────────────────────────────────
+        if language == Some(Language::Markdown) {
+            return self.highlight_markdown_line(text);
+        }
+
         // ── Special handling for GitLog buffer ──────────────────────────
         if language == Some(Language::GitLog) {
             // Look for "commit " at the beginning of the line (ignoring leading spaces)
@@ -490,6 +494,609 @@ impl RegexHighlighter {
                 end: i + 1,
                 style: HighlightStyle::Operator,
             });
+            i += 1;
+        }
+
+        spans
+    }
+
+    // ── Markdown highlighting ─────────────────────────────────────────
+
+    /// Highlight a Markdown line with dedicated MD syntax handling.
+    ///
+    /// Block-level elements (headings, code fences, blockquotes, horizontal
+    /// rules, list markers) are detected first and short-circuit the line.
+    /// Remaining inline content is handed off to [`Self::highlight_md_inline`].
+    fn highlight_markdown_line(&self, text: &str) -> Vec<HighlightSpan> {
+        let mut spans = Vec::new();
+        let chars: Vec<char> = text.chars().collect();
+        let len = chars.len();
+
+        if len == 0 {
+            return spans;
+        }
+
+        // Skip leading whitespace to detect block-level elements.
+        let mut ws_end = 0;
+        while ws_end < len && chars[ws_end] == ' ' {
+            ws_end += 1;
+        }
+        if ws_end >= len {
+            return spans; // whitespace-only line
+        }
+
+        // ── Heading (# ## ### …) ──────────────────────────────────────
+        if chars[ws_end] == '#' {
+            let mut i = ws_end;
+            while i < len && chars[i] == '#' {
+                i += 1;
+            }
+            spans.push(HighlightSpan {
+                start: ws_end,
+                end: i,
+                style: HighlightStyle::Keyword,
+            });
+            // Skip space(s) after markers
+            while i < len && chars[i] == ' ' {
+                i += 1;
+            }
+            // Heading content
+            if i < len {
+                spans.push(HighlightSpan {
+                    start: i,
+                    end: len,
+                    style: HighlightStyle::Type,
+                });
+            }
+            return spans;
+        }
+
+        // ── Code fence (``` or ~~~) ───────────────────────────────────
+        if chars[ws_end] == '`' || chars[ws_end] == '~' {
+            let fence_ch = chars[ws_end];
+            let mut i = ws_end;
+            while i < len && chars[i] == fence_ch {
+                i += 1;
+            }
+            if i - ws_end >= 3 {
+                spans.push(HighlightSpan {
+                    start: ws_end,
+                    end: i,
+                    style: HighlightStyle::Delimiter,
+                });
+                // Optional language identifier after fence
+                while i < len && chars[i] == ' ' {
+                    i += 1;
+                }
+                if i < len {
+                    let lang_start = i;
+                    while i < len && !chars[i].is_whitespace() {
+                        i += 1;
+                    }
+                    if i > lang_start {
+                        spans.push(HighlightSpan {
+                            start: lang_start,
+                            end: i,
+                            style: HighlightStyle::Type,
+                        });
+                    }
+                }
+                return spans;
+            }
+            // Not a fence (fewer than 3 backticks / tildes) — fall through.
+        }
+
+        // ── Blockquote (>) ────────────────────────────────────────────
+        if chars[ws_end] == '>' {
+            spans.push(HighlightSpan {
+                start: ws_end,
+                end: ws_end + 1,
+                style: HighlightStyle::Comment,
+            });
+            let mut i = ws_end + 1;
+            // Skip optional space after '>'
+            if i < len && chars[i] == ' ' {
+                i += 1;
+            }
+            if i < len {
+                spans.extend(Self::highlight_md_inline(&chars[i..], i));
+            }
+            return spans;
+        }
+
+        // ── Horizontal rule (---, ***, ___) ───────────────────────────
+        {
+            let ch = chars[ws_end];
+            if ch == '-' || ch == '*' || ch == '_' {
+                let mut i = ws_end;
+                let mut count = 0;
+                let mut valid = true;
+                while i < len {
+                    if chars[i] == ch {
+                        count += 1;
+                    } else if chars[i] != ' ' {
+                        valid = false;
+                        break;
+                    }
+                    i += 1;
+                }
+                if valid && count >= 3 {
+                    spans.push(HighlightSpan {
+                        start: 0,
+                        end: len,
+                        style: HighlightStyle::Comment,
+                    });
+                    return spans;
+                }
+            }
+        }
+
+        // ── List marker ───────────────────────────────────────────────
+        let mut inline_start = 0;
+
+        // Unordered: -, *, + followed by a space
+        if (chars[ws_end] == '-' || chars[ws_end] == '*' || chars[ws_end] == '+')
+            && ws_end + 1 < len
+            && chars[ws_end + 1] == ' '
+        {
+            spans.push(HighlightSpan {
+                start: ws_end,
+                end: ws_end + 1,
+                style: HighlightStyle::Operator,
+            });
+            inline_start = ws_end + 2;
+
+            // Checkbox: [ ], [x], [X]
+            if inline_start + 2 < len
+                && chars[inline_start] == '['
+                && (chars[inline_start + 1] == ' '
+                    || chars[inline_start + 1] == 'x'
+                    || chars[inline_start + 1] == 'X')
+                && chars[inline_start + 2] == ']'
+            {
+                let check_style = if chars[inline_start + 1] == ' ' {
+                    HighlightStyle::Delimiter
+                } else {
+                    HighlightStyle::Constant
+                };
+                spans.push(HighlightSpan {
+                    start: inline_start,
+                    end: inline_start + 3,
+                    style: check_style,
+                });
+                inline_start += 3;
+                // Skip space after checkbox
+                if inline_start < len && chars[inline_start] == ' ' {
+                    inline_start += 1;
+                }
+            }
+        }
+        // Ordered: 1. or 1) followed by a space
+        else if chars[ws_end].is_ascii_digit() {
+            let mut j = ws_end;
+            while j < len && chars[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j < len && (chars[j] == '.' || chars[j] == ')') && j + 1 < len && chars[j + 1] == ' '
+            {
+                spans.push(HighlightSpan {
+                    start: ws_end,
+                    end: j + 1,
+                    style: HighlightStyle::Operator,
+                });
+                inline_start = j + 2;
+            }
+        }
+
+        // ── Inline elements (code, bold, italic, links, images, …) ────
+        spans.extend(Self::highlight_md_inline(
+            &chars[inline_start..],
+            inline_start,
+        ));
+        spans
+    }
+
+    /// Process inline Markdown elements within a slice of characters.
+    ///
+    /// `offset` is added to every span position so that the caller can pass
+    /// a sub-slice starting partway through the line (e.g. after a list
+    /// marker or blockquote `>`).
+    ///
+    /// Handled constructs:
+    /// - Inline code   `` `code` ``, `` ``code`` ``
+    /// - Bold          `**text**`, `__text__`
+    /// - Bold+Italic   `***text***`, `___text___`
+    /// - Italic        `*text*`  (single `_` intentionally skipped to avoid
+    ///                            false positives with snake_case identifiers)
+    /// - Strikethrough `~~text~~`
+    /// - Images        `![alt](url)`
+    /// - Links         `[text](url)`, `[text][ref]`, standalone `[text]`
+    fn highlight_md_inline(chars: &[char], offset: usize) -> Vec<HighlightSpan> {
+        let mut spans = Vec::new();
+        let len = chars.len();
+        let mut i = 0usize;
+
+        while i < len {
+            let ch = chars[i];
+
+            // ── Inline code (`code` or ``code``) ─────────────────
+            if ch == '`' {
+                let open_start = i;
+                let mut open_count = 0;
+                while i < len && chars[i] == '`' {
+                    open_count += 1;
+                    i += 1;
+                }
+                let code_start = i;
+                let mut found_close = false;
+                while i < len {
+                    if chars[i] == '`' {
+                        let close_start = i;
+                        let mut close_count = 0;
+                        while i < len && chars[i] == '`' {
+                            close_count += 1;
+                            i += 1;
+                        }
+                        if close_count == open_count {
+                            // Opening backticks
+                            spans.push(HighlightSpan {
+                                start: offset + open_start,
+                                end: offset + code_start,
+                                style: HighlightStyle::Delimiter,
+                            });
+                            // Code content
+                            if code_start < close_start {
+                                spans.push(HighlightSpan {
+                                    start: offset + code_start,
+                                    end: offset + close_start,
+                                    style: HighlightStyle::String,
+                                });
+                            }
+                            // Closing backticks
+                            spans.push(HighlightSpan {
+                                start: offset + close_start,
+                                end: offset + i,
+                                style: HighlightStyle::Delimiter,
+                            });
+                            found_close = true;
+                            break;
+                        }
+                        // Mismatched close count — keep searching.
+                    } else {
+                        i += 1;
+                    }
+                }
+                if !found_close {
+                    // Unclosed — mark opening backticks as delimiter, rest as plain.
+                    spans.push(HighlightSpan {
+                        start: offset + open_start,
+                        end: offset + code_start,
+                        style: HighlightStyle::Delimiter,
+                    });
+                    if code_start < i {
+                        spans.push(HighlightSpan {
+                            start: offset + code_start,
+                            end: offset + i,
+                            style: HighlightStyle::Plain,
+                        });
+                    }
+                }
+                continue;
+            }
+
+            // ── Strikethrough (~~text~~) ─────────────────────────
+            if ch == '~' && i + 1 < len && chars[i + 1] == '~' {
+                let open_start = i;
+                i += 2;
+                let content_start = i;
+                let mut found_close = false;
+                while i < len {
+                    if chars[i] == '~' && i + 1 < len && chars[i + 1] == '~' {
+                        spans.push(HighlightSpan {
+                            start: offset + open_start,
+                            end: offset + content_start,
+                            style: HighlightStyle::Operator,
+                        });
+                        if content_start < i {
+                            spans.push(HighlightSpan {
+                                start: offset + content_start,
+                                end: offset + i,
+                                style: HighlightStyle::Plain,
+                            });
+                        }
+                        spans.push(HighlightSpan {
+                            start: offset + i,
+                            end: offset + i + 2,
+                            style: HighlightStyle::Operator,
+                        });
+                        i += 2;
+                        found_close = true;
+                        break;
+                    } else {
+                        i += 1;
+                    }
+                }
+                if !found_close {
+                    // Unclosed — opening ~~ consumed, treat rest as plain.
+                }
+                continue;
+            }
+
+            // ── Image ![alt](url) ────────────────────────────────
+            if ch == '!' && i + 1 < len && chars[i + 1] == '[' {
+                let bang = i;
+                let mut j = i + 2; // skip ![
+                while j < len && chars[j] != ']' {
+                    j += 1;
+                }
+                if j < len && j + 1 < len && chars[j + 1] == '(' {
+                    let mut k = j + 2;
+                    while k < len && chars[k] != ')' {
+                        k += 1;
+                    }
+                    if k < len {
+                        // ! marker
+                        spans.push(HighlightSpan {
+                            start: offset + bang,
+                            end: offset + bang + 1,
+                            style: HighlightStyle::Macro,
+                        });
+                        // [
+                        spans.push(HighlightSpan {
+                            start: offset + bang + 1,
+                            end: offset + bang + 2,
+                            style: HighlightStyle::Delimiter,
+                        });
+                        // alt text
+                        if bang + 2 < j {
+                            spans.push(HighlightSpan {
+                                start: offset + bang + 2,
+                                end: offset + j,
+                                style: HighlightStyle::FunctionCall,
+                            });
+                        }
+                        // ](
+                        spans.push(HighlightSpan {
+                            start: offset + j,
+                            end: offset + j + 2,
+                            style: HighlightStyle::Delimiter,
+                        });
+                        // url
+                        if j + 2 < k {
+                            spans.push(HighlightSpan {
+                                start: offset + j + 2,
+                                end: offset + k,
+                                style: HighlightStyle::String,
+                            });
+                        }
+                        // )
+                        spans.push(HighlightSpan {
+                            start: offset + k,
+                            end: offset + k + 1,
+                            style: HighlightStyle::Delimiter,
+                        });
+                        i = k + 1;
+                        continue;
+                    }
+                }
+                // Not a valid image — skip the '!' and continue.
+                i += 1;
+                continue;
+            }
+
+            // ── Link [text](url) or [text][ref] ──────────────────
+            if ch == '[' {
+                let open_bracket = i;
+                let mut j = i + 1;
+                while j < len && chars[j] != ']' {
+                    j += 1;
+                }
+                if j < len {
+                    let text_end = j;
+
+                    // [text](url)
+                    if j + 1 < len && chars[j + 1] == '(' {
+                        let mut k = j + 2;
+                        while k < len && chars[k] != ')' {
+                            k += 1;
+                        }
+                        if k < len {
+                            // [
+                            spans.push(HighlightSpan {
+                                start: offset + open_bracket,
+                                end: offset + open_bracket + 1,
+                                style: HighlightStyle::Delimiter,
+                            });
+                            // link text
+                            if open_bracket + 1 < text_end {
+                                spans.push(HighlightSpan {
+                                    start: offset + open_bracket + 1,
+                                    end: offset + text_end,
+                                    style: HighlightStyle::FunctionCall,
+                                });
+                            }
+                            // ](
+                            spans.push(HighlightSpan {
+                                start: offset + text_end,
+                                end: offset + text_end + 2,
+                                style: HighlightStyle::Delimiter,
+                            });
+                            // url
+                            if text_end + 2 < k {
+                                spans.push(HighlightSpan {
+                                    start: offset + text_end + 2,
+                                    end: offset + k,
+                                    style: HighlightStyle::String,
+                                });
+                            }
+                            // )
+                            spans.push(HighlightSpan {
+                                start: offset + k,
+                                end: offset + k + 1,
+                                style: HighlightStyle::Delimiter,
+                            });
+                            i = k + 1;
+                            continue;
+                        }
+                    }
+
+                    // [text][ref]
+                    if j + 1 < len && chars[j + 1] == '[' {
+                        let mut k = j + 2;
+                        while k < len && chars[k] != ']' {
+                            k += 1;
+                        }
+                        if k < len {
+                            spans.push(HighlightSpan {
+                                start: offset + open_bracket,
+                                end: offset + open_bracket + 1,
+                                style: HighlightStyle::Delimiter,
+                            });
+                            if open_bracket + 1 < text_end {
+                                spans.push(HighlightSpan {
+                                    start: offset + open_bracket + 1,
+                                    end: offset + text_end,
+                                    style: HighlightStyle::FunctionCall,
+                                });
+                            }
+                            // ][ref]
+                            spans.push(HighlightSpan {
+                                start: offset + text_end,
+                                end: offset + k + 1,
+                                style: HighlightStyle::Delimiter,
+                            });
+                            i = k + 1;
+                            continue;
+                        }
+                    }
+
+                    // Standalone [text] (footnote ref, etc.)
+                    spans.push(HighlightSpan {
+                        start: offset + open_bracket,
+                        end: offset + open_bracket + 1,
+                        style: HighlightStyle::Delimiter,
+                    });
+                    if open_bracket + 1 < text_end {
+                        spans.push(HighlightSpan {
+                            start: offset + open_bracket + 1,
+                            end: offset + text_end,
+                            style: HighlightStyle::FunctionCall,
+                        });
+                    }
+                    spans.push(HighlightSpan {
+                        start: offset + text_end,
+                        end: offset + text_end + 1,
+                        style: HighlightStyle::Delimiter,
+                    });
+                    i = text_end + 1;
+                    continue;
+                }
+                // Unclosed [ — just advance.
+                i += 1;
+                continue;
+            }
+
+            // ── Bold (**text**, __text__) or Bold+Italic (***text***, ___text___)
+            if (ch == '*' || ch == '_') && i + 1 < len && chars[i + 1] == ch {
+                let marker = ch;
+                let open_start = i;
+                let mut open_len = 2;
+                i += 2;
+                // Check for triple (bold + italic)
+                if i < len && chars[i] == marker {
+                    open_len = 3;
+                    i += 1;
+                }
+                let content_start = i;
+                let mut found_close = false;
+                while i < len {
+                    if chars[i] == marker {
+                        let close_start = i;
+                        let mut close_count = 0;
+                        while i < len && chars[i] == marker {
+                            close_count += 1;
+                            i += 1;
+                        }
+                        if close_count >= open_len {
+                            // Opening markers
+                            spans.push(HighlightSpan {
+                                start: offset + open_start,
+                                end: offset + content_start,
+                                style: HighlightStyle::Operator,
+                            });
+                            // Content
+                            if content_start < close_start {
+                                spans.push(HighlightSpan {
+                                    start: offset + content_start,
+                                    end: offset + close_start,
+                                    style: HighlightStyle::Plain,
+                                });
+                            }
+                            // Closing markers
+                            let close_end = close_start + open_len;
+                            spans.push(HighlightSpan {
+                                start: offset + close_start,
+                                end: offset + close_end,
+                                style: HighlightStyle::Operator,
+                            });
+                            i = close_end;
+                            found_close = true;
+                            break;
+                        }
+                        // Not enough closing markers — keep searching.
+                    } else {
+                        i += 1;
+                    }
+                }
+                if !found_close {
+                    // Unclosed bold — opening markers consumed, rest is plain.
+                }
+                continue;
+            }
+
+            // ── Italic (*text*) ──────────────────────────────────
+            // Note: _text_ italic is intentionally NOT handled to avoid false
+            // positives with snake_case identifiers common in technical Markdown.
+            if ch == '*' {
+                let open_start = i;
+                i += 1;
+                let content_start = i;
+                let mut found_close = false;
+                while i < len {
+                    if chars[i] == '*' {
+                        // Opening *
+                        spans.push(HighlightSpan {
+                            start: offset + open_start,
+                            end: offset + content_start,
+                            style: HighlightStyle::Operator,
+                        });
+                        // Italic content
+                        if content_start < i {
+                            spans.push(HighlightSpan {
+                                start: offset + content_start,
+                                end: offset + i,
+                                style: HighlightStyle::Plain,
+                            });
+                        }
+                        // Closing *
+                        spans.push(HighlightSpan {
+                            start: offset + i,
+                            end: offset + i + 1,
+                            style: HighlightStyle::Operator,
+                        });
+                        i += 1;
+                        found_close = true;
+                        break;
+                    } else {
+                        i += 1;
+                    }
+                }
+                // Unclosed italic — opening * already consumed, rest is plain.
+                continue;
+            }
+
+            // Default: advance past any other character (no span emitted;
+            // uncovered regions are implicitly Plain).
             i += 1;
         }
 
@@ -714,6 +1321,18 @@ impl Highlighter {
         }
 
         let (ts_lang, mut hl_config) = match lang {
+            Language::Markdown => {
+                let ts_lang = tree_sitter_md::LANGUAGE.into();
+                let mut config = tree_sitter_highlight::HighlightConfiguration::new(
+                    ts_lang,
+                    "markdown",
+                    tree_sitter_md::HIGHLIGHT_QUERY,
+                    "", // no injections query typically
+                    "", // no locals query typically
+                )
+                .ok()?;
+                (config.language.clone(), config)
+            }
             Language::Rust => {
                 let ts_lang = tree_sitter_rust::LANGUAGE.into();
                 let mut config = tree_sitter_highlight::HighlightConfiguration::new(

@@ -287,6 +287,7 @@ pub enum Action {
     ClearMessages,
     RepeatLastAction,
     RunBuild,
+    SwitchToBuild,
     None,
 }
 
@@ -512,6 +513,7 @@ impl Action {
             | Self::ClearMessages
             | Self::RepeatLastAction
             | Self::ShowShortcuts
+            | Self::SwitchToBuild
             | Self::Guide
             | Self::RunBuild
             | Self::None => ActionCategory::Misc,

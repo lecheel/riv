@@ -7,8 +7,8 @@
 
 ## Overview
 
-A terminal-based text editor written in Rust, designed with Vim-inspired modal editing at its core. 
-The editor integrates modern development features including LSP support, AI code completion, 
+A terminal-based text editor written in Rust, designed with Vim-inspired modal editing at its core.
+The editor integrates modern development features including LSP support, AI code completion,
 Git integration, and LLM assistance while maintaining a lightweight terminal interface.
 
 **8 editing modes:** Normal, Insert, Visual, Visual Line, Visual Block, Command, Operator-Pending, Replace
@@ -19,8 +19,11 @@ Git integration, and LLM assistance while maintaining a lightweight terminal int
 cargo build --release
 ./target/release/riv [file]
 ```
+```
+
 ![image](./riv01.png)
 ![image](./riv02.png)
+
 ## Architecture
 
 | Component | Description |
@@ -165,6 +168,7 @@ This editor is optimized for my daily development workflow. Some operations diff
 | Summarize | `'` → summarize |
 
 **LLM Session:**
+
 - `gai` – Open LLM chat buffer
 - Split layout for prompt/response
 - `Ctrl-R` in prompt – Insert register, word, line, file path
@@ -183,6 +187,7 @@ This editor is optimized for my daily development workflow. Some operations diff
 | `:GCommit` | Git commit |
 
 **In Git status buffer:**
+
 - `s` – Stage file
 - `a` – Add file
 - `c` – Commit
@@ -242,6 +247,7 @@ This editor is optimized for my daily development workflow. Some operations diff
 ### Core Components
 
 **Keybind Manager** (`keybind.rs`)
+
 - Per-mode keymaps (normal, insert, visual, command)
 - Multi-key sequence support (e.g., `gg`, `dd`, `gcc`)
 - Which-key style hints for pending sequences
@@ -249,6 +255,7 @@ This editor is optimized for my daily development workflow. Some operations diff
 - `parse_key_str()` and `parse_action_str()` for config parsing
 
 **Buffer Collection** (`buffer.rs`)
+
 - Manages multiple buffers (normal, LLM, ripgrep, git status/diff/log, LLM input)
 - Dirty state tracking
 - Undo tree with branching and grouping
@@ -256,12 +263,14 @@ This editor is optimized for my daily development workflow. Some operations diff
 - Unicode grapheme-cluster-aware cursor positioning
 
 **Window Manager** (`window.rs`)
+
 - Handles split windows (horizontal/vertical)
 - Cursor position management per window
 - Viewport scrolling
 - Resize handling
 
 **Command Registry** (`command_registry.rs`)
+
 - Extensible command system for `:` commands
 - Built-in commands for file ops, git, LLM, etc.
 - Command history with prefix-filtering
@@ -327,6 +336,7 @@ RUST_LOG=debug ./target/release/riv [file]
 ```
 
 ## ⚠️ Development Status
+
 This editor is under active development for my daily workflow. Current known limitations:
 
 - May contain bugs that could corrupt data
@@ -344,4 +354,5 @@ This editor is under active development for my daily workflow. Current known lim
 ## Contributing
 
 Contributions welcome! Please test thoroughly before submitting PRs.
-```
+
+```text

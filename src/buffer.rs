@@ -53,6 +53,7 @@ pub enum Language {
     TypeScript,
     Python,
     PlainText,
+    Markdown,
     GitLog,
     GitDiff,
     Build,
@@ -67,6 +68,7 @@ impl Language {
             "js" | "mjs" | "jsx" => Language::JavaScript,
             "ts" | "tsx" => Language::TypeScript,
             "py" | "pyw" | "pyi" => Language::Python,
+            "md" => Language::Markdown,
             _ => Language::PlainText,
         }
     }
@@ -78,6 +80,7 @@ impl Language {
             Language::JavaScript => "javascript",
             Language::TypeScript => "typescript",
             Language::Python => "python",
+            Language::Markdown => "markdown",
             Language::GitLog => "gitlog",
             Language::GitDiff => "gitdiff",
             Language::GitCommit => "gitcommit",
@@ -93,6 +96,7 @@ impl Language {
             Language::JavaScript => "javascript",
             Language::TypeScript => "typescript",
             Language::Python => "python",
+            Language::Markdown => "markdown",
             Language::PlainText => "plain",
             Language::GitLog => "plain",
             Language::Build => "plain",

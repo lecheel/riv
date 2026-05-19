@@ -61,7 +61,7 @@ pub trait BuildExt {
 
     /// Jump to the previous build error in the quickfix list.
     fn build_prev_error(&mut self) -> CommandResult;
-
+    fn switch_to_build_buffer(&mut self) -> CommandResult;
     fn build_insert_brace_content(&mut self) -> CommandResult;
     fn build_insert_error_snippet(&mut self) -> CommandResult;
     fn quickfix_next(&mut self) -> CommandResult;
@@ -345,6 +345,26 @@ impl BuildExt for Editor {
         }
 
         goto_result
+    }
+    fn switch_to_build_buffer(&mut self) -> CommandResult {
+        let build_id = self
+            .buffers
+            .iter()
+            .find(|b| b.kind == BufferKind::Build)
+            .map(|b| b.id);
+
+        match build_id {
+            Some(id) => {
+                self.save_current_position();
+                if let Some(w) = self.windows.active_window_mut() {
+                    w.set_buffer(id);
+                    w.cursor.position = Default::default();
+                }
+                self.dirty.mark_all();
+                CommandResult::ViewChanged
+            }
+            None => CommandResult::Message("No build buffer. Run :build first.".into()),
+        }
     }
 }
 

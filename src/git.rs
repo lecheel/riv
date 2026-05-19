@@ -45,6 +45,44 @@ impl HunkRange {
     }
 }
 
+/// A normalized editor-space hunk.
+///
+/// Unlike raw git diff ranges, this represents the hunk exactly
+/// as it appears inside the editor UI.
+///
+/// All editor systems should use this:
+/// - gutter
+/// - popup
+/// - navigation
+/// - revert hit testing
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EditorHunk {
+    /// Visual/editor-space start line (0-based inclusive).
+    pub start: usize,
+
+    /// Visual/editor-space end line (0-based exclusive).
+    pub end: usize,
+
+    /// Primary hunk kind.
+    pub kind: GitSign,
+
+    /// Gutter signs belonging to this hunk.
+    pub signs: Vec<EditorSign>,
+
+    /// Original parsed git hunk.
+    pub diff: DiffHunk,
+}
+
+/// A single editor-space gutter sign.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EditorSign {
+    /// 0-based editor line.
+    pub line: usize,
+
+    /// Sign type.
+    pub kind: GitSign,
+}
+
 // ── Error ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Error)]
@@ -292,13 +330,35 @@ impl GitProvider {
     }
 
     /// Compute simplified hunk ranges from a diff, suitable for gutter display
-    /// and hunk navigation. Each range describes the changed lines in the
-    /// working-tree version of the file.
+    /// and hunk navigation.
+    ///
+    /// IMPORTANT:
+    /// Git deletion hunks do not map cleanly to working-tree line ranges.
+    /// Especially for EOF deletions, git may report:
+    ///
+    ///     @@ -151,25 +150,3 @@
+    ///
+    /// which visually occupies lines 150..153 in the editor even though
+    /// `new_count == 3`.
+    ///
+    /// The gutter renderer already places `RemovedAbove` signs on the
+    /// visible editor line (including EOF synthetic positions), so the
+    /// hunk range must match the visible editor-space span rather than
+    /// the raw new-file span.
+    ///
+    /// Otherwise:
+    /// - gutter sign appears on line 153
+    /// - next_hunk jumps to 150
+    /// - revert/popup fail at 153
+    ///
     pub fn hunk_ranges(hunks: &[DiffHunk]) -> Vec<HunkRange> {
         let mut ranges = Vec::new();
+
         for hunk in hunks {
             let has_add = hunk.lines.iter().any(|l| l.type_ == DiffLineType::Add);
+
             let has_del = hunk.lines.iter().any(|l| l.type_ == DiffLineType::Delete);
+
             let kind = if has_del && has_add {
                 GitSign::Modified
             } else if has_add {
@@ -306,16 +366,38 @@ impl GitProvider {
             } else {
                 GitSign::RemovedAbove
             };
+
+            let start = hunk.new_start.saturating_sub(1);
+
+            // Base visible span from new-file lines.
+            let mut count = hunk.new_count.max(1);
+
+            // Pure deletions visually occupy one extra editor line
+            // because the deletion marker is rendered "between" lines.
+            //
+            // Example:
+            //
+            //     @@ -151,25 +150,3 @@
+            //
+            // new_count = 3
+            //
+            // but gutter marker appears on line 153 (EOF marker line),
+            // so the visible editor-space range must include it.
+            //
+            if has_del && !has_add {
+                count += 1;
+            }
+
             ranges.push(HunkRange {
-                start: hunk.new_start.saturating_sub(1),
-                count: hunk.new_count,
+                start,
+                count,
                 kind,
                 header: hunk.header.clone(),
             });
         }
+
         ranges
     }
-
     /// Build per-line sign map from hunk ranges (coarse: one kind per hunk).
     /// Prefer `line_signs_from_diff` for accurate per-line signs.
     pub fn line_signs(ranges: &[HunkRange]) -> std::collections::HashMap<usize, GitSign> {
@@ -568,6 +650,128 @@ impl GitProvider {
         // git diff --no-index exits 1 when differences exist — not an error.
         let stdout = String::from_utf8(output.stdout)?;
         parse_diff(&stdout)
+    }
+    /// Normalize raw git diff hunks into editor-space hunks.
+    ///
+    /// This is the canonical UI representation.
+    ///
+    /// IMPORTANT:
+    /// Git diff coordinates are NOT identical to editor-space coordinates,
+    /// especially for deletions and EOF delete hunks.
+    ///
+    /// This function converts raw diff geometry into:
+    /// - visual editor ranges
+    /// - gutter signs
+    /// - navigation spans
+    ///
+    /// so every editor subsystem uses the SAME geometry.
+    pub fn build_editor_hunks(hunks: &[DiffHunk]) -> Vec<EditorHunk> {
+        let mut result = Vec::new();
+
+        for (hunk_idx, hunk) in hunks.iter().enumerate() {
+            let mut signs = Vec::new();
+
+            let mut pending_deletes = 0usize;
+
+            let mut min_line = usize::MAX;
+            let mut max_line = 0usize;
+
+            let mut has_add = false;
+            let mut has_del = false;
+
+            for line in &hunk.lines {
+                match line.type_ {
+                    DiffLineType::Add => {
+                        has_add = true;
+
+                        if let Some(new_ln) = line.new_lineno {
+                            let line_idx = new_ln.saturating_sub(1);
+
+                            let kind = if pending_deletes > 0 {
+                                pending_deletes -= 1;
+                                GitSign::Modified
+                            } else {
+                                GitSign::Added
+                            };
+
+                            signs.push(EditorSign {
+                                line: line_idx,
+                                kind,
+                            });
+
+                            min_line = min_line.min(line_idx);
+                            max_line = max_line.max(line_idx);
+                        }
+                    }
+
+                    DiffLineType::Delete => {
+                        has_del = true;
+                        pending_deletes += 1;
+                    }
+
+                    DiffLineType::Context => {
+                        if let Some(new_ln) = line.new_lineno {
+                            let line_idx = new_ln.saturating_sub(1);
+
+                            min_line = min_line.min(line_idx);
+                            max_line = max_line.max(line_idx);
+
+                            if pending_deletes > 0 {
+                                signs.push(EditorSign {
+                                    line: line_idx,
+                                    kind: GitSign::RemovedAbove,
+                                });
+
+                                pending_deletes = 0;
+                            }
+                        }
+                    }
+
+                    DiffLineType::HunkHeader => {}
+                }
+            }
+
+            // Flush trailing deletes (EOF delete handling)
+            if pending_deletes > 0 {
+                let target = if let Some(next_hunk) = hunks.get(hunk_idx + 1) {
+                    next_hunk.new_start.saturating_sub(1)
+                } else {
+                    hunk.new_start.saturating_sub(1) + hunk.new_count
+                };
+
+                signs.push(EditorSign {
+                    line: target,
+                    kind: GitSign::RemovedAbove,
+                });
+
+                min_line = min_line.min(target);
+                max_line = max_line.max(target);
+            }
+
+            let kind = if has_add && has_del {
+                GitSign::Modified
+            } else if has_add {
+                GitSign::Added
+            } else {
+                GitSign::RemovedAbove
+            };
+
+            // Fallback safety
+            if min_line == usize::MAX {
+                min_line = hunk.new_start.saturating_sub(1);
+                max_line = min_line;
+            }
+
+            result.push(EditorHunk {
+                start: min_line,
+                end: max_line + 1,
+                kind,
+                signs,
+                diff: hunk.clone(),
+            });
+        }
+
+        result
     }
 }
 

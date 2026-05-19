@@ -33,7 +33,7 @@ use crate::ed::{
 use crate::ed::{GitDiffExt, GitLogExt, GitStatusExt};
 use crate::ed::{TextObjectExt, TextObjectKind, TextObjectOperator};
 use crate::ghost_text::GhostTextManager;
-use crate::git::DiffHunk;
+use crate::git::EditorHunk;
 use crate::keybind::{
     apply_custom_keybindings, default_command_keymap, default_insert_keymap, default_normal_keymap,
     default_visual_keymap, KeyBindManager, KeyBindResult,
@@ -371,7 +371,7 @@ pub struct Editor {
     /// Whether the git gutter sign column is enabled.
     pub git_gutter_enabled: bool,
     /// Cached diff hunks for the active buffer (for hunk revert).
-    pub cached_diff_hunks: Vec<DiffHunk>,
+    pub cached_diff_hunks: Vec<EditorHunk>,
     /// Timestamp of the last content change that invalidated the git gutter.
     pub git_gutter_dirty_since: Option<Instant>,
     /// Debounce interval (milliseconds) for git gutter recomputation after edits.
@@ -3857,6 +3857,7 @@ impl Editor {
                 CommandResult::ViewChanged
             }
             Action::RunBuild => self.run_build(),
+            Action::SwitchToBuild => self.switch_to_build_buffer(),
             Action::RipgrepUnderCursor => self.ripgrep_under_cursor(),
             Action::RipgrepInput => {
                 self.command_prompt.clear();

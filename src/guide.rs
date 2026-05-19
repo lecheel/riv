@@ -177,8 +177,9 @@ fn extract_guide_marker(line: &str) -> Option<ParsedGuideMarker> {
         } else {
             anchor
         };
+        // adjust plain comment using empty kind:w
         let kind = if kind.is_empty() {
-            "fn".to_string()
+            "usr".to_string()
         } else {
             kind
         };
