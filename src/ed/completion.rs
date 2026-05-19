@@ -169,9 +169,9 @@ impl CompletionExt for Editor {
 
         if self.completion.active {
             if word.is_empty() {
-                let old_rect = self.overlay.completion;
+                let old_rect = self.popup.overlay.completion;
                 self.completion.cancel();
-                self.overlay.completion = None;
+                self.popup.overlay.completion = None;
                 if let Some(rect) = old_rect {
                     self.dirty.mark_popup_closed(rect);
                 }
@@ -188,9 +188,9 @@ impl CompletionExt for Editor {
                 .unwrap_or(false);
 
             if is_path != was_path {
-                let old_rect = self.overlay.completion;
+                let old_rect = self.popup.overlay.completion;
                 self.completion.cancel();
-                self.overlay.completion = None;
+                self.popup.overlay.completion = None;
                 if let Some(rect) = old_rect {
                     self.dirty.mark_popup_closed(rect);
                 }
@@ -210,9 +210,9 @@ impl CompletionExt for Editor {
                 .unwrap_or(false);
 
             if !prefix_compatible && !is_path {
-                let old_rect = self.overlay.completion;
+                let old_rect = self.popup.overlay.completion;
                 self.completion.cancel();
-                self.overlay.completion = None;
+                self.popup.overlay.completion = None;
                 if let Some(rect) = old_rect {
                     self.dirty.mark_popup_closed(rect);
                 }
@@ -291,7 +291,7 @@ impl CompletionExt for Editor {
     }
 
     fn request_completion_resolve(&mut self) {
-        if !self.lsp_connected {
+        if !self.lsp.connected {
             return;
         }
 
@@ -309,8 +309,7 @@ impl CompletionExt for Editor {
 
         if let Some(lsp_item) = lsp_item {
             if lsp_item.data.is_some() {
-                let _ = self
-                    .lsp_tx
+                let _ = self.lsp.tx
                     .send(crate::lsp::LspMessage::ResolveCompletionItem(lsp_item));
             }
         }
@@ -375,9 +374,9 @@ impl CompletionExt for Editor {
             self.insert_text_at_cursor(&text);
 
             // Step 4: Dismiss popup and reparse
-            let old_rect = self.overlay.completion;
+            let old_rect = self.popup.overlay.completion;
             self.completion.cancel();
-            self.overlay.completion = None;
+            self.popup.overlay.completion = None;
 
             if let Some(window) = self.windows.active_window() {
                 let buffer_id = window.buffer_id;
@@ -397,9 +396,9 @@ impl CompletionExt for Editor {
 
             CommandResult::ContentChanged
         } else {
-            let old_rect = self.overlay.completion;
+            let old_rect = self.popup.overlay.completion;
             self.completion.cancel();
-            self.overlay.completion = None;
+            self.popup.overlay.completion = None;
 
             if let Some(rect) = old_rect {
                 self.dirty.mark_popup_closed(rect);
@@ -428,7 +427,8 @@ impl CompletionExt for Editor {
         let (range_prefix, after_range) = strip_range_prefix(input);
 
         const FILE_ARG_COMMANDS: &[&str] = &[
-            "e", "edit", "open", "sp", "split", "vs", "vsplit", "find", "tabe", "tabedit",
+            "e", "edit", "open", "sp", "split", "vs", "vsplit", "find", "tabe", "tabedit", "w",
+            "write",
         ];
 
         if let Some(space_pos) = after_range.find(|c: char| c.is_whitespace()) {
@@ -458,34 +458,6 @@ impl CompletionExt for Editor {
                         ..entry
                     })
                     .collect();
-
-                let cmd_lower = cmd_name.to_lowercase();
-                let cmd_items: Vec<crate::completion::CompletionEntry> = self
-                    .command_registry
-                    .all_names()
-                    .iter()
-                    .filter(|(display_name, _)| display_name.to_lowercase().starts_with(&cmd_lower))
-                    .map(|(display_name, canonical)| {
-                        let desc = self
-                            .command_registry
-                            .get(canonical)
-                            .map(|e| e.description.clone())
-                            .unwrap_or_default();
-                        let score = crate::completion::compute_score(display_name, &cmd_lower);
-                        crate::completion::CompletionEntry {
-                            text: format!("{}{}", range_prefix, display_name),
-                            label: format!("{}{}", range_prefix, display_name),
-                            detail: Some(desc),
-                            documentation: None,
-                            kind: crate::completion::CompletionKind::Keyword,
-                            source: crate::completion::CompletionSource::BufferWords,
-                            score,
-                            lsp_item: None,
-                        }
-                    })
-                    .collect();
-
-                items.extend(cmd_items);
 
                 items.sort_by(|a, b| {
                     b.score

@@ -100,12 +100,12 @@ impl GitStatusExt for Editor {
 
         match GitProvider::new(&git_root) {
             Ok(gp) => {
-                let needs_update = match &self.git_provider {
+                let needs_update = match &self.git.provider {
                     Some(existing) => existing.repo_path() != git_root,
                     None => true,
                 };
                 if needs_update {
-                    self.git_provider = Some(gp);
+                    self.git.provider = Some(gp);
                 }
             }
             Err(e) => return CommandResult::Error(format!("Failed to init git: {}", e)),
@@ -134,7 +134,7 @@ impl GitStatusExt for Editor {
     }
 
     fn git_status_refresh(&mut self) -> CommandResult {
-        let git_provider = match &self.git_provider {
+        let git_provider = match &self.git.provider {
             Some(gp) => gp,
             None => return CommandResult::Error("Not a git repository".to_string()),
         };
@@ -263,7 +263,7 @@ impl GitStatusExt for Editor {
             }
         };
 
-        let git_provider = match &self.git_provider {
+        let git_provider = match &self.git.provider {
             Some(gp) => gp,
             None => return CommandResult::Error("Not a git repository".to_string()),
         };
@@ -292,7 +292,7 @@ impl GitStatusExt for Editor {
             None => return CommandResult::Message("Move cursor to a file to add".to_string()),
         };
 
-        let git_provider = match &self.git_provider {
+        let git_provider = match &self.git.provider {
             Some(gp) => gp,
             None => return CommandResult::Error("Not a git repository".to_string()),
         };
@@ -313,7 +313,7 @@ impl GitStatusExt for Editor {
             None => return CommandResult::Message("Move cursor to a file to open it".to_string()),
         };
 
-        let git_provider = match &self.git_provider {
+        let git_provider = match &self.git.provider {
             Some(gp) => gp,
             None => return CommandResult::Error("Not a git repository".to_string()),
         };

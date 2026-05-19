@@ -275,30 +275,77 @@ pub fn levenshtein_distance(a: &str, b: &str) -> usize {
 }
 
 pub fn find_git_root(start_dir: &Path) -> Option<PathBuf> {
-    let effective_dir = if !start_dir.exists() {
+    let effective_dir = if start_dir.is_file() {
         start_dir
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| Path::new(".").to_path_buf())
-    } else if start_dir.is_file() {
-        start_dir.parent()?.to_path_buf()
-    } else {
+    } else if start_dir.exists() {
         start_dir.to_path_buf()
+    } else {
+        // File/dir doesn't exist: try its parent, or fall back to CWD
+        start_dir
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| Path::new(".").to_path_buf())
     };
 
     std::process::Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
-        .current_dir(effective_dir)
+        .current_dir(&effective_dir)
         .output()
         .ok()
         .filter(|output| output.status.success())
         .and_then(|output| {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if path.is_empty() {
+            let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if path_str.is_empty() {
                 None
             } else {
-                Some(PathBuf::from(path))
+                let p = PathBuf::from(path_str);
+                // Canonicalize the git root so symlinks are resolved,
+                // matching the absolute paths derived in display_path.
+                Some(std::fs::canonicalize(&p).unwrap_or(p))
             }
         })
+}
+
+/// Return a display-friendly path: if the file lives inside a git repo,
+/// strip the repo-root prefix so `/home/user/project/src/main.rs` becomes
+/// `src/main.rs`.  Otherwise return the path unchanged.
+pub fn display_path(path: &Path, git_root: Option<&Path>) -> String {
+    if let Some(root) = git_root {
+        // We need an absolute path to successfully strip the absolute git root prefix.
+        // If the path is already absolute, use it; otherwise, resolve it against CWD.
+        let abs_path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir().unwrap_or_default().join(path)
+        };
+
+        if let Ok(relative) = abs_path.strip_prefix(root) {
+            let rel = relative.to_string_lossy();
+            let trimmed = rel.trim_start_matches(std::path::MAIN_SEPARATOR);
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+    }
+    path.to_string_lossy().to_string()
+}
+
+/// Extract the command verb from a command-line buffer string.
+///
+/// `:e /tmp/foo`   → `"e"`
+/// `:vs src/`      → `"vs"`
+/// `e /tmp/foo`    → `"e"`
+/// `/tmp/foo`      → `""` (no verb, bare path — leave untouched)
+pub fn extract_command_prefix(buf: &str) -> &str {
+    let s = buf.trim_start_matches(':').trim_start();
+    // Split on first whitespace
+    match s.split_once(|c: char| c.is_whitespace()) {
+        Some((verb, _arg)) => verb,
+        None => "", // No space yet → no arg portion exists, completion replaces all
+    }
 }

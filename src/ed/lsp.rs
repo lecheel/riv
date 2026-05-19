@@ -90,8 +90,8 @@ impl LspExt for Editor {
                     // Re-detecting here is wrong: the cursor has already moved past the
                     // trigger character, so detect_completion_trigger() returns None and
                     // the member-access path is skipped, letting buffer words leak in.
-                    let after_trigger_char = self.lsp_completion_was_trigger;
-                    self.lsp_completion_was_trigger = false; // consume it
+                    let after_trigger_char = self.lsp.completion_was_trigger;
+                    self.lsp.completion_was_trigger = false; // consume it
                                                              // ─────────────────────────────────────────────────────────────────────
 
                     let should_try_lsp_ghost = !after_trigger_char
@@ -262,7 +262,7 @@ impl LspExt for Editor {
         // Record whether this request was triggered by a trigger character
         // (dot / colon).  We read this flag when the response arrives so we
         // don't re-detect the trigger at response time (cursor has moved by then).
-        self.lsp_completion_was_trigger = trigger.is_some();
+        self.lsp.completion_was_trigger = trigger.is_some();
         // ─────────────────────────────────────────────────────────────────────
 
         self.send_lsp_message(crate::lsp::LspMessage::RequestCompletion(
@@ -474,7 +474,7 @@ impl LspExt for Editor {
             crate::ed::tag::tag_jump(self, &path, line, &word);
 
             let popup = TagListPopup::from_lsp_locations(&word, &locations);
-            self.tag_list_popup = Some(popup);
+            self.popup.tag_list = Some(popup);
 
             self.set_status(format!(
                 "{} definitions found — select in popup",
@@ -496,54 +496,54 @@ impl Editor {
         self.mode
     }
     fn is_lsp_connected(&self) -> bool {
-        self.lsp_connected
+        self.lsp.connected
     }
     fn set_lsp_connected(&mut self, value: bool) {
-        self.lsp_connected = value;
+        self.lsp.connected = value;
     }
     fn set_lsp_completion_pending(&mut self, value: bool) {
-        self.lsp_completion_pending = value;
+        self.lsp.completion_pending = value;
     }
     fn is_lsp_change_pending(&self) -> bool {
-        self.lsp_change_pending
+        self.lsp.change_pending
     }
     fn set_lsp_change_pending(&mut self, value: bool) {
-        self.lsp_change_pending = value;
+        self.lsp.change_pending = value;
     }
     fn clear_lsp_change_deadline(&mut self) {
-        self.lsp_change_deadline = None;
+        self.lsp.change_deadline = None;
     }
     fn set_lsp_change_deadline(&mut self, deadline: Instant) {
-        self.lsp_change_deadline = Some(deadline);
+        self.lsp.change_deadline = Some(deadline);
     }
     fn get_lsp_change_debounce_ms(&self) -> u64 {
-        self.lsp_change_debounce_ms
+        self.lsp.change_debounce_ms
     }
     fn increment_lsp_doc_version(&mut self) {
-        self.lsp_doc_version += 1;
+        self.lsp.doc_version += 1;
     }
     fn get_lsp_doc_version(&self) -> i32 {
-        self.lsp_doc_version
+        self.lsp.doc_version
     }
     fn is_paste_in_progress(&self) -> bool {
         self.paste_in_progress
     }
 
     fn send_lsp_message(&mut self, msg: crate::lsp::LspMessage) {
-        let _ = self.lsp_tx.send(msg);
+        let _ = self.lsp.tx.send(msg);
     }
 
     fn remove_lsp_diagnostics(&mut self, uri: &str) {
-        self.lsp_diagnostics.remove(uri);
+        self.lsp.diagnostics.remove(uri);
     }
     fn insert_lsp_diagnostics(&mut self, uri: String, diagnostics: Vec<crate::lsp::Diagnostic>) {
-        self.lsp_diagnostics.insert(uri, diagnostics);
+        self.lsp.diagnostics.insert(uri, diagnostics);
     }
     fn insert_lsp_inlay_hints(&mut self, uri: String, hints: Vec<crate::lsp::InlayHint>) {
-        self.lsp_inlay_hints.insert(uri, hints);
+        self.lsp.inlay_hints.insert(uri, hints);
     }
     fn set_lsp_signature_help(&mut self, help: Option<crate::lsp::SignatureHelpState>) {
-        self.lsp_signature_help = help;
+        self.lsp.signature_help = help;
     }
 
     fn is_completion_active(&self) -> bool {
@@ -558,17 +558,17 @@ impl Editor {
     }
 
     fn set_formatting_pending(&mut self, pending: bool) {
-        self.formatting_pending = pending;
+        self.lsp.formatting_pending = pending;
     }
     fn clear_formatting_buffer_id(&mut self) {
-        self.formatting_buffer_id = None;
+        self.lsp.formatting_buffer_id = None;
     }
 
     fn set_lsp_completion_was_trigger(&mut self, value: bool) {
-        self.lsp_completion_was_trigger = value;
+        self.lsp.completion_was_trigger = value;
     }
     fn get_lsp_completion_was_trigger(&self) -> bool {
-        self.lsp_completion_was_trigger
+        self.lsp.completion_was_trigger
     }
 
     /// OPT: detect completion trigger without grapheme segmentation

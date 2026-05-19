@@ -376,11 +376,11 @@ impl Editor {
             .unwrap_or(crate::buffer::CursorPosition { line: 0, col: 0 });
 
         if let Some(path) = current_path {
-            self.tag_manager.push_stack(path, cursor.line, cursor.col);
+            self.search.tag_manager.push_stack(path, cursor.line, cursor.col);
         }
 
         if let Some(window) = self.windows.active_window() {
-            self.last_jump_mark = Some((window.buffer_id, cursor));
+            self.search.last_jump_mark = Some((window.buffer_id, cursor));
         }
     }
 }

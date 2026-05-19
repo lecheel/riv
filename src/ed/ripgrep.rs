@@ -345,6 +345,15 @@ impl RipgrepExt for Editor {
 
         let buffer_id = self.buffers.open_file(path).map_err(|e| e.to_string())?;
 
+        // Cache git root for display_name() path stripping. This is normally
+        // done in FileOpsExt::open_file, but we bypass it here to prevent
+        // restore_cursor_position from overwriting the match line.
+        if let Some(buf) = self.buffers.get_mut(&buffer_id) {
+            if buf.git_root.is_none() {
+                buf.git_root = crate::misc::find_git_root(path);
+            }
+        }
+
         if self.mode != Mode::Normal {
             self.enter_mode(Mode::Normal);
         }
@@ -471,11 +480,16 @@ impl Editor {
 
         match self.open_file_at_line(&file_path, line_number) {
             Ok(()) => {
+                // Use display_name() for the status message so it respects git_root stripping
+                let buf_name = self
+                    .current_buffer()
+                    .map(|b| b.display_name())
+                    .unwrap_or_else(|| file_path.display().to_string());
                 self.set_status(format!(
                     "Result {}/{}: {}:{}",
                     self.quickfix_index + 1,
                     self.quickfix_results.len(),
-                    file_path.display(),
+                    buf_name,
                     line_number
                 ));
                 CommandResult::ViewChanged
@@ -505,11 +519,16 @@ impl Editor {
 
         match self.open_file_at_line(&file_path, line_number) {
             Ok(()) => {
+                // Use display_name() for the status message so it respects git_root stripping
+                let buf_name = self
+                    .current_buffer()
+                    .map(|b| b.display_name())
+                    .unwrap_or_else(|| file_path.display().to_string());
                 self.set_status(format!(
                     "Result {}/{}: {}:{}",
                     self.quickfix_index + 1,
                     self.quickfix_results.len(),
-                    file_path.display(),
+                    buf_name,
                     line_number
                 ));
                 CommandResult::ViewChanged

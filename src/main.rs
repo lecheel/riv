@@ -39,6 +39,7 @@ mod render;
 pub mod ripgrep;
 mod rounded_box;
 mod session;
+mod state;
 mod status;
 mod tags;
 mod terminal;
@@ -46,7 +47,6 @@ mod terminal_sanitize;
 mod undo;
 mod vocab;
 mod window;
-mod popup_ext;
 
 use crate::ed::FileOpsExt;
 use crate::ed::GitExt;

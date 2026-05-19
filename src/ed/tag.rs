@@ -33,27 +33,27 @@ pub fn tag_under_cursor(editor: &mut Editor) {
     // Step 3: Initialize tag manager for current file
     let file_path = editor.current_buffer().and_then(|b| b.file_path.clone());
     if let Some(ref path) = file_path {
-        editor.tag_manager.init(path);
+        editor.search.tag_manager.init(path);
     }
 
     // Load tags if they exist but aren't in memory
-    if editor.tag_manager.is_empty() && editor.tag_manager.tag_file_exists() {
-        if let Err(e) = editor.tag_manager.load_tags_file() {
+    if editor.search.tag_manager.is_empty() && editor.search.tag_manager.tag_file_exists() {
+        if let Err(e) = editor.search.tag_manager.load_tags_file() {
             editor.set_infobar_message(format!("Failed to load tags: {}", e));
             return;
         }
     }
 
     // Step 4: Try the stripped name first, then the full word
-    let matches = editor.tag_manager.find_tags(&tag_name);
+    let matches = editor.search.tag_manager.find_tags(&tag_name);
     let matches = if matches.is_empty() && tag_name != word {
-        editor.tag_manager.find_tags(&word)
+        editor.search.tag_manager.find_tags(&word)
     } else {
         matches
     };
 
     if matches.is_empty() {
-        if editor.tag_manager.tag_file_exists() {
+        if editor.search.tag_manager.tag_file_exists() {
             editor.set_infobar_message(format!("Tag '{}' not found", tag_name));
         } else {
             editor.set_infobar_message(format!(
@@ -144,30 +144,30 @@ fn is_tag_word_char(c: char) -> bool {
 pub(crate) fn handle_tag_matches(editor: &mut Editor, matches: Vec<TagEntry>, word: &str) {
     if matches.len() == 1 {
         let tag = matches[0].clone();
-        let root = editor.tag_manager.project_root().to_path_buf();
+        let root = editor.search.tag_manager.project_root().to_path_buf();
         let path = root.join(&tag.file);
         tag_jump(editor, &path, tag.line, &tag.name);
-        editor.tag_manager.set_current_matches(matches);
+        editor.search.tag_manager.set_current_matches(matches);
         editor.set_status(format!("Tag: {}", word));
     } else {
-        editor.tag_results = matches.clone();
-        editor.tag_manager.set_current_matches(matches.clone());
+        editor.search.tag_results = matches.clone();
+        editor.search.tag_manager.set_current_matches(matches.clone());
 
         // NEW: Interactive tag list popup instead of FloatPopup
-        let popup = TagListPopup::new(word, &matches, editor.tag_manager.project_root());
-        editor.tag_list_popup = Some(popup);
+        let popup = TagListPopup::new(word, &matches, editor.search.tag_manager.project_root());
+        editor.popup.tag_list = Some(popup);
         // NO active_popup — just check tag_list_popup.is_some()
 
         // Jump to first match as preview
-        if let Some(tag) = editor.tag_manager.current_match().cloned() {
-            let root = editor.tag_manager.project_root().to_path_buf();
+        if let Some(tag) = editor.search.tag_manager.current_match().cloned() {
+            let root = editor.search.tag_manager.project_root().to_path_buf();
             let path = root.join(&tag.file);
             tag_jump(editor, &path, tag.line, &tag.name);
         }
 
         editor.set_status(format!(
             "{} matches for '{}' — select in popup or :tn/:tp to cycle",
-            editor.tag_results.len(),
+            editor.search.tag_results.len(),
             word
         ));
     }
@@ -196,8 +196,7 @@ pub fn tag_jump(editor: &mut Editor, filepath: &PathBuf, line: usize, name: &str
 
     if !same_file || cursor.line != target_line {
         if let Some(ref cur_path) = current_path {
-            editor
-                .tag_manager
+            editor.search.tag_manager
                 .push_stack(cur_path.clone(), cursor.line, cursor.col);
         }
     }
@@ -278,7 +277,7 @@ pub fn center_current_line(editor: &mut Editor) {
 
 /// Return to the previous location from the unified tag/jump stack.
 pub fn tag_pop(editor: &mut Editor) -> CommandResult {
-    match editor.tag_manager.pop_stack() {
+    match editor.search.tag_manager.pop_stack() {
         Some(entry) => {
             if let Err(e) = editor.open_file(&entry.file) {
                 return CommandResult::Error(format!(
@@ -293,7 +292,7 @@ pub fn tag_pop(editor: &mut Editor) -> CommandResult {
             editor.ensure_cursor_visible_all();
             editor.set_status(format!(
                 "Jump back ({} remaining)",
-                editor.tag_manager.stack_size()
+                editor.search.tag_manager.stack_size()
             ));
             CommandResult::ViewChanged
         }
@@ -306,18 +305,18 @@ pub fn tag_pop(editor: &mut Editor) -> CommandResult {
 
 /// Jump to the next match in the current tag result list.
 pub fn tag_next(editor: &mut Editor) -> CommandResult {
-    if editor.tag_manager.match_count() == 0 {
+    if editor.search.tag_manager.match_count() == 0 {
         editor.set_infobar_message("No active tag search".to_string());
         return CommandResult::ViewChanged;
     }
 
-    let root = editor.tag_manager.project_root().to_path_buf();
-    let tag = match editor.tag_manager.next_match() {
+    let root = editor.search.tag_manager.project_root().to_path_buf();
+    let tag = match editor.search.tag_manager.next_match() {
         Some(t) => t.clone(),
         None => return CommandResult::NoOp,
     };
-    let idx = editor.tag_manager.match_index();
-    let count = editor.tag_manager.match_count();
+    let idx = editor.search.tag_manager.match_index();
+    let count = editor.search.tag_manager.match_count();
 
     let path = root.join(&tag.file);
     tag_jump(editor, &path, tag.line, &tag.name);
@@ -327,18 +326,18 @@ pub fn tag_next(editor: &mut Editor) -> CommandResult {
 
 /// Jump to the previous match in the current tag result list.
 pub fn tag_prev(editor: &mut Editor) -> CommandResult {
-    if editor.tag_manager.match_count() == 0 {
+    if editor.search.tag_manager.match_count() == 0 {
         editor.set_infobar_message("No active tag search".to_string());
         return CommandResult::ViewChanged;
     }
 
-    let root = editor.tag_manager.project_root().to_path_buf();
-    let tag = match editor.tag_manager.prev_match() {
+    let root = editor.search.tag_manager.project_root().to_path_buf();
+    let tag = match editor.search.tag_manager.prev_match() {
         Some(t) => t.clone(),
         None => return CommandResult::NoOp,
     };
-    let idx = editor.tag_manager.match_index();
-    let count = editor.tag_manager.match_count();
+    let idx = editor.search.tag_manager.match_index();
+    let count = editor.search.tag_manager.match_count();
 
     let path = root.join(&tag.file);
     tag_jump(editor, &path, tag.line, &tag.name);

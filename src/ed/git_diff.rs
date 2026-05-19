@@ -200,18 +200,18 @@ impl GitDiffExt for Editor {
         };
 
         // Update git provider if needed
-        let needs_update = match &self.git_provider {
+        let needs_update = match &self.git.provider {
             Some(existing) => existing.repo_path() != git_root,
             None => true,
         };
         if needs_update {
             match GitProvider::new(&git_root) {
-                Ok(gp) => self.git_provider = Some(gp),
+                Ok(gp) => self.git.provider = Some(gp),
                 Err(e) => return CommandResult::Error(format!("Failed to init git: {}", e)),
             }
         }
 
-        let git_provider = match &self.git_provider {
+        let git_provider = match &self.git.provider {
             Some(gp) => gp,
             None => return CommandResult::Error("Not a git repository".to_string()),
         };
@@ -322,18 +322,18 @@ impl GitDiffExt for Editor {
             }
         };
 
-        let needs_update = match &self.git_provider {
+        let needs_update = match &self.git.provider {
             Some(existing) => existing.repo_path() != git_root,
             None => true,
         };
         if needs_update {
             match GitProvider::new(&git_root) {
-                Ok(gp) => self.git_provider = Some(gp),
+                Ok(gp) => self.git.provider = Some(gp),
                 Err(e) => return CommandResult::Error(format!("Failed to init git: {}", e)),
             }
         }
 
-        let git_provider = match &self.git_provider {
+        let git_provider = match &self.git.provider {
             Some(gp) => gp,
             None => return CommandResult::Error("Not a git repository".to_string()),
         };
@@ -395,7 +395,7 @@ impl GitDiffExt for Editor {
             None => return CommandResult::Error("No active window".to_string()),
         };
 
-        let git_provider = match &self.git_provider {
+        let git_provider = match &self.git.provider {
             Some(gp) => gp,
             None => return CommandResult::Error("Not a git repository".to_string()),
         };
@@ -612,7 +612,7 @@ impl Editor {
         git_ref: &str,
         rel_path: &str,
     ) -> CommandResult {
-        let git_provider = match &self.git_provider {
+        let git_provider = match &self.git.provider {
             Some(gp) => gp,
             None => return CommandResult::Error("Not a git repository".to_string()),
         };
@@ -745,7 +745,7 @@ impl Editor {
                         let new_path = parts[1].trim();
                         if !new_path.is_empty() {
                             // Resolve against git root
-                            if let Some(gp) = &self.git_provider {
+                            if let Some(gp) = &self.git.provider {
                                 diff_file_path = Some(gp.repo_path().join(new_path));
                             }
                         }
@@ -808,7 +808,7 @@ impl Editor {
         diff_output: &str,
         git_ref: &str,
     ) -> CommandResult {
-        let git_provider = match &self.git_provider {
+        let git_provider = match &self.git.provider {
             Some(gp) => gp,
             None => return CommandResult::Error("Not a git repository".to_string()),
         };

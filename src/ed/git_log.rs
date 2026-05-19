@@ -334,8 +334,8 @@ impl GitLogExt for Editor {
             }
         };
 
-        self.git_log_count = count;
-        self.git_log_grep = grep_arg.to_string();
+        self.git.log_count = count;
+        self.git.log_grep = grep_arg.to_string();
 
         let start_dir = self
             .current_buffer()
@@ -354,26 +354,26 @@ impl GitLogExt for Editor {
             }
         };
 
-        let needs_update = match &self.git_provider {
+        let needs_update = match &self.git.provider {
             Some(existing) => existing.repo_path() != git_root,
             None => true,
         };
         if needs_update {
             match GitProvider::new(&git_root) {
-                Ok(gp) => self.git_provider = Some(gp),
+                Ok(gp) => self.git.provider = Some(gp),
                 Err(e) => return CommandResult::Error(format!("Failed to init git: {}", e)),
             }
         }
 
-        if self.git_provider.is_none() {
+        if self.git.provider.is_none() {
             match GitProvider::new(&start_dir) {
                 Ok(gp) => {
-                    let needs_update = match &self.git_provider {
+                    let needs_update = match &self.git.provider {
                         Some(existing) => existing.repo_path() != gp.repo_path(),
                         None => true,
                     };
                     if needs_update {
-                        self.git_provider = Some(gp);
+                        self.git.provider = Some(gp);
                     }
                 }
                 Err(_) => {
@@ -413,12 +413,12 @@ impl GitLogExt for Editor {
     }
 
     fn git_log_refresh(&mut self) -> CommandResult {
-        let count = if self.git_log_count > 0 {
-            self.git_log_count
+        let count = if self.git.log_count > 0 {
+            self.git.log_count
         } else {
             self.extract_git_log_count().unwrap_or(COUNT_DEFAULT)
         };
-        let grep = self.git_log_grep.clone();
+        let grep = self.git.log_grep.clone();
         self.git_log_refresh_with_count(count, &grep)
     }
 
@@ -432,7 +432,7 @@ impl GitLogExt for Editor {
             }
         };
 
-        let repo_path = match &self.git_provider {
+        let repo_path = match &self.git.provider {
             Some(gp) => gp.repo_path().to_path_buf(),
             None => return CommandResult::Error("Not a git repository".to_string()),
         };
@@ -481,7 +481,7 @@ impl GitLogExt for Editor {
 
         // Store the log buffer so git_diff_close can return to it
         if let Some(log_id) = log_buffer_id {
-            self.llm_origin_buffer_id = Some(log_id);
+            self.llm.origin_buffer_id = Some(log_id);
         }
 
         // Switch active window to the diff buffer
@@ -499,7 +499,7 @@ impl GitLogExt for Editor {
 
     fn git_log_goto_file(&mut self) -> CommandResult {
         if let Some((path, _status)) = self.get_git_log_file_path() {
-            let repo_path = match &self.git_provider {
+            let repo_path = match &self.git.provider {
                 Some(gp) => gp.repo_path().to_path_buf(),
                 None => return CommandResult::Error("Not a git repository".to_string()),
             };
@@ -520,7 +520,7 @@ impl GitLogExt for Editor {
             None => return CommandResult::Message("Move cursor to a commit or file".to_string()),
         };
 
-        let repo_path = match &self.git_provider {
+        let repo_path = match &self.git.provider {
             Some(gp) => gp.repo_path().to_path_buf(),
             None => return CommandResult::Error("Not a git repository".to_string()),
         };
@@ -558,7 +558,7 @@ impl GitLogExt for Editor {
         popup.max_height = (self.term_height.saturating_sub(4)).min(40);
         popup.width = ((self.term_width as usize) * 85 / 100).min(120) as u16;
 
-        self.float_popup = Some(popup);
+        self.popup.float = Some(popup);
         self.dirty.mark_all();
         CommandResult::ViewChanged
     }
@@ -615,7 +615,7 @@ impl GitLogExt for Editor {
 
         let short_hash: String = hash.chars().take(6).collect();
 
-        let repo_path = match &self.git_provider {
+        let repo_path = match &self.git.provider {
             Some(gp) => gp.repo_path().to_path_buf(),
             None => return CommandResult::Error("Not a git repository".to_string()),
         };
@@ -677,7 +677,7 @@ impl Editor {
             None => return CommandResult::Error("No active window".to_string()),
         };
 
-        let git_provider = match &self.git_provider {
+        let git_provider = match &self.git.provider {
             Some(gp) => gp,
             None => return CommandResult::Error("Not a git repository".to_string()),
         };

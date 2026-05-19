@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use unicode_segmentation::UnicodeSegmentation;
 
-// ── Ripgrep result ──────────────────────────────────────────────────
+// ── Ripgrep  result ──────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RipgrepResult {

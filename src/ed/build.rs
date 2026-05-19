@@ -75,17 +75,17 @@ pub trait BuildExt {
 impl BuildExt for Editor {
     fn run_build(&mut self) -> CommandResult {
         // Prevent double-builds
-        if self.build_in_progress {
+        if self.build.in_progress {
             return CommandResult::Message("Build already in progress...".into());
         }
 
         let project_root = self.find_cargo_root();
-        let tx = self.build_response_tx.clone();
+        let tx = self.build.response_tx.clone();
         let root_clone = project_root.clone();
 
-        self.build_in_progress = true;
-        self.build_start_time = Some(Instant::now());
-        self.build_spinner_idx = 0;
+        self.build.in_progress = true;
+        self.build.start_time = Some(Instant::now());
+        self.build.spinner_idx = 0;
 
         // Spawn background thread for cargo build
         std::thread::spawn(move || {
@@ -536,15 +536,16 @@ impl Editor {
     /// Poll the build background thread and update the animation.
     /// Called from `Editor::tick()`.
     pub fn tick_build(&mut self) {
-        if self.build_in_progress {
+        if self.build.in_progress {
             // 1. Update spinner and elapsed time
-            self.build_spinner_idx = (self.build_spinner_idx + 1) % SPINNER_CHARS.len();
+            self.build.spinner_idx = (self.build.spinner_idx + 1) % SPINNER_CHARS.len();
             let elapsed = self
-                .build_start_time
+                .build
+                .start_time
                 .map(|t| t.elapsed().as_secs_f32())
                 .unwrap_or(0.0);
 
-            let spinner = SPINNER_CHARS[self.build_spinner_idx];
+            let spinner = SPINNER_CHARS[self.build.spinner_idx];
             let status_msg = format!("{} Building ({:.1}s)", spinner, elapsed);
             self.set_status(status_msg);
             self.dirty.status_powerline = true;
@@ -571,10 +572,10 @@ impl Editor {
         }
 
         // 3. Check if the background thread finished
-        if let Ok(result) = self.build_response_rx.try_recv() {
-            self.build_in_progress = false;
-            self.build_start_time = None;
-            self.build_spinner_idx = 0;
+        if let Ok(result) = self.build.response_rx.try_recv() {
+            self.build.in_progress = false;
+            self.build.start_time = None;
+            self.build.spinner_idx = 0;
 
             let full_output = format!("{}{}", result.stdout, result.stderr);
             let project_root = self.find_cargo_root();
@@ -592,10 +593,10 @@ impl Editor {
                 })
                 .collect();
             self.quickfix_index = 0;
-            self.build_diagnostics = diagnostics;
+            self.build.diagnostics = diagnostics;
 
             // Format final buffer text
-            let buffer_text = format_build_buffer(&full_output, &self.build_diagnostics);
+            let buffer_text = format_build_buffer(&full_output, &self.build.diagnostics);
             let build_id = self.ensure_build_buffer(&buffer_text);
 
             // Update status based on result
@@ -603,12 +604,14 @@ impl Editor {
                 self.set_status("Build succeeded ✓".into());
             } else {
                 let errors = self
-                    .build_diagnostics
+                    .build
+                    .diagnostics
                     .iter()
                     .filter(|d| d.severity == BuildSeverity::Error)
                     .count();
                 let warns = self
-                    .build_diagnostics
+                    .build
+                    .diagnostics
                     .iter()
                     .filter(|d| d.severity == BuildSeverity::Warning)
                     .count();
@@ -951,4 +954,77 @@ fn read_source_context(
         .collect();
 
     Some((start + 1, context)) // back to 1-based
+}
+
+/// Walk upward from `file_path` to find the correct workspace root
+///
+/// 1. Canonicalize to an absolute path so `parent()` walks to the filesystem root.
+/// 2. Collect every directory that contains `Cargo.toml`.
+/// 3. Prefer the **highest** one with `[workspace]` (that is where `target/`
+///    lives in a Cargo workspace).
+/// 4. Fall back to the closest `Cargo.toml` directory.
+/// 5. Final fallback: git root (if it contains `Cargo.toml`).
+pub fn find_workspace_root(file_path: &PathBuf) -> PathBuf {
+    let canonical = file_path.canonicalize().unwrap_or_else(|_| {
+        if file_path.is_absolute() {
+            file_path.clone()
+        } else {
+            std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join(file_path)
+        }
+    });
+
+    let start = if canonical.is_file() {
+        canonical
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| canonical.clone())
+    } else {
+        canonical
+    };
+
+    let mut current = start.clone();
+    let mut cargo_dirs: Vec<PathBuf> = Vec::new();
+    loop {
+        if current.join("Cargo.toml").exists() {
+            cargo_dirs.push(current.clone());
+        }
+        match current.parent() {
+            Some(p) => current = p.to_path_buf(),
+            None => break,
+        }
+    }
+
+    // Prefer the highest directory whose Cargo.toml has [workspace]
+    // (Cargo always places `target/` at the workspace root)
+    if !cargo_dirs.is_empty() {
+        for dir in cargo_dirs.iter().rev() {
+            if lsp_is_workspace_root(dir) {
+                return dir.clone();
+            }
+        }
+        // No [workspace] found — return the closest Cargo.toml directory
+        return cargo_dirs[0].clone();
+    }
+
+    // Fallback: check git root
+    if let Some(git_root) = crate::misc::find_git_root(file_path) {
+        if git_root.join("Cargo.toml").exists() {
+            return git_root;
+        }
+        return git_root;
+    }
+
+    start
+}
+
+/// Return `true` if `dir/Cargo.toml` contains a `[workspace]` section.
+fn lsp_is_workspace_root(dir: &Path) -> bool {
+    let cargo_toml = dir.join("Cargo.toml");
+    let content = match std::fs::read_to_string(&cargo_toml) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    content.lines().any(|line| line.trim() == "[workspace]")
 }

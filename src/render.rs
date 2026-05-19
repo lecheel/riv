@@ -95,6 +95,7 @@ fn softwrap_display_col(line_text: &str, cursor_col: usize, content_width: usize
 // -----------------------------------------------------------------------------
 
 /// Render a single window into the terminal at the given offset.
+#[rustfmt::skip]
 fn render_window(
     editor: &Editor,
     stdout: &mut std::io::Stdout,
@@ -195,15 +196,14 @@ fn render_window(
     };
 
     let gutter_width = if editor.config.line_numbers { 5u16 } else { 0 };
-    let git_gutter_width = if editor.git_gutter_enabled && editor.config.enable_git {
+    let git_gutter_width = if editor.git.gutter_enabled && editor.config.enable_git {
         1u16
     } else {
         0u16
     };
 
     // ── Mark gutter (between line numbers and git gutter) ──
-    let mark_at_line: std::collections::HashMap<usize, char> = editor
-        .marks
+    let mark_at_line: std::collections::HashMap<usize, char> = editor.search.marks
         .iter()
         .filter(|(_, (bid, _))| *bid == buffer_id)
         .map(|(ch, (_, pos))| (pos.line, *ch))
@@ -746,14 +746,14 @@ fn render_window(
             // ── Search highlight overlay ─────────────────────────
             // NOTE: This MUST be outside the selection_rect block above,
             // otherwise highlights only appear during visual selection.
-            if editor.search_highlight_enabled
-                && !editor.search_matches.is_empty()
-                && !editor.search_matches_dirty
-                && editor.search_buffer_id == Some(buffer_id)
+            if editor.search.highlight_enabled
+                && !editor.search.matches.is_empty()
+                && !editor.search.matches_dirty
+                && editor.search.buffer_id == Some(buffer_id)
             {
-                let pattern_len = editor.search_prompt.buffer.chars().count();
+                let pattern_len = editor.search.prompt.buffer.chars().count();
                 if pattern_len > 0 {
-                    for (m_idx, m_pos) in editor.search_matches.iter().enumerate() {
+                    for (m_idx, m_pos) in editor.search.matches.iter().enumerate() {
                         if m_pos.line != line_idx {
                             continue;
                         }
@@ -813,7 +813,7 @@ fn render_window(
                         };
 
                         if !actual_hl_text.is_empty() {
-                            let (hl_bg, hl_fg) = if m_idx == editor.current_search_match {
+                            let (hl_bg, hl_fg) = if m_idx == editor.search.current_match {
                                 (
                                     Color::Rgb {
                                         r: 249,
@@ -989,6 +989,7 @@ fn render_window(
 // Status line (3 rows)
 // -----------------------------------------------------------------------------
 
+#[rustfmt::skip]
 fn render_status(
     editor: &Editor,
     stdout: &mut std::io::Stdout,
@@ -1148,8 +1149,8 @@ fn render_status(
     execute!(stdout, MoveTo(0, cmdline_y))?;
     execute!(stdout, SetBackgroundColor(surface0))?;
 
-    if editor.search_input_active {
-        let prefix = match editor.search_direction {
+    if editor.search.input_active {
+        let prefix = match editor.search.direction {
             Some(SearchDirection::Forward) => "/",
             Some(SearchDirection::Backward) => "?",
             None => "/",
@@ -1157,9 +1158,9 @@ fn render_status(
         execute!(stdout, SetForegroundColor(yellow))?;
         execute!(stdout, Print(prefix))?;
         execute!(stdout, SetForegroundColor(text))?;
-        execute!(stdout, Print(safe!(&editor.search_prompt.buffer)))?;
+        execute!(stdout, Print(safe!(&editor.search.prompt.buffer)))?;
 
-        let printed = 1 + UnicodeWidthStr::width(editor.search_prompt.buffer.as_str());
+        let printed = 1 + UnicodeWidthStr::width(editor.search.prompt.buffer.as_str());
 
         let feedback = if let Some(ref msg) = editor.error_message {
             Some((msg.clone(), red))
@@ -1197,8 +1198,7 @@ fn render_status(
             execute!(stdout, Print(&" ".repeat(remaining)))?;
         }
     } else if editor.mode == Mode::LlmPrompt {
-        let preset_label = editor
-            .llm_active_preset
+        let preset_label = editor.llm.active_preset
             .map(|p| format!(" [{}]", p))
             .unwrap_or_default();
         let prompt_text = format!(">{}", preset_label);
@@ -1254,6 +1254,7 @@ fn render_status(
 // -----------------------------------------------------------------------------
 // Popup renderers using rounded_box
 // -----------------------------------------------------------------------------
+#[rustfmt::skip]
 fn render_float_popup(
     editor: &Editor,
     stdout: &mut std::io::Stdout,
@@ -1435,6 +1436,7 @@ fn set_cursor_style(
 }
 
 /// Position the terminal cursor at the correct screen location.
+#[rustfmt::skip]
 fn position_cursor(
     editor: &Editor,
     stdout: &mut std::io::Stdout,
@@ -1443,10 +1445,10 @@ fn position_cursor(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let edit_height = term_height.saturating_sub(3);
 
-    if editor.search_input_active {
+    if editor.search.input_active {
         let cmdline_y = term_height.saturating_sub(2);
         // Calculate display width of text up to cursor
-        let before_cursor = &editor.search_prompt.buffer[..editor.search_prompt.cursor];
+        let before_cursor = &editor.search.prompt.buffer[..editor.search.prompt.cursor];
         let cursor_col = 1 + UnicodeWidthStr::width(before_cursor) as u16;
         let cursor_col = cursor_col.min(term_width.saturating_sub(1));
         execute!(
@@ -1457,8 +1459,7 @@ fn position_cursor(
     } else if editor.mode == Mode::Command || editor.mode == Mode::LlmPrompt {
         let cmdline_y = term_height.saturating_sub(2);
         let prompt_len = if editor.mode == Mode::LlmPrompt {
-            let preset_label = editor
-                .llm_active_preset
+            let preset_label = editor.llm.active_preset
                 .map(|p| format!(" [{}]", p))
                 .unwrap_or_default();
             1 + UnicodeWidthStr::width(preset_label.as_str()) as u16
@@ -1467,7 +1468,7 @@ fn position_cursor(
         };
 
         let prompt = if editor.mode == Mode::LlmPrompt {
-            &editor.llm_prompt
+            &editor.llm.prompt
         } else {
             &editor.command_prompt
         };
@@ -1484,13 +1485,13 @@ fn position_cursor(
         let gutter_w = if editor.config.line_numbers { 5u16 } else { 0 };
         let mark_gutter_w = {
             let current_bid = window.buffer_id;
-            if editor.marks.iter().any(|(_, (bid, _))| *bid == current_bid) {
+            if editor.search.marks.iter().any(|(_, (bid, _))| *bid == current_bid) {
                 1u16
             } else {
                 0u16
             }
         };
-        let git_gutter_w = if editor.git_gutter_enabled && editor.config.enable_git {
+        let git_gutter_w = if editor.git.gutter_enabled && editor.config.enable_git {
             1u16
         } else {
             0u16
@@ -1571,6 +1572,7 @@ fn position_cursor(
 /// Render exactly one line of the active window's buffer.
 /// Used when the completion popup is active to avoid redrawing the
 /// entire screen (which causes flicker under the popup).
+#[rustfmt::skip]
 fn render_single_buffer_line(
     editor: &Editor,
     stdout: &mut std::io::Stdout,
@@ -1603,13 +1605,13 @@ fn render_single_buffer_line(
     let content_width = {
         let gutter_w = if editor.config.line_numbers { 5u16 } else { 0 };
         let mark_gutter_w = {
-            if editor.marks.iter().any(|(_, (bid, _))| *bid == buffer_id) {
+            if editor.search.marks.iter().any(|(_, (bid, _))| *bid == buffer_id) {
                 1u16
             } else {
                 0u16
             }
         };
-        let git_gutter_w = if editor.git_gutter_enabled && editor.config.enable_git {
+        let git_gutter_w = if editor.git.gutter_enabled && editor.config.enable_git {
             1u16
         } else {
             0u16
@@ -1640,14 +1642,13 @@ fn render_single_buffer_line(
     let cursor_col = window.cursor.position.col;
 
     let gutter_width = if editor.config.line_numbers { 5u16 } else { 0 };
-    let git_gutter_width = if editor.git_gutter_enabled && editor.config.enable_git {
+    let git_gutter_width = if editor.git.gutter_enabled && editor.config.enable_git {
         1u16
     } else {
         0u16
     };
 
-    let mark_at_line: std::collections::HashMap<usize, char> = editor
-        .marks
+    let mark_at_line: std::collections::HashMap<usize, char> = editor.search.marks
         .iter()
         .filter(|(_, (bid, _))| *bid == buffer_id)
         .map(|(ch, (_, pos))| (pos.line, *ch))
@@ -1680,7 +1681,7 @@ fn render_single_buffer_line(
     };
 
     // ── Check if the completion popup covers any of these rows ──
-    let completion_rect = editor.overlay.completion;
+    let completion_rect = editor.popup.overlay.completion;
 
     for wrap_row in 0..wrap_rows {
         let row_screen = visual_screen_row + wrap_row;
@@ -1960,13 +1961,13 @@ fn render_single_buffer_line(
         }
 
         // ── Search highlight overlay ─────────────────────────
-        if !editor.search_matches.is_empty()
-            && !editor.search_matches_dirty
-            && editor.search_buffer_id == Some(buffer_id)
+        if !editor.search.matches.is_empty()
+            && !editor.search.matches_dirty
+            && editor.search.buffer_id == Some(buffer_id)
         {
-            let pattern_len = editor.search_prompt.buffer.chars().count();
+            let pattern_len = editor.search.prompt.buffer.chars().count();
             if pattern_len > 0 {
-                for (m_idx, m_pos) in editor.search_matches.iter().enumerate() {
+                for (m_idx, m_pos) in editor.search.matches.iter().enumerate() {
                     if m_pos.line != abs_line {
                         continue;
                     }
@@ -2025,7 +2026,7 @@ fn render_single_buffer_line(
                     };
 
                     if !actual_hl_text.is_empty() {
-                        let (hl_bg, hl_fg) = if m_idx == editor.current_search_match {
+                        let (hl_bg, hl_fg) = if m_idx == editor.search.current_match {
                             (
                                 Color::Rgb {
                                     r: 249,
@@ -2109,7 +2110,7 @@ pub fn render(
 
         // Always re-render the completion popup on top
         if editor.completion.active && !editor.completion.items.is_empty() {
-            crate::popup_ext::completion_popup::render_completion_popup(
+            crate::popup::completion_popup::render_completion_popup(
                 editor,
                 stdout,
                 term_width,
@@ -2175,16 +2176,16 @@ pub fn render(
 
     // Float popup
     if must_draw_all_popups || editor.dirty.float {
-        if let Some(popup) = &editor.float_popup {
+        if let Some(popup) = &editor.popup.float {
             render_float_popup(editor, stdout, popup, term_width, term_height)?;
         }
     }
 
     // Register popup (bottom-up)
-    if must_draw_all_popups || editor.register_popup.is_some() {
-        if let Some(ref lines) = editor.register_popup {
-            crate::popup_ext::register::render_register_popup(
-                &editor.register_popup_title,
+    if must_draw_all_popups || editor.popup.register.is_some() {
+        if let Some(ref lines) = editor.popup.register {
+            crate::popup::register::render_register_popup(
+                &editor.popup.register_title,
                 lines,
                 stdout,
                 term_width,
@@ -2195,27 +2196,27 @@ pub fn render(
 
     // Mark list popup (bottom-up)
     if must_draw_all_popups || editor.dirty.mark_list {
-        if let Some(popup) = &editor.mark_list_popup {
+        if let Some(popup) = &editor.popup.mark_list {
             crate::popup::render_mark_list_popup(popup, stdout, term_width, term_height)?;
         }
     }
 
     // Format info popup
-    if must_draw_all_popups || editor.fmt_info_popup.is_some() {
+    if must_draw_all_popups || editor.popup.fmt_info.is_some() {
         render_fmtinfo(editor, stdout, term_width, term_height)?;
     }
 
     // Keymap popup
     if must_draw_all_popups || editor.dirty.help {
-        if let Some(popup) = &editor.keymap_popup {
+        if let Some(popup) = &editor.popup.keymap {
             crate::popup::render_keymap_popup(popup, stdout, term_width, term_height)?;
         }
     }
 
     // Diff popup
     if must_draw_all_popups || editor.dirty.diff {
-        if let Some(popup) = &editor.diff_popup {
-            crate::popup_ext::diff_popup::render_diff_popup(
+        if let Some(popup) = &editor.git.diff_popup {
+            crate::popup::diff_popup::render_diff_popup(
                 editor,
                 stdout,
                 popup,
@@ -2230,7 +2231,7 @@ pub fn render(
         && editor.completion.active
         && !editor.completion.items.is_empty()
     {
-        crate::popup_ext::completion_popup::render_completion_popup(
+        crate::popup::completion_popup::render_completion_popup(
             editor,
             stdout,
             term_width,
@@ -2240,43 +2241,43 @@ pub fn render(
 
     // Help popup
     if must_draw_all_popups || editor.dirty.help {
-        if let Some(popup) = &editor.help_popup {
+        if let Some(popup) = &editor.popup.help {
             crate::popup::render_help_popup(popup, stdout, term_width, term_height)?;
         }
     }
 
     // File picker
     if must_draw_all_popups || editor.dirty.file_picker {
-        if let Some(picker) = &editor.file_picker {
+        if let Some(picker) = &editor.popup.file_picker {
             crate::popup::render_file_picker(picker, stdout, term_width, term_height)?;
         }
     }
 
     // Buffer list
     if must_draw_all_popups || editor.dirty.buffer_list {
-        if let Some(popup) = &editor.buffer_list_popup {
+        if let Some(popup) = &editor.popup.buffer_list {
             crate::popup::render_buffer_list_popup(popup, stdout, term_width, term_height)?;
         }
     }
 
     // MRU popup
     if must_draw_all_popups || editor.dirty.mru {
-        if let Some(popup) = &editor.mru_popup {
+        if let Some(popup) = &editor.popup.mru {
             crate::popup::render_mru_popup(popup, stdout, term_width, term_height)?;
         }
     }
 
     // Tag list popup
-    if must_draw_all_popups || editor.tag_list_popup.is_some() {
-        if let Some(popup) = &editor.tag_list_popup {
+    if must_draw_all_popups || editor.popup.tag_list.is_some() {
+        if let Some(popup) = &editor.popup.tag_list {
             crate::popup::render_tag_list_popup(popup, stdout, term_width, term_height)?;
         }
     }
 
     // Guide popup
     if must_draw_all_popups || editor.dirty.guide {
-        if let Some(popup) = &editor.guide_popup {
-            crate::popup_ext::guide_popup::render_guide_popup(
+        if let Some(popup) = &editor.popup.guide {
+            crate::popup::guide_popup::render_guide_popup(
                 editor,
                 stdout,
                 popup,
@@ -2288,8 +2289,8 @@ pub fn render(
 
     // Function list popup
     if must_draw_all_popups || editor.dirty.function_list {
-        if let Some(_popup) = &editor.function_list_popup {
-            crate::popup_ext::function_list::render_function_list_popup(
+        if let Some(_popup) = &editor.popup.function_list {
+            crate::popup::function_list::render_function_list_popup(
                 editor,
                 stdout,
                 term_width,
@@ -2334,7 +2335,7 @@ fn restore_region(
 // -----------------------------------------------------------------------------
 // Status line rendering (split into 3 semantic regions)
 // -----------------------------------------------------------------------------
-
+#[rustfmt::skip]
 fn render_powerline(
     editor: &Editor,
     stdout: &mut std::io::Stdout,
@@ -2536,6 +2537,7 @@ fn render_powerline(
     Ok(())
 }
 
+#[rustfmt::skip]
 fn render_cmdline(
     editor: &Editor,
     stdout: &mut std::io::Stdout,
@@ -2573,8 +2575,8 @@ fn render_cmdline(
         if remaining > 0 {
             execute!(stdout, Print(&" ".repeat(remaining)))?;
         }
-    } else if editor.search_input_active {
-        let prefix = match editor.search_direction {
+    } else if editor.search.input_active {
+        let prefix = match editor.search.direction {
             Some(SearchDirection::Forward) => "/",
             Some(SearchDirection::Backward) => "?",
             None => "/",
@@ -2582,9 +2584,9 @@ fn render_cmdline(
         execute!(stdout, SetForegroundColor(yellow))?;
         execute!(stdout, Print(prefix))?;
         execute!(stdout, SetForegroundColor(text))?;
-        execute!(stdout, Print(safe!(&editor.search_prompt.buffer)))?;
+        execute!(stdout, Print(safe!(&editor.search.prompt.buffer)))?;
 
-        let printed = 1 + UnicodeWidthStr::width(editor.search_prompt.buffer.as_str());
+        let printed = 1 + UnicodeWidthStr::width(editor.search.prompt.buffer.as_str());
 
         // Sanitize feedback to single line, max 120 chars, fitting term_width
         let feedback = if let Some(ref msg) = editor.error_message {
@@ -2623,23 +2625,22 @@ fn render_cmdline(
             execute!(stdout, Print(&" ".repeat(remaining)))?;
         }
     } else if editor.mode == Mode::LlmPrompt {
-        let preset_label = editor
-            .llm_active_preset
+        let preset_label = editor.llm.active_preset
             .map(|p| format!(" [{}]", p))
             .unwrap_or_default();
         let prompt_text = format!(">{}", preset_label);
         execute!(stdout, SetForegroundColor(blue))?;
         execute!(stdout, Print(&prompt_text))?;
         execute!(stdout, SetForegroundColor(text))?;
-        execute!(stdout, Print(&editor.llm_prompt.buffer))?;
+        execute!(stdout, Print(&editor.llm.prompt.buffer))?;
 
         let printed = UnicodeWidthStr::width(prompt_text.as_str())
-            + UnicodeWidthStr::width(editor.llm_prompt.buffer.as_str());
+            + UnicodeWidthStr::width(editor.llm.prompt.buffer.as_str());
         let remaining = max_width.saturating_sub(printed);
         if remaining > 0 {
             execute!(stdout, Print(&" ".repeat(remaining)))?;
         }
-    } else if editor.formatting_pending {
+    } else if editor.lsp.formatting_pending {
         execute!(stdout, SetForegroundColor(crossterm_colors::OVERLAY0))?;
         execute!(stdout, Print(" Formatting…"))?;
         let printed = " Formatting…".len();
@@ -2683,7 +2684,7 @@ fn render_fmtinfo(
     term_width: u16,
     term_height: u16,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let lines = match &editor.fmt_info_popup {
+    let lines = match &editor.popup.fmt_info {
         Some(l) => l,
         None => return Ok(()),
     };
@@ -2774,7 +2775,7 @@ fn render_fmtinfo(
 
     clear_rect(stdout, x, y, popup_width, total_height, catppuccin::MANTLE)?;
 
-    let title = format!(" {} ", editor.fmt_info_popup_title);
+    let title = format!(" {} ", editor.popup.fmt_info_title);
     let title_style = BoxStyle::default()
         .with_title(title)
         .with_border(catppuccin::SURFACE2)
@@ -2877,7 +2878,7 @@ fn render_infobar(
         if pad > 0 {
             execute!(stdout, Print(&" ".repeat(pad)))?;
         }
-    } else if let Some(ref sig) = editor.lsp_signature_help {
+    } else if let Some(ref sig) = editor.lsp.signature_help {
         execute!(stdout, SetForegroundColor(subtext))?;
         let sig_formatted = sig.format_for_infobar();
         let display = sanitize_single_line(&sig_formatted, 120, max_width);

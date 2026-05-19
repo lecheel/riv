@@ -52,7 +52,7 @@ impl ReplaceExt for Editor {
 
         self.ensure_undo_group();
 
-        self.substitute_confirm = Some(SubstituteConfirmState {
+        self.search.substitute_confirm = Some(SubstituteConfirmState {
             regex,
             replacement,
             global,
@@ -70,7 +70,7 @@ impl ReplaceExt for Editor {
 
     /// **y** — replace current match, then advance.
     fn substitute_confirm_yes(&mut self) -> CommandResult {
-        let mut state = match self.substitute_confirm.take() {
+        let mut state = match self.search.substitute_confirm.take() {
             Some(s) => s,
             None => return CommandResult::NoOp,
         };
@@ -115,7 +115,7 @@ impl ReplaceExt for Editor {
             }
 
             state.current_match = None;
-            self.substitute_confirm = Some(state);
+            self.search.substitute_confirm = Some(state);
 
             // Content changed → mark for redraw
             self.dirty.windows = true;
@@ -132,7 +132,7 @@ impl ReplaceExt for Editor {
 
             result
         } else {
-            self.substitute_confirm = None;
+            self.search.substitute_confirm = None;
             self.close_undo_group();
             self.invalidate_git_gutter();
             self.notify_lsp_change();
@@ -143,7 +143,7 @@ impl ReplaceExt for Editor {
 
     /// **n** — skip current match, then advance.
     fn substitute_confirm_no(&mut self) -> CommandResult {
-        let mut state = match self.substitute_confirm.take() {
+        let mut state = match self.search.substitute_confirm.take() {
             Some(s) => s,
             None => return CommandResult::NoOp,
         };
@@ -158,12 +158,12 @@ impl ReplaceExt for Editor {
             }
 
             state.current_match = None;
-            self.substitute_confirm = Some(state);
+            self.search.substitute_confirm = Some(state);
 
             // substitute_advance handles status and dirty flags
             self.substitute_advance()
         } else {
-            self.substitute_confirm = None;
+            self.search.substitute_confirm = None;
             self.close_undo_group();
             self.dirty.mark_all();
             CommandResult::ViewChanged
@@ -172,7 +172,7 @@ impl ReplaceExt for Editor {
 
     /// **a** — replace this and all remaining matches without prompting.
     fn substitute_confirm_all(&mut self) -> CommandResult {
-        let mut state = match self.substitute_confirm.take() {
+        let mut state = match self.search.substitute_confirm.take() {
             Some(s) => s,
             None => return CommandResult::NoOp,
         };
@@ -222,10 +222,10 @@ impl ReplaceExt for Editor {
         let subs_made = state.subs_made;
 
         // Clear search highlighting
-        self.search_matches.clear();
-        self.search_matches_dirty = false;
-        self.search_prompt.buffer.clear();
-        self.search_prompt.cursor = 0;
+        self.search.matches.clear();
+        self.search.matches_dirty = false;
+        self.search.prompt.buffer.clear();
+        self.search.prompt.cursor = 0;
 
         self.close_undo_group();
         self.invalidate_git_gutter();
@@ -243,7 +243,7 @@ impl ReplaceExt for Editor {
 
     /// **q** or **Escape** — abort without replacing current match.
     fn substitute_confirm_quit(&mut self) -> CommandResult {
-        let state = match self.substitute_confirm.take() {
+        let state = match self.search.substitute_confirm.take() {
             Some(s) => s,
             None => return CommandResult::NoOp,
         };
@@ -251,10 +251,10 @@ impl ReplaceExt for Editor {
         let subs_made = state.subs_made;
 
         // Clear search highlighting
-        self.search_matches.clear();
-        self.search_matches_dirty = false;
-        self.search_prompt.buffer.clear();
-        self.search_prompt.cursor = 0;
+        self.search.matches.clear();
+        self.search.matches_dirty = false;
+        self.search.prompt.buffer.clear();
+        self.search.prompt.cursor = 0;
 
         self.close_undo_group();
 
@@ -279,7 +279,7 @@ impl ReplaceExt for Editor {
 
     /// **l** — replace this match, then quit (last replacement).
     fn substitute_confirm_last(&mut self) -> CommandResult {
-        let mut state = match self.substitute_confirm.take() {
+        let mut state = match self.search.substitute_confirm.take() {
             Some(s) => s,
             None => return CommandResult::NoOp,
         };
@@ -292,10 +292,10 @@ impl ReplaceExt for Editor {
         let subs_made = state.subs_made;
 
         // Clear search highlighting
-        self.search_matches.clear();
-        self.search_matches_dirty = false;
-        self.search_prompt.buffer.clear();
-        self.search_prompt.cursor = 0;
+        self.search.matches.clear();
+        self.search.matches_dirty = false;
+        self.search.prompt.buffer.clear();
+        self.search.prompt.cursor = 0;
 
         self.close_undo_group();
         self.invalidate_git_gutter();
@@ -309,12 +309,12 @@ impl ReplaceExt for Editor {
 
     /// Whether the substitute confirm prompt is active.
     fn is_substitute_confirm_active(&self) -> bool {
-        self.substitute_confirm.is_some()
+        self.search.substitute_confirm.is_some()
     }
 
     /// Get the substitute confirm prompt text, if active.
     fn substitute_confirm_prompt(&self) -> Option<String> {
-        self.substitute_confirm
+        self.search.substitute_confirm
             .as_ref()
             .map(|state| format!("replace with \"{}\"? (y/n/a/q/l)", state.replacement))
     }
@@ -322,8 +322,8 @@ impl ReplaceExt for Editor {
     /// Show the format-info popup with a title and multi-line error text.
     /// Automatically splits the text into lines and marks the view dirty.
     fn show_fmt_info_popup(&mut self, title: &str, text: &str) {
-        self.fmt_info_popup_title = title.to_string();
-        self.fmt_info_popup = Some(text.lines().map(|l| l.to_string()).collect());
+        self.popup.fmt_info_title = title.to_string();
+        self.popup.fmt_info = Some(text.lines().map(|l| l.to_string()).collect());
         self.dirty.mark_all();
     }
 }
@@ -333,7 +333,7 @@ impl Editor {
     /// Find the next match, highlight it, and show the prompt.
     /// If no more matches exist, finish the session and show the summary.
     pub(crate) fn substitute_advance(&mut self) -> CommandResult {
-        let state = match self.substitute_confirm.take() {
+        let state = match self.search.substitute_confirm.take() {
             Some(s) => s,
             None => return CommandResult::NoOp,
         };
@@ -350,11 +350,11 @@ impl Editor {
                 self.ensure_cursor_visible(&state.buffer_id);
 
                 // Set up search highlighting for the current match only
-                self.search_matches = vec![CursorPosition::new(line, col)];
-                self.current_search_match = 0;
-                self.search_matches_dirty = false;
-                self.search_prompt.buffer = match_text;
-                self.search_prompt.cursor = self.search_prompt.buffer.len();
+                self.search.matches = vec![CursorPosition::new(line, col)];
+                self.search.current_match = 0;
+                self.search.matches_dirty = false;
+                self.search.prompt.buffer = match_text;
+                self.search.prompt.cursor = self.search.prompt.buffer.len();
 
                 // Build status message BEFORE moving `state`
                 let status_msg = format!("replace with \"{}\"? (y/n/a/q/l)", state.replacement);
@@ -366,7 +366,7 @@ impl Editor {
                     ..state
                 };
 
-                self.substitute_confirm = Some(next_state);
+                self.search.substitute_confirm = Some(next_state);
                 self.set_status(status_msg);
 
                 // Explicit dirty management
@@ -383,10 +383,10 @@ impl Editor {
                 let subs_made = state.subs_made;
 
                 // Clear search highlighting
-                self.search_matches.clear();
-                self.search_matches_dirty = false;
-                self.search_prompt.buffer.clear();
-                self.search_prompt.cursor = 0;
+                self.search.matches.clear();
+                self.search.matches_dirty = false;
+                self.search.prompt.buffer.clear();
+                self.search.prompt.cursor = 0;
 
                 self.close_undo_group();
                 self.invalidate_git_gutter();

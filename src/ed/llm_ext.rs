@@ -45,13 +45,13 @@ pub trait LlmExt {
 
 impl LlmExt for Editor {
     fn ensure_llm_buffer(&mut self) -> BufferId {
-        if let Some(id) = self.llm_buffer_id {
+        if let Some(id) = self.llm.buffer_id {
             if self.buffers.get(&id).is_some() {
                 return id;
             }
         }
         let id = self.buffers.new_llm_buffer();
-        self.llm_buffer_id = Some(id);
+        self.llm.buffer_id = Some(id);
         id
     }
 
@@ -61,7 +61,7 @@ impl LlmExt for Editor {
             window.set_buffer(llm_id);
         }
         // Auto-load session on first open
-        if self.llm_buffer.messages().is_empty() {
+        if self.llm.buffer.messages().is_empty() {
             self.auto_load_session();
         }
         self.sync_llm_to_buffer();
@@ -69,7 +69,7 @@ impl LlmExt for Editor {
     }
 
     fn llm_close(&mut self) -> CommandResult {
-        if self.llm_buffer.state().is_active() {
+        if self.llm.buffer.state().is_active() {
             self.llm_cancel();
         }
         // Auto-save on close
@@ -77,7 +77,7 @@ impl LlmExt for Editor {
 
         if let Some(window) = self.windows.active_window() {
             let current_id = window.buffer_id;
-            let llm_id = self.llm_buffer_id.unwrap_or(0);
+            let llm_id = self.llm.buffer_id.unwrap_or(0);
             if current_id == llm_id {
                 if let Some(other_id) = self
                     .buffers
@@ -97,13 +97,13 @@ impl LlmExt for Editor {
     }
 
     fn llm_send(&mut self) -> CommandResult {
-        let input = self.llm_buffer.take_input();
+        let input = self.llm.buffer.take_input();
         if input.trim().is_empty() {
             return CommandResult::NoOp;
         }
 
         if !self.config.llm.enabled {
-            self.llm_buffer.add_message(
+            self.llm.buffer.add_message(
                 LlmRole::Error,
                 "LLM is not enabled. Set `llm.enabled = true` in config.toml",
             );
@@ -113,29 +113,29 @@ impl LlmExt for Editor {
         }
 
         // Session-based chat — NOT single-shot
-        self.llm_single_shot = false;
+        self.llm.single_shot = false;
 
-        self.llm_buffer.add_message(LlmRole::User, input);
+        self.llm.buffer.add_message(LlmRole::User, input);
         self.sync_llm_to_buffer();
 
-        let api_messages = self.llm_buffer.build_api_messages();
+        let api_messages = self.llm.buffer.build_api_messages();
         self.spawn_llm_request(api_messages)
     }
 
     fn llm_cancel(&mut self) -> CommandResult {
-        if let Some(handle) = self.llm_task_handle.take() {
+        if let Some(handle) = self.llm.task_handle.take() {
             handle.abort();
         }
-        self.llm_buffer.cancel();
-        self.llm_single_shot = false;
-        self.llm_infobar_response = false;
+        self.llm.buffer.cancel();
+        self.llm.single_shot = false;
+        self.llm.infobar_response = false;
         self.sync_llm_to_buffer();
         self.dirty.mark_all();
         CommandResult::Message("Cancelled".to_string())
     }
 
     fn llm_clear_history(&mut self) -> CommandResult {
-        self.llm_buffer.clear_history();
+        self.llm.buffer.clear_history();
         self.sync_llm_to_buffer();
         self.dirty.mark_all();
         CommandResult::Message("History cleared".to_string())
@@ -143,10 +143,10 @@ impl LlmExt for Editor {
 
     fn llm_next_preset(&mut self) -> CommandResult {
         let presets = LlmPreset::all();
-        let current = self.llm_buffer.preset();
+        let current = self.llm.buffer.preset();
         let idx = presets.iter().position(|&p| p == current).unwrap_or(0);
         let next = presets[(idx + 1) % presets.len()];
-        self.llm_buffer.set_preset(next);
+        self.llm.buffer.set_preset(next);
         self.set_status(format!("Preset: {}", next));
         self.dirty.mark_all();
         CommandResult::ViewChanged
@@ -154,10 +154,10 @@ impl LlmExt for Editor {
 
     fn llm_prev_preset(&mut self) -> CommandResult {
         let presets = LlmPreset::all();
-        let current = self.llm_buffer.preset();
+        let current = self.llm.buffer.preset();
         let idx = presets.iter().position(|&p| p == current).unwrap_or(0);
         let prev = if idx == 0 { presets.len() - 1 } else { idx - 1 };
-        self.llm_buffer.set_preset(presets[prev]);
+        self.llm.buffer.set_preset(presets[prev]);
         self.set_status(format!("Preset: {}", presets[prev]));
         self.dirty.mark_all();
         CommandResult::ViewChanged
@@ -166,7 +166,7 @@ impl LlmExt for Editor {
     /// Session-based prompt: adds user message to conversation history,
     /// builds API payload from full history, and sends.
     fn llm_send_from_prompt(&mut self, input: String) -> CommandResult {
-        if input.trim().is_empty() && self.llm_active_context.is_none() {
+        if input.trim().is_empty() && self.llm.active_context.is_none() {
             return CommandResult::NoOp;
         }
 
@@ -175,34 +175,34 @@ impl LlmExt for Editor {
         }
 
         // ── This is a SESSION request, NOT single-shot ──
-        self.llm_single_shot = false;
+        self.llm.single_shot = false;
 
         let _llm_id = self.ensure_llm_buffer();
 
-        if let Some(preset) = self.llm_active_preset.take() {
-            self.llm_buffer.set_preset(preset);
+        if let Some(preset) = self.llm.active_preset.take() {
+            self.llm.buffer.set_preset(preset);
         }
 
-        if let Some(ctx) = self.llm_active_context.take() {
-            self.llm_buffer.set_selection_context(Some(ctx.clone()));
+        if let Some(ctx) = self.llm.active_context.take() {
+            self.llm.buffer.set_selection_context(Some(ctx.clone()));
 
             let final_msg = if input.trim().is_empty() {
                 ctx
-            } else if self.llm_todo_prefix {
+            } else if self.llm.todo_prefix {
                 format!("{}\n\n##TODO {}", ctx, input)
             } else {
                 format!("{}\n\n{}", ctx, input)
             };
 
-            self.llm_todo_prefix = false;
-            self.llm_buffer.add_message(LlmRole::User, final_msg);
+            self.llm.todo_prefix = false;
+            self.llm.buffer.add_message(LlmRole::User, final_msg);
         } else {
-            self.llm_buffer.add_message(LlmRole::User, &input);
+            self.llm.buffer.add_message(LlmRole::User, &input);
         }
 
         self.sync_llm_to_buffer();
 
-        let api_messages = self.llm_buffer.build_api_messages();
+        let api_messages = self.llm.buffer.build_api_messages();
         self.spawn_llm_request(api_messages)
     }
 
@@ -210,9 +210,9 @@ impl LlmExt for Editor {
         let client = match LlmClient::new(&self.config.llm) {
             Ok(c) => c,
             Err(e) => {
-                self.llm_single_shot = false;
-                self.llm_infobar_response = false;
-                self.llm_buffer
+                self.llm.single_shot = false;
+                self.llm.infobar_response = false;
+                self.llm.buffer
                     .set_infobar_message(format!("Failed to create LLM client: {}", e));
                 self.sync_llm_to_buffer();
                 self.dirty.mark_all();
@@ -220,20 +220,20 @@ impl LlmExt for Editor {
             }
         };
 
-        let cancel_flag = self.llm_buffer.cancel_flag();
-        let tx = self.llm_response_tx.clone();
+        let cancel_flag = self.llm.buffer.cancel_flag();
+        let tx = self.llm.response_tx.clone();
 
         // Track request state in the buffer (used by both paths)
-        self.llm_buffer.start_sending();
+        self.llm.buffer.start_sending();
 
         // Only sync buffer view for session-based requests
-        if !self.llm_single_shot {
+        if !self.llm.single_shot {
             self.sync_llm_to_buffer();
         }
 
         self.dirty.mark_all();
 
-        let handle = self.llm_runtime.spawn(async move {
+        let handle = self.llm.runtime.spawn(async move {
             let result = client.chat_with_cancel(messages, cancel_flag).await;
             let _ = tx.send(match result {
                 Ok(response) => Ok(response),
@@ -247,64 +247,63 @@ impl LlmExt for Editor {
             });
         });
 
-        self.llm_task_handle = Some(handle);
+        self.llm.task_handle = Some(handle);
 
-        if self.llm_single_shot {
+        if self.llm.single_shot {
             self.set_status("Sending…".to_string());
         } else {
-            self.set_status(format!("Sending... [{}]", self.llm_buffer.session_name()));
+            self.set_status(format!("Sending... [{}]", self.llm.buffer.session_name()));
         }
         CommandResult::Message("Sending to LLM...".to_string())
     }
     fn poll_llm_responses(&mut self) {
-        while let Ok(result) = self.llm_response_rx.try_recv() {
+        while let Ok(result) = self.llm.response_rx.try_recv() {
             match result {
                 Ok(response) => {
-                    self.llm_task_handle = None;
+                    self.llm.task_handle = None;
 
                     // ── GitCommit path (highest priority) ──
-                    if self.git_commit_buffer_id.is_some() {
-                        if self.llm_buffer.state().is_active() {
-                            self.llm_buffer.finish_streaming();
+                    if self.git.commit_buffer_id.is_some() {
+                        if self.llm.buffer.state().is_active() {
+                            self.llm.buffer.finish_streaming();
                         }
-                        self.llm_single_shot = false;
-                        self.llm_infobar_response = false;
+                        self.llm.single_shot = false;
+                        self.llm.infobar_response = false;
                         self.git_commit_on_llm_response(&response);
                         return;
                     }
 
                     // ── Single-shot path: popup display ──
-                    if self.llm_infobar_response || self.llm_single_shot {
-                        let preset_label = self
-                            .llm_active_preset
+                    if self.llm.infobar_response || self.llm.single_shot {
+                        let preset_label = self.llm.active_preset
                             .map(|p| format!("{}", p))
                             .unwrap_or_default();
 
                         // Reset all single-shot flags
-                        self.llm_infobar_response = false;
-                        self.llm_single_shot = false;
-                        self.llm_active_context = None;
-                        self.llm_todo_prefix = false;
-                        self.llm_active_preset = None;
+                        self.llm.infobar_response = false;
+                        self.llm.single_shot = false;
+                        self.llm.active_context = None;
+                        self.llm.todo_prefix = false;
+                        self.llm.active_preset = None;
 
                         // Reset buffer state
-                        if self.llm_buffer.state().is_active() {
-                            self.llm_buffer.finish_streaming();
+                        if self.llm.buffer.state().is_active() {
+                            self.llm.buffer.finish_streaming();
                         }
 
                         // Store in named register 'e' for pasting
                         self.named_registers.insert('e', response.clone());
-                        self.llm_infobar_accumulator = response.clone();
+                        self.llm.infobar_accumulator = response.clone();
 
                         // Show in register-style popup (multiline)
                         let popup_lines: Vec<String> =
                             response.lines().map(|l| l.to_string()).collect();
-                        self.register_popup = if popup_lines.is_empty() {
+                        self.popup.register = if popup_lines.is_empty() {
                             Some(vec!["(empty response)".to_string()])
                         } else {
                             Some(popup_lines)
                         };
-                        self.register_popup_title = if preset_label.is_empty() {
+                        self.popup.register_title = if preset_label.is_empty() {
                             "LLM Response".to_string()
                         } else {
                             preset_label
@@ -316,60 +315,59 @@ impl LlmExt for Editor {
                     }
 
                     // ── Session-based buffer path (unchanged) ──
-                    if self.llm_buffer.state().is_active() {
-                        self.llm_buffer.finish_streaming();
+                    if self.llm.buffer.state().is_active() {
+                        self.llm.buffer.finish_streaming();
                     }
 
-                    let last_is_assistant = self
-                        .llm_buffer
+                    let last_is_assistant = self.llm.buffer
                         .messages()
                         .last()
                         .map(|m| m.role == LlmRole::Assistant)
                         .unwrap_or(false);
 
                     if !last_is_assistant {
-                        self.llm_buffer.add_message(LlmRole::Assistant, response);
+                        self.llm.buffer.add_message(LlmRole::Assistant, response);
                     }
 
                     self.auto_save_session();
                     self.sync_llm_to_buffer();
 
                     let viewing_llm =
-                        self.windows.active_window().map(|w| w.buffer_id) == self.llm_buffer_id;
+                        self.windows.active_window().map(|w| w.buffer_id) == self.llm.buffer_id;
 
                     if viewing_llm {
-                        self.set_status(format!("✓ [{}]", self.llm_buffer.session_name()));
+                        self.set_status(format!("✓ [{}]", self.llm.buffer.session_name()));
                     } else {
                         self.set_status("✓ LLM response (ga i to view)".to_string());
                     }
                     self.dirty.mark_all();
                 }
                 Err(err) => {
-                    self.llm_task_handle = None;
+                    self.llm.task_handle = None;
 
                     // ── GitCommit path (highest priority) ──
-                    if self.git_commit_buffer_id.is_some() {
-                        if self.llm_buffer.state().is_active() {
-                            self.llm_buffer.set_idle();
+                    if self.git.commit_buffer_id.is_some() {
+                        if self.llm.buffer.state().is_active() {
+                            self.llm.buffer.set_idle();
                         }
-                        self.llm_single_shot = false;
-                        self.llm_infobar_response = false;
+                        self.llm.single_shot = false;
+                        self.llm.infobar_response = false;
                         self.git_commit_on_llm_error(&err);
                         return;
                     }
 
                     // ── Single-shot infobar error path ──
-                    if self.llm_infobar_response || self.llm_single_shot {
-                        self.llm_infobar_response = false;
-                        self.llm_single_shot = false;
-                        self.llm_active_context = None;
-                        self.llm_todo_prefix = false;
-                        self.llm_active_preset = None;
-                        self.llm_infobar_accumulator.clear();
+                    if self.llm.infobar_response || self.llm.single_shot {
+                        self.llm.infobar_response = false;
+                        self.llm.single_shot = false;
+                        self.llm.active_context = None;
+                        self.llm.todo_prefix = false;
+                        self.llm.active_preset = None;
+                        self.llm.infobar_accumulator.clear();
 
                         // Reset buffer state
-                        if self.llm_buffer.state().is_active() {
-                            self.llm_buffer.set_idle();
+                        if self.llm.buffer.state().is_active() {
+                            self.llm.buffer.set_idle();
                         }
 
                         if err != "[cancelled]" {
@@ -383,9 +381,9 @@ impl LlmExt for Editor {
 
                     // ── Session error path ──
                     if err == "[cancelled]" {
-                        self.llm_buffer.cancel();
+                        self.llm.buffer.cancel();
                     } else {
-                        self.llm_buffer.set_infobar_message(&err);
+                        self.llm.buffer.set_infobar_message(&err);
                         self.set_infobar_message(format!("LLM: {}", err));
                     }
 
@@ -402,13 +400,13 @@ impl LlmExt for Editor {
     fn llm_session_save(&mut self) -> CommandResult {
         let mgr = self.session_manager();
         match mgr.save(
-            self.llm_buffer.session_name(),
-            self.llm_buffer.preset(),
-            self.llm_buffer.messages(),
+            self.llm.buffer.session_name(),
+            self.llm.buffer.preset(),
+            self.llm.buffer.messages(),
         ) {
             Ok(()) => {
-                self.set_status(format!("Saved session: {}", self.llm_buffer.session_name()));
-                CommandResult::Message(format!("Saved: {}", self.llm_buffer.session_name()))
+                self.set_status(format!("Saved session: {}", self.llm.buffer.session_name()));
+                CommandResult::Message(format!("Saved: {}", self.llm.buffer.session_name()))
             }
             Err(e) => {
                 self.set_infobar_message(format!("Save failed: {}", e));
@@ -425,8 +423,8 @@ impl LlmExt for Editor {
         self.auto_save_session();
 
         let name = format!("session_{}", Self::timestamp_short());
-        self.llm_buffer.clear_history();
-        self.llm_buffer.set_session_name(&name);
+        self.llm.buffer.clear_history();
+        self.llm.buffer.set_session_name(&name);
         self.sync_llm_to_buffer();
         self.set_status(format!("New session: {}", name));
         CommandResult::Message(format!("New session: {}", name))
@@ -441,7 +439,7 @@ impl LlmExt for Editor {
             return CommandResult::Message("No saved sessions".to_string());
         }
 
-        let current = self.llm_buffer.session_name().to_string();
+        let current = self.llm.buffer.session_name().to_string();
         let mut lines = Vec::new();
 
         for s in &sessions {
@@ -459,10 +457,10 @@ impl LlmExt for Editor {
     }
 
     fn llm_session_delete(&mut self) -> CommandResult {
-        let name = self.llm_buffer.session_name().to_string();
+        let name = self.llm.buffer.session_name().to_string();
         let mgr = self.session_manager();
 
-        if !self.llm_buffer.messages().is_empty() {
+        if !self.llm.buffer.messages().is_empty() {
             self.set_infobar_message(format!(
                 "Session '{}' has messages. Clear history first, or use a different name.",
                 name
@@ -472,7 +470,7 @@ impl LlmExt for Editor {
 
         match mgr.delete(&name) {
             Ok(()) => {
-                self.llm_buffer.set_session_name("default");
+                self.llm.buffer.set_session_name("default");
                 self.set_status(format!("Deleted session: {}", name));
                 CommandResult::Message(format!("Deleted: {}", name))
             }
@@ -493,12 +491,12 @@ impl LlmExt for Editor {
         let mgr = self.session_manager();
         match mgr.load(&name) {
             Ok((messages, preset)) => {
-                self.llm_buffer.clear_history();
-                self.llm_buffer.set_preset(preset);
-                self.llm_buffer.set_session_name(&name);
+                self.llm.buffer.clear_history();
+                self.llm.buffer.set_preset(preset);
+                self.llm.buffer.set_session_name(&name);
 
                 for msg in messages {
-                    self.llm_buffer.add_message(msg.role, msg.content);
+                    self.llm.buffer.add_message(msg.role, msg.content);
                 }
 
                 self.sync_llm_to_buffer();
@@ -514,29 +512,29 @@ impl LlmExt for Editor {
 
     fn auto_save_session(&mut self) {
         // Never auto-save single-shot (stateless) requests
-        if self.llm_single_shot {
+        if self.llm.single_shot {
             return;
         }
-        if self.llm_buffer.messages().is_empty() {
+        if self.llm.buffer.messages().is_empty() {
             return;
         }
 
         let mgr = self.session_manager();
         if let Err(_e) = mgr.save(
-            self.llm_buffer.session_name(),
-            self.llm_buffer.preset(),
-            self.llm_buffer.messages(),
+            self.llm.buffer.session_name(),
+            self.llm.buffer.preset(),
+            self.llm.buffer.messages(),
         ) {}
     }
 
     fn auto_load_session(&mut self) {
         let mgr = self.session_manager();
         if let Some((name, messages, preset)) = mgr.load_active() {
-            self.llm_buffer.set_session_name(&name);
-            self.llm_buffer.set_preset(preset);
+            self.llm.buffer.set_session_name(&name);
+            self.llm.buffer.set_preset(preset);
 
             for msg in messages {
-                self.llm_buffer.add_message(msg.role, msg.content);
+                self.llm.buffer.add_message(msg.role, msg.content);
             }
 
             self.sync_llm_to_buffer();
@@ -544,14 +542,14 @@ impl LlmExt for Editor {
     }
 
     fn sync_llm_to_buffer(&mut self) {
-        let llm_id = match self.llm_buffer_id {
+        let llm_id = match self.llm.buffer_id {
             Some(id) if self.buffers.get(&id).is_some() => id,
             _ => return,
         };
 
         let mut text = String::new();
 
-        for msg in self.llm_buffer.messages() {
+        for msg in self.llm.buffer.messages() {
             let header = match msg.role {
                 LlmRole::User => "▸ You:",
                 LlmRole::Assistant => "◇ AI:",
@@ -564,7 +562,7 @@ impl LlmExt for Editor {
             text.push_str("\n\n");
         }
 
-        let streaming = self.llm_buffer.streaming_content();
+        let streaming = self.llm.buffer.streaming_content();
         if !streaming.is_empty() {
             text.push_str("◇ AI:\n");
             text.push_str(streaming);
@@ -595,7 +593,7 @@ impl LlmExt for Editor {
     /// Setup the Top=Input / Bottom=Response split layout
     fn llm_setup_split_session(&mut self, initial_text: String) -> CommandResult {
         // Save the buffer we came from
-        self.llm_origin_buffer_id = self.windows.active_window().map(|w| w.buffer_id);
+        self.llm.origin_buffer_id = self.windows.active_window().map(|w| w.buffer_id);
 
         // 1. Split the window (Creates Top=Origin, Bottom=Origin)
         self.split_horizontal();
@@ -662,9 +660,9 @@ impl LlmExt for Editor {
         // CRITICAL: Clear context and todo_prefix because the context is
         // already embedded inside the prompt_text from the scratchpad buffer!
         // If we don't clear these, llm_send_from_prompt will duplicate the code.
-        self.llm_active_context = None;
-        self.llm_todo_prefix = false;
-        self.llm_active_preset = None;
+        self.llm.active_context = None;
+        self.llm.todo_prefix = false;
+        self.llm.active_preset = None;
 
         // Switch focus to the Response window (Bottom) so the user can watch it stream
         self.next_window();
@@ -682,7 +680,7 @@ impl LlmExt for Editor {
         self.close_window();
 
         // 3. Restore Top window to the original code buffer
-        if let Some(origin_id) = self.llm_origin_buffer_id.take() {
+        if let Some(origin_id) = self.llm.origin_buffer_id.take() {
             if let Some(w) = self.windows.active_window_mut() {
                 if self.buffers.get(&origin_id).is_some() {
                     w.set_buffer(origin_id);
@@ -741,12 +739,12 @@ impl LlmExt for Editor {
         // ── 3. Record & spawn LLM request ──
         self.record_action(RepeatableAction::LlmQuickAction { preset }, 1);
 
-        self.llm_single_shot = true;
-        self.llm_infobar_response = true;
-        self.llm_infobar_accumulator.clear();
-        self.llm_active_preset = Some(preset);
-        self.llm_active_context = None;
-        self.llm_todo_prefix = false;
+        self.llm.single_shot = true;
+        self.llm.infobar_response = true;
+        self.llm.infobar_accumulator.clear();
+        self.llm.active_preset = Some(preset);
+        self.llm.active_context = None;
+        self.llm.todo_prefix = false;
 
         let system_prompt = preset.system_prompt().to_string();
         let messages = vec![

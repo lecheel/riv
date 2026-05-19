@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use crate::action::Action;
 use crate::buffer::BufferKind;
-use crate::buffer::{Buffer, BufferCollection, BufferId, CursorPosition};
+use crate::buffer::{Buffer, BufferCollection, BufferId};
 use crate::codeium::CodeiumManager;
 use crate::command::CommandRegistry;
 use crate::completion::CompletionEngine;
@@ -33,26 +33,20 @@ use crate::ed::{
 use crate::ed::{GitDiffExt, GitLogExt, GitStatusExt};
 use crate::ed::{TextObjectExt, TextObjectKind, TextObjectOperator};
 use crate::ghost_text::GhostTextManager;
-use crate::git::EditorHunk;
 use crate::keybind::{
     apply_custom_keybindings, default_command_keymap, default_insert_keymap, default_normal_keymap,
     default_visual_keymap, KeyBindManager, KeyBindResult,
 };
-use crate::llm::{LlmBuffer, LlmPreset};
+use crate::llm::LlmPreset;
 use crate::misc::format_shortcut_keys;
 use crate::misc::parse_shortcut_keys;
 use crate::mru::MruManager;
-use crate::overlay::OverlayTracker;
-use crate::popup::Scrollable;
-use crate::popup::TagListPopup;
-use crate::popup::{FilePicker, HelpPopup, MruPopup};
 use crate::prompt::MiniInputPrompt;
 use crate::prompt::PromptAction;
 use crate::terminal::{Key, TerminalEvent};
 use crate::vocab::VocabManager;
 use crate::window::WindowManager;
 use std::path::PathBuf;
-use tokio::sync::mpsc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JumpPhase {
@@ -171,7 +165,6 @@ pub struct PendingState {
 }
 
 // ── Float popup ─────────────────────────────────────────────────────
-
 /// A floating popup overlaid on the editor area. Used for hunk previews,
 /// quick info, and other transient UI. Dismissed with ESC or any key.
 #[derive(Debug, Clone)]
@@ -279,54 +272,9 @@ pub struct Editor {
     // ==================== Jump Mode ====================
     /// State for 2-char EasyMotion/AceJump style jumping.
     pub jump: JumpState,
-    /// Code architecture guide popup (if active).
-    pub guide_popup: Option<crate::guide::Guide>,
 
-    // ==================== Search & Navigation ====================
-    /// Current search direction (forward/backward).
-    pub search_direction: Option<SearchDirection>,
-    /// Whether search input is active.
-    pub search_input_active: bool,
-    /// Current search pattern.
-    pub search_pattern: Option<String>,
-    /// Current search match positions.
-    pub search_matches: Vec<CursorPosition>,
-    /// Index of current match in search results.
-    pub current_search_match: usize,
-    /// Whether search matches need recomputation.
-    pub search_highlight_enabled: bool,
-    pub search_matches_dirty: bool,
-    /// Buffer ID that the current search belongs to.
-    pub search_buffer_id: Option<crate::buffer::BufferId>,
-    /// Command line history prefix for filtering.
-    pub command_line_history_prefix: Option<String>,
-    /// Search line history prefix for filtering.
-    pub search_line_history_prefix: Option<String>,
-    /// Search command history.
-    pub search_history: Vec<String>,
-    /// Current index in search history.
-    pub search_history_idx: usize,
-    /// Named marks (a-z) → (buffer_id, cursor_position).
-    pub marks:
-        std::collections::HashMap<char, (crate::buffer::BufferId, crate::buffer::CursorPosition)>,
-    /// Position before the last gd / cross-buffer jump (for `` jump-back).
-    pub last_jump_mark: Option<(crate::buffer::BufferId, crate::buffer::CursorPosition)>,
-    /// Whether we're waiting for a mark name after pressing `m`.
-    pub mark_pending: bool,
-    /// Whether we're waiting for a mark name after pressing `` ` ``.
-    pub goto_mark_pending: bool,
-    /// Session position persistence map.
-    pub position_map: crate::session::PositionMap,
-    /// Active substitute‑confirm state (set by :s/pat/repl/gc).
-    pub substitute_confirm: Option<SubstituteConfirmState>,
-    pub replace_count: usize,
-
-    // ==================== Tags ====================
-    /// Ctags manager for go-to-definition via tags file.
-    pub tag_manager: crate::tags::TagManager,
-    /// Current tag search results (for cycling with :tnext/:tprev).
-    pub tag_results: Vec<crate::tags::TagEntry>,
-    pub tag_list_popup: Option<TagListPopup>,
+    /// Search, Mark, and Tag subsystem state.
+    pub search: crate::state::search::SearchState,
 
     // ==================== Clipboard & Registers ====================
     /// Yank (copy) register.
@@ -334,85 +282,14 @@ pub struct Editor {
     /// Named registers (a–z) for yank/paste via "xp.
     pub named_registers: std::collections::HashMap<char, String>,
 
-    // ==================== Popups & Overlays ====================
-    /// Optional float popup (e.g. hunk preview). When `Some`, input is
-    /// intercepted: ESC dismisses, other keys dismiss + execute.
-    pub float_popup: Option<FloatPopup>,
-    /// Interactive help popup (if active).
-    pub help_popup: Option<HelpPopup>,
-    /// Buffer list popup (if active). Intercepts input like help_popup.
-    pub buffer_list_popup: Option<crate::popup::BufferListPopup>,
-    /// File picker popup (if active). Intercepts input like help_popup.
-    pub file_picker: Option<FilePicker>,
-    /// Keymap popup (if active). Intercepts input like help_popup.
-    pub keymap_popup: Option<crate::popup::KeymapPopup>,
-    /// MRU popup (if active). Intercepts input like buffer_list_popup.
-    pub mru_popup: Option<MruPopup>,
-    /// Bottom-up register popup (triggered by :reg).
-    pub register_popup: Option<Vec<String>>,
-    /// Dynamic title for the register popup (e.g. "Registers" or "LLM Translate → 中文").
-    pub register_popup_title: String,
-    /// Overlay state tracker for rendering optimization.
-    pub overlay: OverlayTracker,
-    /// Format info popup (full formatter stderr output). Dismissed with ESC/q/Enter.
-    pub fmt_info_popup: Option<Vec<String>>,
-    /// Dynamic title for the format info popup.
-    pub fmt_info_popup_title: String,
-    /// Mark list popup (if active).
-    pub mark_list_popup: Option<crate::popup::MarkListPopup>,
+    /// Popup and Overlay subsystem state.
+    pub popup: crate::state::popup::PopupState,
 
-    // ==================== Git Integration ====================
-    /// Automatic diff popup shown when cursor is near a git hunk.
-    /// Non‑interactive — does not intercept input.
-    pub diff_popup: Option<crate::ed::git::DiffPopup>,
-    /// Whether the diff popup is active (diff mode).
-    pub diff_mode_active: bool,
-    /// Cached git provider for the current file's repository.
-    pub git_provider: Option<crate::git::GitProvider>,
-    /// Whether the git gutter sign column is enabled.
-    pub git_gutter_enabled: bool,
-    /// Cached diff hunks for the active buffer (for hunk revert).
-    pub cached_diff_hunks: Vec<EditorHunk>,
-    /// Timestamp of the last content change that invalidated the git gutter.
-    pub git_gutter_dirty_since: Option<Instant>,
-    /// Debounce interval (milliseconds) for git gutter recomputation after edits.
-    pub git_gutter_debounce_ms: u64,
-    /// Git log commit count (persisted for refresh).
-    pub git_log_count: usize,
-    /// Git log grep pattern (persisted for refresh).
-    pub git_log_grep: String,
-    /// Buffer ID of the active GitCommit buffer (for LLM response routing).
-    pub git_commit_buffer_id: Option<BufferId>,
-    /// Timestamp when the git commit LLM request started (for animation).
-    pub git_commit_start_time: Option<std::time::Instant>,
-    pub git_commit_diff_summary: Option<String>,
+    /// Git subsystem state.
+    pub git: crate::state::git::GitState,
 
-    // ==================== LSP Integration ====================
-    /// LSP message sender (editor → async LSP task).
-    pub lsp_tx: mpsc::UnboundedSender<crate::lsp::LspMessage>,
-    /// Whether an LSP completion request is in flight.
-    pub lsp_completion_pending: bool,
-    pub lsp_completion_was_trigger: bool,
-    /// Whether the LSP server has connected and initialized.
-    pub lsp_connected: bool,
-    /// Cached LSP diagnostics per URI.
-    pub lsp_diagnostics: std::collections::HashMap<String, Vec<crate::lsp::Diagnostic>>,
-    /// Current signature help state (for info bar display).
-    pub lsp_signature_help: Option<crate::lsp::SignatureHelpState>,
-    /// Inlay hints per URI.
-    pub lsp_inlay_hints: std::collections::HashMap<String, Vec<crate::lsp::InlayHint>>,
-    /// Whether an LSP didChange notification is pending (debounced).
-    pub lsp_change_pending: bool,
-    /// Deadline after which to send the pending LSP didChange.
-    pub lsp_change_deadline: Option<Instant>,
-    /// LSP change debounce interval in milliseconds.
-    pub lsp_change_debounce_ms: u64,
-    /// LSP document version counter.
-    pub lsp_doc_version: i32,
-    /// Whether formatting is pending.
-    pub formatting_pending: bool,
-    /// Buffer ID for pending formatting operation.
-    pub formatting_buffer_id: Option<BufferId>,
+    /// LSP subsystem state.
+    pub lsp: crate::state::lsp::LspState,
 
     // ==================== AI / Codeium ====================
     /// Ghost text manager (inline AI suggestions).
@@ -424,32 +301,8 @@ pub struct Editor {
     /// Set to true on first tick to auto-start Codeium if configured.
     auto_start_codeium: bool,
 
-    // ==================== LLM Features ====================
-    /// The LLM conversation buffer state (attached to BufferKind::Llm)
-    pub llm_buffer: LlmBuffer,
-    /// Whether to prefix the user's LLM prompt with "##TODO" (set by `'` in visual mode).
-    pub llm_todo_prefix: bool,
-    /// Handle to the LLM buffer ID (if created)
-    pub llm_buffer_id: Option<BufferId>,
-    /// Tokio runtime for async LLM operations.
-    pub llm_runtime: tokio::runtime::Runtime,
-    /// Channel sender for LLM async tasks to send responses back.
-    pub llm_response_tx: mpsc::UnboundedSender<Result<String, String>>,
-    /// Channel receiver polled in tick() for completed LLM responses.
-    pub llm_response_rx: mpsc::UnboundedReceiver<Result<String, String>>,
-    /// Handle to the running LLM async task (for abort on cancel).
-    pub llm_task_handle: Option<tokio::task::JoinHandle<()>>,
-    /// The preset to use if the user triggers a quick LLM action
-    pub llm_active_preset: Option<crate::llm::LlmPreset>,
-    /// Context text (e.g., visual selection) for the active LLM prompt
-    pub llm_active_context: Option<String>,
-    /// Buffer ID the user was editing before opening the LLM split layout.
-    pub llm_origin_buffer_id: Option<crate::buffer::BufferId>,
-    /// Instead of being appended to the LLM conversation buffer, show in info bar.
-    pub llm_infobar_response: bool,
-    /// Accumulator for infobar-bound LLM responses (streaming chunks).
-    pub llm_infobar_accumulator: String,
-    pub llm_single_shot: bool,
+    /// LLM subsystem state.
+    pub llm: crate::state::llm::LlmState,
 
     // ==================== Completion ====================
     /// Completion engine (word-based, buffer-word, future LSP).
@@ -499,9 +352,7 @@ pub struct Editor {
     /// Command line prompt state.
     pub command_prompt: MiniInputPrompt,
     /// Search line prompt state.
-    pub search_prompt: MiniInputPrompt,
-    /// LLM prompt state.
-    pub llm_prompt: MiniInputPrompt,
+    // pub search_prompt: MiniInputPrompt,
 
     // ==================== Repeat & History ====================
     //-- struct Editor step 1 (anchor dont remove) --//
@@ -520,9 +371,6 @@ pub struct Editor {
     /// Current index in quickfix list.
     pub quickfix_index: usize,
 
-    /// Function list popup (if active).
-    pub function_list_popup: Option<crate::popup::FunctionListPopup>,
-
     // ==================== MRU ====================
     /// Most-recently-used file manager.
     pub mru: MruManager,
@@ -537,18 +385,7 @@ pub struct Editor {
     pub shortcut_visual_context: Option<String>,
 
     // ==================== Build ====================
-    /// Parsed diagnostics from the last `:build` run.
-    pub build_diagnostics: Vec<crate::ed::build::BuildDiagnostic>,
-    /// Channel sender for background build thread.
-    pub build_response_tx: std::sync::mpsc::Sender<crate::ed::build::BuildResult>,
-    /// Channel receiver polled in tick() for completed build results.
-    pub build_response_rx: std::sync::mpsc::Receiver<crate::ed::build::BuildResult>,
-    /// Whether a build is currently in progress.
-    pub build_in_progress: bool,
-    /// Timestamp when the current build started.
-    pub build_start_time: Option<std::time::Instant>,
-    /// Current frame index for the build spinner animation.
-    pub build_spinner_idx: usize,
+    pub build: crate::state::build::BuildState,
 
     // === visual selectrion ===
     /// Last visual selection range (start_line, end_line), 0-based, inclusive.
@@ -580,14 +417,14 @@ pub struct Editor {
 impl Editor {
     /// Send a message to the LSP task, with debug logging.
     fn lsp_send(&mut self, msg: crate::lsp::LspMessage) {
-        if self.lsp_tx.is_closed() {
-            self.lsp_connected = false;
+        if self.lsp.tx.is_closed() {
+            self.lsp.connected = false;
             return;
         }
-        match self.lsp_tx.send(msg) {
+        match self.lsp.tx.send(msg) {
             Ok(()) => {}
             Err(_e) => {
-                self.lsp_connected = false;
+                self.lsp.connected = false;
             }
         }
     }
@@ -640,18 +477,14 @@ impl Editor {
         let (app_tx, app_rx) = crate::msgbox::message_channel();
 
         // Create the runtime FIRST so we can spawn on it
-        let llm_runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .enable_all()
-            .build()
-            .expect("Failed to create tokio runtime for LLM");
+        let llm = crate::state::llm::LlmState::new();
 
         let lsp_tx = if enable_lsp {
             let tx_for_lsp = app_tx.clone();
             let mut lsp_manager = crate::lsp::LspManager::new(tx_for_lsp);
             let sender = lsp_manager.get_sender();
 
-            llm_runtime.spawn(async move {
+            llm.runtime.spawn(async move {
                 lsp_manager.run().await;
             });
 
@@ -663,20 +496,11 @@ impl Editor {
             tx
         };
 
-        let (llm_response_tx, llm_response_rx) =
-            tokio::sync::mpsc::unbounded_channel::<Result<String, String>>();
-
         let command_history_len = history_data.command.len();
-        let search_history_len = history_data.search.len();
 
         let mut command_prompt = MiniInputPrompt::new();
         command_prompt.history = history_data.command.clone();
         command_prompt.history_index = command_history_len;
-
-        let mut search_prompt = MiniInputPrompt::new();
-        search_prompt.history = history_data.search.clone();
-        search_prompt.history_index = search_history_len;
-        let (build_tx, build_rx) = std::sync::mpsc::channel();
 
         let active_shortcuts = {
             let mut list = Vec::new();
@@ -735,76 +559,18 @@ impl Editor {
             cmd_waiting_register: false,
 
             // Search & Navigation
-            search_direction: None,
-            search_input_active: false,
-            search_pattern: None,
-            search_matches: Vec::new(),
-            current_search_match: 0,
-            search_matches_dirty: false,
-            search_buffer_id: None,
-            command_line_history_prefix: None,
-            search_line_history_prefix: None,
-            search_history: history_data.search.clone(),
-            search_history_idx: search_history_len,
-            substitute_confirm: None,
-            search_highlight_enabled: true,
-            replace_count: 1,
+            search: crate::state::search::SearchState::new(history_data.search.clone()),
+            // position_map: crate::session::PositionMap::load(),
             jump: JumpState::default(),
-            guide_popup: None,
-
-            marks: std::collections::HashMap::new(),
-            last_jump_mark: None,
-            mark_pending: false,
-            goto_mark_pending: false,
-            position_map: crate::session::PositionMap::load(),
-
-            tag_manager: crate::tags::TagManager::new(),
-            tag_results: Vec::new(),
-            tag_list_popup: None,
             // Clipboard & Registers
             yank_register: String::new(),
             named_registers: std::collections::HashMap::new(),
 
             // Popups & Overlays
-            float_popup: None,
-            help_popup: None,
-            buffer_list_popup: None,
-            file_picker: None,
-            keymap_popup: None,
-            mru_popup: None,
-            mark_list_popup: None,
-            register_popup: None,
-            register_popup_title: "Registers".to_string(),
-            overlay: OverlayTracker::default(),
+            popup: crate::state::popup::PopupState::new(),
 
-            // Git Integration
-            diff_popup: None,
-            diff_mode_active: false,
-            git_provider: None,
-            git_gutter_enabled: true,
-            cached_diff_hunks: Vec::new(),
-            git_gutter_dirty_since: None,
-            git_gutter_debounce_ms: 500,
-            git_log_count: 0,
-            git_commit_buffer_id: None,
-            git_log_grep: String::new(),
-            git_commit_start_time: None,
-            git_commit_diff_summary: None,
-
-            // LSP Integration
-            lsp_tx,
-            lsp_completion_pending: false,
-            lsp_completion_was_trigger: false,
-            lsp_connected: false,
-            lsp_diagnostics: std::collections::HashMap::new(),
-            lsp_signature_help: None,
-            lsp_inlay_hints: std::collections::HashMap::new(),
-            lsp_change_pending: false,
-            lsp_change_deadline: None,
-            lsp_change_debounce_ms: 20,
-            lsp_doc_version: 0,
-            formatting_pending: false,
-            formatting_buffer_id: None,
+            git: crate::state::git::GitState::new(),
+            lsp: crate::state::lsp::LspState::new(lsp_tx),
 
             // AI / Codeium
             ghost_text: GhostTextManager::new(),
@@ -813,19 +579,7 @@ impl Editor {
             auto_start_codeium: true,
 
             // LLM Features
-            llm_buffer: LlmBuffer::new(),
-            llm_todo_prefix: false,
-            llm_buffer_id: None,
-            llm_runtime,
-            llm_response_tx,
-            llm_response_rx,
-            llm_task_handle: None,
-            llm_active_preset: None,
-            llm_active_context: None,
-            llm_origin_buffer_id: None,
-            llm_infobar_response: false,
-            llm_infobar_accumulator: String::new(),
-            llm_single_shot: false,
+            llm,
 
             // Completion
             completion: CompletionEngine::new(completion_trigger_len),
@@ -860,8 +614,6 @@ impl Editor {
             // Command System
             command_registry,
             command_prompt,
-            search_prompt,
-            llm_prompt: MiniInputPrompt::new(),
 
             // Repeat & History
             last_action: LastAction::default(),
@@ -872,17 +624,9 @@ impl Editor {
             quickfix_results: Vec::new(),
             quickfix_index: 0,
 
-            function_list_popup: None,
-            fmt_info_popup: None,
-            fmt_info_popup_title: "Format Info".to_string(),
-
             visual_selection_range: None,
-            build_diagnostics: Vec::new(),
-            build_response_tx: build_tx,
-            build_response_rx: build_rx,
-            build_in_progress: false,
-            build_start_time: None,
-            build_spinner_idx: 0,
+            build: crate::state::build::BuildState::new(),
+
             // MRU
             mru: {
                 let mut m = MruManager::new(
@@ -943,7 +687,7 @@ impl Editor {
             })?;
 
         self.codeium
-            .start(api_key, &self.llm_runtime)
+            .start(api_key, &self.llm.runtime)
             .map_err(|e| format!("Codeium: {}", e))?;
 
         self.set_status("Codeium: starting server...".to_string());
@@ -1058,7 +802,7 @@ impl Editor {
                 self.dirty.cursor = true;
             }
             CommandResult::ContentChanged => {
-                self.search_matches_dirty = true;
+                self.search.matches_dirty = true;
                 self.fn_name_needs_update = true;
                 if self.completion.active {
                     // Only mark the current line as dirty — skip full window redraw
@@ -1106,137 +850,6 @@ impl Editor {
     // =====================================================================
 
     fn process_key(&mut self, key: Key) -> CommandResult {
-        // ── Float popup interception ──
-        if self.float_popup.is_some() {
-            if key == Key::Escape || key == Key::Ctrl('c') {
-                self.float_popup = None;
-                self.overlay.float = None;
-                self.shortcut_active = false;
-                self.shortcut_pending_keys.clear();
-                self.dirty.mark_all();
-                return CommandResult::NoOp;
-            }
-
-            // ── Float Shortcut Transient State ──
-            if self.shortcut_active {
-                // Backspace: undo last pending key
-                if key == Key::Backspace {
-                    if !self.shortcut_pending_keys.is_empty() {
-                        self.shortcut_pending_keys.pop();
-                        self.rebuild_shortcut_popup();
-                        return CommandResult::NoOp;
-                    }
-                    // No pending keys — dismiss
-                    self.float_popup = None;
-                    self.overlay.float = None;
-                    self.shortcut_active = false;
-                    self.dirty.mark_all();
-                    return CommandResult::NoOp;
-                }
-
-                // Build the new prefix by appending this key
-                let mut new_prefix = self.shortcut_pending_keys.clone();
-                new_prefix.push(key);
-                let prefix_len = new_prefix.len();
-
-                // Find all shortcuts that match the new prefix
-                let matching: Vec<usize> = self
-                    .active_shortcuts
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, (keys, _))| {
-                        keys.len() >= prefix_len && keys[..prefix_len] == new_prefix[..]
-                    })
-                    .map(|(i, _)| i)
-                    .collect();
-
-                if matching.is_empty() {
-                    // No match — dismiss popup
-                    self.float_popup = None;
-                    self.overlay.float = None;
-                    self.shortcut_active = false;
-                    self.shortcut_pending_keys.clear();
-                    self.dirty.mark_all();
-                    return CommandResult::NoOp;
-                }
-
-                // Commit the new prefix
-                self.shortcut_pending_keys = new_prefix;
-
-                // Check for exact match at current prefix length
-                let exact_idx = matching
-                    .iter()
-                    .find(|&&i| self.active_shortcuts[i].0.len() == prefix_len);
-                let has_longer = matching
-                    .iter()
-                    .any(|&i| self.active_shortcuts[i].0.len() > prefix_len);
-
-                if let Some(&idx) = exact_idx {
-                    if !has_longer {
-                        // Unambiguous exact match — execute immediately
-                        let action = self.active_shortcuts[idx].1.clone();
-                        self.float_popup = None;
-                        self.overlay.float = None;
-                        self.shortcut_active = false;
-                        self.shortcut_pending_keys.clear();
-                        self.dirty.mark_all();
-                        return self.process_action(action);
-                    }
-                    // Exact match exists but longer sequences are possible — wait
-                    self.rebuild_shortcut_popup();
-                    return CommandResult::NoOp;
-                }
-
-                // No exact match yet, but prefix matches — wait for more keys
-                self.rebuild_shortcut_popup();
-                return CommandResult::NoOp;
-            }
-
-            // Default float popup: dismiss and fall through to process key normally
-            let old_rect = self.overlay.float;
-            self.float_popup = None;
-            self.overlay.float = None;
-            if let Some(rect) = old_rect {
-                self.dirty.mark_popup_closed(rect);
-            }
-            self.dirty.cursor = true;
-            // Fall through to process the key normally
-        }
-
-        // ── Register popup interception ──
-        if self.register_popup.is_some() {
-            if key == Key::Escape || key == Key::Char('q') || key == Key::Enter {
-                self.register_popup = None;
-                self.register_popup_title = "Registers".to_string();
-                self.dirty.mark_all();
-                return CommandResult::NoOp;
-            }
-            // Any other key dismisses the popup and falls through to normal processing
-            self.register_popup = None;
-            self.register_popup_title = "Registers".to_string();
-            self.dirty.mark_all();
-            // Fall through to process the key normally
-        }
-
-        // ── Format info popup interception ──
-        if self.fmt_info_popup.is_some() {
-            match key {
-                Key::Escape | Key::Char('q') | Key::Enter => {
-                    self.fmt_info_popup = None;
-                    self.fmt_info_popup_title = "Format Info".to_string();
-                    self.dirty.mark_all();
-                    return CommandResult::NoOp;
-                }
-                _ => {
-                    // Any other key dismisses the popup and falls through
-                    self.fmt_info_popup = None;
-                    self.fmt_info_popup_title = "Format Info".to_string();
-                    self.dirty.mark_all();
-                    // Fall through to process the key normally
-                }
-            }
-        }
-
         // ── Force quit confirmation interception ──
         if self.force_quit_pending {
             match key {
@@ -1277,7 +890,7 @@ impl Editor {
         }
 
         // ── Substitute confirmation interception ──
-        if self.substitute_confirm.is_some() {
+        if self.search.substitute_confirm.is_some() {
             match key {
                 Key::Char('y') | Key::Char('Y') => {
                     return self.substitute_confirm_yes();
@@ -1327,554 +940,63 @@ impl Editor {
         }
 
         // ── SEARCH INPUT MODE ──
-        if self.search_input_active {
-            // ── Prefix-smart history navigation ──
-            if key == Key::Up {
-                let _ = self.search_history_up();
-                // Live-update the search matches based on the new history entry
-                let query = self.search_prompt.text();
-                if query.is_empty() {
-                    self.clear_messages();
-                    self.search_matches.clear();
-                } else {
-                    let matches = self.find_all_matches(query);
-                    self.search_matches = matches;
-                    if self.search_matches.is_empty() {
-                        self.set_infobar_message("No match".to_string());
-                    } else {
-                        self.set_status(format!("{} matches", self.search_matches.len()));
-                    }
-                }
-                self.dirty.status_cmdline = true;
-                self.dirty.cursor = true;
-                self.dirty.windows = true;
-                return CommandResult::NoOp;
-            }
-            if key == Key::Down {
-                let _ = self.search_history_down();
-                // Live-update the search matches
-                let query = self.search_prompt.text();
-                if query.is_empty() {
-                    self.clear_messages();
-                    self.search_matches.clear();
-                } else {
-                    let matches = self.find_all_matches(query);
-                    self.search_matches = matches;
-                    if self.search_matches.is_empty() {
-                        self.set_infobar_message("No match".to_string());
-                    } else {
-                        self.set_status(format!("{} matches", self.search_matches.len()));
-                    }
-                }
-                self.dirty.status_cmdline = true;
-                self.dirty.cursor = true;
-                self.dirty.windows = true;
-                return CommandResult::NoOp;
-            }
-
-            return match self.search_prompt.handle_key(&key) {
-                PromptAction::Changed => {
-                    let query = self.search_prompt.text();
-                    if query.is_empty() {
-                        self.clear_messages();
-                        self.search_matches.clear();
-                    } else {
-                        let matches = self.find_all_matches(query);
-                        self.search_matches = matches;
-                        if self.search_matches.is_empty() {
-                            self.set_infobar_message("No match".to_string());
-                        } else {
-                            self.set_status(format!("{} matches", self.search_matches.len()));
-                        }
-                    }
-                    self.dirty.status_cmdline = true;
-                    self.dirty.cursor = true;
-                    self.dirty.windows = true;
-                    CommandResult::NoOp
-                }
-                PromptAction::Submit => {
-                    let query = self.search_prompt.text().to_string();
-                    self.search_prompt.push_history(query);
-                    return self.execute_search();
-                }
-                PromptAction::Cancel => {
-                    self.search_prompt.clear();
-                    self.dirty.mark_all();
-                    return self.cancel_search();
-                }
-                PromptAction::None => {
-                    // If Backspace is pressed on empty search, cancel search
-                    if key == Key::Backspace && self.search_prompt.is_empty() {
-                        self.search_prompt.clear();
-                        self.dirty.mark_all();
-                        return self.cancel_search();
-                    }
-                    CommandResult::NoOp
-                }
-            };
+        if self.search.input_active {
+            return self.process_search_input_key(key);
         }
 
         // ── LLM Input scratchpad special keys ──
-        if self.mode == Mode::Normal {
-            if let Some(window) = self.windows.active_window() {
-                if let Some(buffer) = self.buffers.get(&window.buffer_id) {
-                    if buffer.kind == BufferKind::LlmInput {
-                        match key {
-                            Key::Enter => {
-                                return self.llm_send_input_buffer();
-                            }
-                            Key::Char('q') => {
-                                return self.llm_close_split_session();
-                            }
-                            _ => {} // Fall through to normal Vim keybinds (j, k, i, o, dd, etc.)
-                        }
-                    }
-                }
-            }
+        if let Some(result) = self.handle_llm_input_buffer_key(&key) {
+            return result;
+        }
+
+        // ── LLM PROMPT MODE ──
+        if self.mode == Mode::LlmPrompt {
+            return self.process_llm_prompt_key(key);
         }
 
         // ── Popups take precedence over special buffer key bindings ──
-        let popup_active = self.buffer_list_popup.is_some()
-            || self.mru_popup.is_some()
-            || self.file_picker.is_some()
-            || self.function_list_popup.is_some()
-            || self.keymap_popup.is_some()
-            || self.help_popup.is_some()
-            || self.mark_list_popup.is_some();
+        let popup_active = self.popup.buffer_list.is_some()
+            || self.popup.mru.is_some()
+            || self.popup.file_picker.is_some()
+            || self.popup.function_list.is_some()
+            || self.popup.keymap.is_some()
+            || self.popup.help.is_some()
+            || self.popup.mark_list.is_some();
 
-        // ── Ripgrep buffer special keys ── RG
-        if self.mode == Mode::Normal && !popup_active {
-            if let Some(window) = self.windows.active_window() {
-                if let Some(buffer) = self.buffers.get(&window.buffer_id) {
-                    if buffer.kind == BufferKind::Ripgrep {
-                        match key {
-                            Key::Enter => {
-                                self.dirty.mark_all();
-                                return self.ripgrep_goto_result();
-                            }
-                            Key::Char('q') | Key::Char('Q') => {
-                                return self.ripgrep_close_buffer();
-                            }
-                            Key::Escape => {
-                                return self.ripgrep_close_buffer();
-                            }
-                            _ => {
-                                // Block most editing keys in ripgrep buffer
-                                // Allow navigation (h/j/k/l, Ctrl-u/d, etc.) via keybinds
-                            }
-                        }
-                    }
-                }
-            }
+        // ── Popup Key Dispatch ──
+        if let Some(result) = self.handle_popup_keys(&key) {
+            return result;
         }
 
-        // ── Mark list popup navigation ── MARKS
-        if let Some(popup) = &mut self.mark_list_popup {
-            match key {
-                Key::Escape | Key::Ctrl('c') => {
-                    self.mark_list_popup = None;
-                    self.dirty.mark_list = true;
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                Key::Up | Key::PageUp => {
-                    popup.move_up();
-                    self.dirty.mark_list = true;
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                Key::Down | Key::PageDown => {
-                    popup.move_down();
-                    self.dirty.mark_list = true;
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                Key::Enter => {
-                    if let Some(entry) = popup.selected_entry().cloned() {
-                        self.mark_list_popup = None;
-
-                        if self.buffers.get(&entry.buffer_id).is_none() {
-                            self.marks.remove(&entry.name);
-                            self.set_error(format!("Mark '{}' buffer closed", entry.name));
-                            self.dirty.mark_all();
-                            return CommandResult::NoOp;
-                        }
-
-                        self.save_jump_mark();
-
-                        if let Some(window) = self.windows.active_window() {
-                            if window.buffer_id != entry.buffer_id {
-                                if let Some(w) = self.windows.active_window_mut() {
-                                    w.set_buffer(entry.buffer_id);
-                                }
-                            }
-                        }
-
-                        self.move_to_position(entry.line, entry.col);
-                        self.ensure_cursor_visible_all();
-                        self.set_status(format!("Jumped to mark '{}'", entry.name));
-                        self.dirty.mark_all(); // buffer switch → full redraw
-                        return CommandResult::ViewChanged;
-                    }
-                    self.mark_list_popup = None;
-                    self.dirty.mark_list = true;
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                Key::Delete => {
-                    if let Some(entry) = popup.selected_entry().cloned() {
-                        let name = entry.name;
-                        self.marks.remove(&name);
-                        popup.remove_selected();
-                        if popup.entries.is_empty() {
-                            self.mark_list_popup = None;
-                        }
-                        self.set_status(format!("Mark '{}' removed", name));
-                    }
-                    self.dirty.mark_list = true;
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                Key::Backspace => {
-                    popup.filter_pop();
-                    self.dirty.mark_list = true;
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                Key::Char(c) => {
-                    popup.filter_push(c);
-                    self.dirty.mark_list = true;
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                _ => {
-                    self.mark_list_popup = None;
-                    self.dirty.mark_list = true;
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-            }
-        }
         //-- process_key popup_active (anchor dont remove) --//
-        // ── Git status buffer special keys ── GIT STATUlS
-        if self.mode == Mode::Normal && !popup_active {
-            if let Some(window) = self.windows.active_window() {
-                if let Some(buffer) = self.buffers.get(&window.buffer_id) {
-                    if buffer.kind == BufferKind::GitStatus {
-                        match key {
-                            Key::Char('s') | Key::Char('S') => {
-                                self.dirty.mark_all();
-                                return self.git_status_toggle_stage();
-                            }
-                            Key::Char('c') | Key::Char('C') => {
-                                return self.git_commit_generate();
-                            }
-                            Key::Enter => {
-                                self.dirty.mark_all();
-                                return self.git_status_goto_file();
-                            }
-                            Key::Char('r') | Key::Char('R') => {
-                                self.dirty.mark_all();
-                                return self.git_status_refresh();
-                            }
-                            Key::Char('q') | Key::Char('Q') => {
-                                return self.git_status_close();
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-        }
-
-        // ── Git diff buffer special keys ── GIT DIFF
-        if self.mode == Mode::Normal && !popup_active {
-            if let Some(window) = self.windows.active_window() {
-                if let Some(buffer) = self.buffers.get(&window.buffer_id) {
-                    if buffer.kind == BufferKind::GitDiff {
-                        match key {
-                            Key::Enter => {
-                                self.dirty.mark_all();
-                                return self.git_diff_goto_file();
-                            }
-                            Key::Char('n') => {
-                                self.dirty.mark_all();
-                                return self.git_diff_next_hunk();
-                            }
-                            Key::Char('N') => {
-                                self.dirty.mark_all();
-                                return self.git_diff_prev_hunk();
-                            }
-                            Key::Char('r') | Key::Char('R') => {
-                                self.dirty.mark_all();
-                                return self.git_diff_refresh();
-                            }
-                            Key::Char('q') | Key::Char('Q') => {
-                                return self.git_diff_close();
-                            }
-                            _ => {} // fall through to normal navigation keybinds
-                        }
-                    }
-                }
-            }
-        }
-
         // ── Build buffer special keys ── BUILD
-        if self.mode == Mode::Normal && !popup_active {
-            if let Some(window) = self.windows.active_window() {
-                if let Some(buffer) = self.buffers.get(&window.buffer_id) {
-                    if buffer.kind == BufferKind::Build {
-                        match key {
-                            Key::Enter => {
-                                self.dirty.mark_all();
-                                return self.build_goto_error();
-                            }
-                            Key::Char('l') => {
-                                return self.build_insert_brace_content();
-                            }
-                            Key::Char('y') => {
-                                // Copy all build errors/warnings to the system clipboard
-                                if self.build_diagnostics.is_empty() {
-                                    return CommandResult::Message(
-                                        "No errors/warnings to yank".to_string(),
-                                    );
-                                }
 
-                                let mut yank_text = String::new();
-                                for diag in &self.build_diagnostics {
-                                    let severity_str = match diag.severity {
-                                        crate::ed::build::BuildSeverity::Error => "error",
-                                        crate::ed::build::BuildSeverity::Warning => "warning",
-                                        crate::ed::build::BuildSeverity::Note => "note",
-                                    };
-                                    yank_text.push_str(&format!(
-                                        "{}:{}:{}: {}: {}\n",
-                                        diag.file_path.display(),
-                                        diag.line_number,
-                                        diag.column,
-                                        severity_str,
-                                        diag.message
-                                    ));
-                                }
-
-                                self.yank_register = yank_text.clone();
-
-                                return match crate::clipboard::set_text(&yank_text) {
-                                    Ok(()) => CommandResult::Message(format!(
-                                        "Yanked {} diagnostic(s) to system clipboard",
-                                        self.build_diagnostics.len()
-                                    )),
-                                    Err(e) => {
-                                        CommandResult::Error(format!("Clipboard error: {}", e))
-                                    }
-                                };
-                            }
-                            Key::Char('n') => {
-                                return self.build_next_error();
-                            }
-                            Key::Char('N') => {
-                                return self.build_prev_error();
-                            }
-                            Key::Char('q') | Key::Char('Q') => {
-                                return self.build_close();
-                            }
-                            _ => {
-                                // Fall through to normal navigation keybinds
-                                // (j, k, Ctrl-u/d, G, gg, etc.)
-                            }
-                        }
-                    }
-                }
+        if !popup_active {
+            if let Some(result) = self.handle_build_buffer_key(&key) {
+                return result;
             }
-        }
-
-        // Add after the GitLog key-interception block, before popup handling:
-        // ── Git commit buffer special keys ── GIT COMMIT
-        if self.mode == Mode::Normal && !popup_active {
-            if let Some(window) = self.windows.active_window() {
-                if let Some(buffer) = self.buffers.get(&window.buffer_id) {
-                    if buffer.kind == BufferKind::GitCommit {
-                        match key {
-                            Key::Char('w') => {
-                                return self.handle_commit_write();
-                            }
-                            Key::Char('q') | Key::Char('Q') => {
-                                return self.git_commit_close();
-                            }
-                            _ => {} // Fall through to normal editing keybinds
-                        }
-                    }
-                }
+            if let Some(result) = self.handle_git_status_buffer_key(&key) {
+                return result;
             }
-        }
-        // ── Git log buffer special keys ── GIT LOG
-        if self.mode == Mode::Normal && !popup_active {
-            if let Some(window) = self.windows.active_window() {
-                if let Some(buffer) = self.buffers.get(&window.buffer_id) {
-                    if buffer.kind == BufferKind::GitLog {
-                        match key {
-                            Key::Enter => {
-                                self.dirty.mark_all();
-                                return self.git_log_goto_file();
-                            }
-                            Key::Char('d') | Key::Char('D') => {
-                                self.dirty.mark_all();
-                                return self.git_log_show_diff();
-                            }
-                            Key::Char('s') | Key::Char('S') => {
-                                self.dirty.mark_all();
-                                return self.git_log_save_file();
-                            }
-                            Key::Char('r') | Key::Char('R') => {
-                                self.dirty.mark_all();
-                                return self.git_log_refresh();
-                            }
-                            Key::Char('q') | Key::Char('Q') => {
-                                return self.git_log_close();
-                            }
-                            _ => {} // fall through to normal navigation keybinds
-                        }
-                    }
-                }
+            if let Some(result) = self.handle_git_diff_buffer_key(&key) {
+                return result;
             }
-        }
-
-        // ── Buffer list popup navigation ── BUFFER
-        if let Some(popup) = &mut self.buffer_list_popup {
-            match key {
-                Key::Escape | Key::Ctrl('c') => {
-                    self.buffer_list_popup = None;
-                    self.overlay.buffer_list = None;
-                    self.dirty.mark_all();
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                Key::Up | Key::PageUp => {
-                    popup.move_up();
-                    self.dirty.buffer_list = true;
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                Key::Down | Key::PageDown => {
-                    popup.move_down();
-                    self.dirty.buffer_list = true;
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                Key::Enter => {
-                    if let Some(buffer_id) = popup.selected_buffer_id() {
-                        let old_rect = self.overlay.buffer_list;
-                        self.buffer_list_popup = None;
-                        self.overlay.buffer_list = None;
-                        if let Some(rect) = old_rect {
-                            self.dirty.mark_popup_closed(rect);
-                        }
-
-                        // Save outgoing buffer position, switch, restore incoming
-                        self.save_current_position();
-                        if let Some(window) = self.windows.active_window_mut() {
-                            window.set_buffer(buffer_id);
-                        }
-                        self.restore_cursor_position();
-
-                        // ── Clamp cursor to valid range ──
-                        self.clamp_cursor_to_buffer(&buffer_id);
-
-                        // ── Explicitly rebuild viewport ──
-                        {
-                            let (cursor_line, line_count, edit_height) = {
-                                let window = self.windows.active_window().unwrap();
-                                let buffer = self.buffers.get(&buffer_id).unwrap();
-                                (
-                                    window.cursor.position.line,
-                                    buffer.line_count(),
-                                    window.height.saturating_sub(1) as usize,
-                                )
-                            };
-
-                            if let Some(window) = self.windows.active_window_mut() {
-                                let half = edit_height / 2;
-                                let ideal_scroll = cursor_line.saturating_sub(half);
-
-                                if line_count > edit_height {
-                                    let max_scroll = line_count.saturating_sub(edit_height);
-                                    window.viewport.scroll_line = ideal_scroll.min(max_scroll);
-                                } else {
-                                    window.viewport.scroll_line = 0;
-                                }
-                            }
-                        }
-
-                        let buf_name = self
-                            .buffers
-                            .get(&buffer_id)
-                            .map(|b| b.display_name())
-                            .unwrap_or_else(|| "?".into());
-                        self.set_status(format!("Switched to buffer: {}", buf_name));
-
-                        self.dirty.mark_all();
-                        return CommandResult::NoOp;
-                    }
-                    let old_rect = self.overlay.buffer_list;
-                    self.buffer_list_popup = None;
-                    self.overlay.buffer_list = None;
-                    if let Some(rect) = old_rect {
-                        self.dirty.mark_popup_closed(rect);
-                    }
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                Key::Backspace => {
-                    popup.filter_pop();
-                    self.dirty.buffer_list = true;
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                Key::Char(c) => {
-                    popup.filter_push(c);
-                    self.dirty.buffer_list = true;
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                _ => {
-                    // Other special keys dismiss the popup
-                    let old_rect = self.overlay.buffer_list;
-                    self.buffer_list_popup = None;
-                    self.overlay.buffer_list = None;
-                    if let Some(rect) = old_rect {
-                        self.dirty.mark_popup_closed(rect);
-                    }
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
+            if let Some(result) = self.handle_git_commit_buffer_key(&key) {
+                return result;
+            }
+            if let Some(result) = self.handle_git_log_buffer_key(&key) {
+                return result;
             }
         }
 
         // ── Mark pending (waiting for mark name after m) ── MARK
-        if self.mark_pending {
-            self.mark_pending = false;
-            if let Key::Char(c) = key {
-                if c.is_ascii_lowercase() {
-                    return self.set_mark(c);
-                }
-            }
-            // Invalid mark character — cancel and fall through
-            return CommandResult::NoOp;
+        if let Some(result) = self.handle_mark_pending_key(&key) {
+            return result;
         }
 
         // ── Goto mark pending (waiting for mark name after `) ──
-        if self.goto_mark_pending {
-            self.goto_mark_pending = false;
-            if let Key::Char(c) = key {
-                if c == '`' {
-                    // `` means jump back to last gd position
-                    return self.jump_back();
-                } else if c.is_ascii_lowercase() {
-                    return self.goto_mark(c);
-                }
-            }
-            // Invalid mark character — cancel and fall through
-            return CommandResult::NoOp;
+        if let Some(result) = self.handle_goto_mark_pending_key(&key) {
+            return result;
         }
 
         // ── Inline delete pending (waiting for target char after dt/df) ──
@@ -1898,7 +1020,7 @@ impl Editor {
         // ── Replace char pending (waiting for char after r) ──
         if self.replace_char_pending {
             self.replace_char_pending = false;
-            let count = self.replace_count;
+            let count = self.search.replace_count;
             match key {
                 Key::Char(c) => {
                     return self.with_undo_group(|s| {
@@ -1935,650 +1057,6 @@ impl Editor {
             return CommandResult::NoOp;
         }
 
-        // ── Keymap popup navigation ──
-        if let Some(popup) = &mut self.keymap_popup {
-            match key {
-                Key::Escape => {
-                    self.keymap_popup = None;
-                    self.overlay.help = None;
-                    self.dirty.mark_all();
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                Key::Up | Key::PageUp => {
-                    popup.move_up();
-                    self.dirty.help = true;
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                Key::Down | Key::PageDown => {
-                    popup.move_down();
-                    self.dirty.help = true;
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                Key::Home => {
-                    popup.selected = 0;
-                    popup.scroll = 0;
-                    // Skip to first non-header
-                    while popup.selected < popup.entries.len()
-                        && popup.entries[popup.selected].is_header
-                    {
-                        popup.selected += 1;
-                    }
-                    popup.clamp_scroll();
-                    self.dirty.help = true;
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                Key::End => {
-                    popup.selected = popup.entries.len().saturating_sub(1);
-                    while popup.selected > 0 && popup.entries[popup.selected].is_header {
-                        popup.selected -= 1;
-                    }
-                    popup.clamp_scroll();
-                    self.dirty.help = true;
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                _ => {
-                    self.keymap_popup = None;
-                    self.overlay.help = None;
-                    self.dirty.mark_all();
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-            }
-        }
-
-        // ── MRU popup navigation ──
-        if let Some(popup) = &mut self.mru_popup {
-            match key {
-                Key::Escape | Key::Ctrl('c') => {
-                    self.mru_popup = None;
-                    self.overlay.mru = None;
-                    self.dirty.mark_all();
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                Key::Up | Key::PageUp => {
-                    popup.move_up();
-                    self.dirty.mru = true;
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                Key::Down | Key::PageDown => {
-                    popup.move_down();
-                    self.dirty.mru = true;
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                Key::Enter => {
-                    if let Some(entry) = popup.selected_entry().cloned() {
-                        let old_rect = self.overlay.mru;
-                        self.mru_popup = None;
-                        self.overlay.mru = None;
-                        if let Some(rect) = old_rect {
-                            self.dirty.mark_popup_closed(rect);
-                        }
-
-                        // Open the file at saved position
-                        return match self.open_file(&entry.path) {
-                            Ok(_) => {
-                                // Restore saved cursor position
-                                if let Some(window) = self.windows.active_window_mut() {
-                                    if let Some(buffer) = self.buffers.get(&window.buffer_id) {
-                                        let max_line = buffer.line_count().saturating_sub(1);
-                                        window.cursor.position.line = entry.line.min(max_line);
-                                        let max_col = buffer.line_len(window.cursor.position.line);
-                                        window.cursor.position.col = entry.col.min(max_col);
-                                        window.cursor.desired_col = None;
-                                        let bid = window.buffer_id;
-                                        self.ensure_cursor_visible(&bid);
-                                    }
-                                }
-                                self.dirty.mark_all();
-                                CommandResult::ViewChanged
-                            }
-                            Err(e) => {
-                                self.set_infobar_message(format!("Failed to open: {}", e));
-                                self.dirty.mark_all();
-                                CommandResult::ViewChanged
-                            }
-                        };
-                    }
-                    // No selection — close popup
-                    let old_rect = self.overlay.mru;
-                    self.mru_popup = None;
-                    self.overlay.mru = None;
-                    if let Some(rect) = old_rect {
-                        self.dirty.mark_popup_closed(rect);
-                    }
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                Key::Delete => {
-                    // Remove selected entry from persistent MRU and popup list
-                    if let Some(&real_idx) = popup.filtered.get(popup.selected) {
-                        if let Some(entry) = popup.entries.get(real_idx).cloned() {
-                            self.mru.remove(&entry.path);
-                            popup.entries.remove(real_idx); // Only remove once!
-
-                            // Rebuild filtered indices after removal
-                            let query = popup.filter.to_lowercase();
-                            popup.filtered.clear();
-                            for (i, entry) in popup.entries.iter().enumerate() {
-                                let file_name = entry
-                                    .path
-                                    .file_name()
-                                    .and_then(|n| n.to_str())
-                                    .unwrap_or("")
-                                    .to_string();
-                                let dir_str = entry
-                                    .path
-                                    .parent()
-                                    .and_then(|p| p.to_str())
-                                    .unwrap_or("")
-                                    .to_string();
-
-                                if query.is_empty()
-                                    || file_name.to_lowercase().contains(&query)
-                                    || dir_str.to_lowercase().contains(&query)
-                                {
-                                    popup.filtered.push(i);
-                                }
-                            }
-
-                            // Adjust selected index if necessary
-                            if popup.selected >= popup.filtered.len() && !popup.filtered.is_empty()
-                            {
-                                popup.selected = popup.filtered.len() - 1;
-                            }
-                            // clamp_scroll takes 0 arguments - it uses visible_rows() from the trait
-                            <MruPopup as Scrollable>::clamp_scroll(popup);
-
-                            if popup.entries.is_empty() {
-                                let old_rect = self.overlay.mru;
-                                self.mru_popup = None;
-                                self.overlay.mru = None;
-                                if let Some(rect) = old_rect {
-                                    self.dirty.mark_popup_closed(rect);
-                                }
-                            }
-                        }
-                    }
-                    self.dirty.mru = true;
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-
-                Key::Home => {
-                    // Toggle between recency and frequency sort
-                    if let Some(popup) = &mut self.mru_popup {
-                        popup.toggle_sort(&self.mru);
-                    }
-                    self.dirty.mru = true;
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                Key::Backspace => {
-                    popup.filter_pop();
-                    self.dirty.mru = true;
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                Key::Char(c) => {
-                    popup.filter_push(c);
-                    self.dirty.mru = true;
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                _ => {
-                    // Any other key dismisses the popup
-                    let old_rect = self.overlay.mru;
-                    self.mru_popup = None;
-                    self.overlay.mru = None;
-                    if let Some(rect) = old_rect {
-                        self.dirty.mark_popup_closed(rect);
-                    }
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-            }
-        }
-
-        // Tag list popup — intercept keys when active
-        if let Some(ref mut popup) = self.tag_list_popup {
-            match key {
-                Key::Char('j') | Key::Down => {
-                    popup.move_down();
-                    // Also jump to the now-selected entry as preview
-                    if let Some(entry) = popup.selected_entry().cloned() {
-                        let path = std::path::PathBuf::from(&entry.file);
-                        crate::ed::tag::tag_jump(self, &path, entry.line, &entry.name);
-                    }
-                    return CommandResult::ViewChanged;
-                }
-                Key::Char('k') | Key::Up => {
-                    popup.move_up();
-                    if let Some(entry) = popup.selected_entry().cloned() {
-                        let path = std::path::PathBuf::from(&entry.file);
-                        crate::ed::tag::tag_jump(self, &path, entry.line, &entry.name);
-                    }
-                    return CommandResult::ViewChanged;
-                }
-                Key::Enter => {
-                    if let Some(entry) = popup.selected_entry().cloned() {
-                        let path = std::path::PathBuf::from(&entry.file);
-                        crate::ed::tag::tag_jump(self, &path, entry.line, &entry.name);
-                    }
-                    self.tag_list_popup = None;
-                    return CommandResult::ViewChanged;
-                }
-                Key::Escape => {
-                    // Use whatever your Key enum calls Escape
-                    self.tag_list_popup = None;
-                    return CommandResult::ViewChanged;
-                }
-                _ => {}
-            }
-        }
-
-        // ── Guide popup navigation ── GUIDE
-        if let Some(popup) = &mut self.guide_popup {
-            match key {
-                Key::Escape | Key::Ctrl('c') => {
-                    self.guide_popup = None;
-                    self.dirty.mark_all(); // Closing popup — must redraw underlying windows
-                    return CommandResult::NoOp;
-                }
-                Key::Up | Key::PageUp => {
-                    popup.move_up();
-                    self.dirty.guide = true;
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                Key::Down | Key::PageDown => {
-                    popup.move_down();
-                    self.dirty.guide = true;
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                Key::Enter => {
-                    if let Some(entry) = popup.selected_entry().cloned() {
-                        let file_path = popup.root.join(&entry.file);
-
-                        // Open the file
-                        let open_result = self.open_file(&file_path);
-                        if let Err(e) = open_result {
-                            self.guide_popup = None;
-                            self.dirty.mark_all();
-                            return CommandResult::Error(format!(
-                                "Cannot open {}: {}",
-                                entry.file, e
-                            ));
-                        }
-
-                        // Search for the anchor string in the buffer
-                        if let Some(window) = self.windows.active_window() {
-                            let buffer_id = window.buffer_id;
-                            if let Some(buffer) = self.buffers.get(&buffer_id) {
-                                let source: String = buffer.rope.to_string();
-                                if let Some(line) =
-                                    crate::guide::Guide::find_anchor_line(&source, &entry.anchor)
-                                {
-                                    let max_line = buffer.line_count().saturating_sub(1);
-                                    if let Some(w) = self.windows.active_window_mut() {
-                                        w.cursor.position.line = line.min(max_line);
-                                        w.cursor.position.col = 0;
-                                        w.cursor.desired_col = None;
-                                        let bid = w.buffer_id;
-                                        self.ensure_cursor_visible(&bid);
-                                    }
-                                    self.set_status(format!(
-                                        "→ {} ({})",
-                                        entry.label, entry.anchor
-                                    ));
-                                } else {
-                                    self.set_status(format!(
-                                        "Anchor not found: '{}' in {}",
-                                        entry.anchor, entry.file
-                                    ));
-                                }
-                            }
-                        }
-                        self.scroll_center();
-                        self.guide_popup = None;
-                        self.dirty.mark_all(); // Closing + buffer change — full redraw
-                        return CommandResult::ViewChanged;
-                    }
-                    self.guide_popup = None;
-                    self.dirty.mark_all();
-                    return CommandResult::NoOp;
-                }
-                Key::Backspace => {
-                    popup.filter_pop();
-                    self.dirty.guide = true;
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                Key::Char(c) => {
-                    popup.filter_push(c);
-                    self.dirty.guide = true;
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                _ => {
-                    // Any other key dismisses the popup
-                    self.guide_popup = None;
-                    self.dirty.mark_all(); // Closing — full redraw
-                    return CommandResult::NoOp;
-                }
-            }
-        }
-
-        // ── Function list popup navigation ── FUNC
-        if let Some(popup) = &mut self.function_list_popup {
-            match key {
-                Key::Escape | Key::Ctrl('c') => {
-                    self.function_list_popup = None;
-                    self.overlay.function_list = None;
-                    self.dirty.mark_all();
-                    return CommandResult::NoOp;
-                }
-                Key::Up | Key::PageUp => {
-                    popup.move_up();
-                    self.dirty.function_list = true;
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                Key::Down | Key::PageDown => {
-                    popup.move_down();
-                    self.dirty.function_list = true;
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                Key::Enter => {
-                    if let Some(entry) = popup.selected_entry().cloned() {
-                        self.function_list_popup = None;
-                        self.overlay.function_list = None;
-
-                        // Jump to the function's line
-                        if let Some(window) = self.windows.active_window_mut() {
-                            let max_line = self
-                                .buffers
-                                .get(&window.buffer_id)
-                                .map(|b| b.line_count().saturating_sub(1))
-                                .unwrap_or(0);
-                            window.cursor.position.line = entry.line.min(max_line);
-                            window.cursor.position.col = 0;
-                            window.cursor.desired_col = None;
-                            let bid = window.buffer_id;
-                            self.ensure_cursor_visible(&bid);
-                        }
-                        self.set_status(format!("→ {} (line {})", entry.name, entry.line + 1));
-                        self.dirty.mark_all();
-                        return CommandResult::ViewChanged;
-                    }
-                    // No selection — close
-                    self.function_list_popup = None;
-                    self.overlay.function_list = None;
-                    self.dirty.mark_all();
-                    return CommandResult::NoOp;
-                }
-                Key::Backspace => {
-                    popup.filter_pop();
-                    self.dirty.function_list = true;
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                Key::Char(c) => {
-                    popup.filter_push(c);
-                    self.dirty.function_list = true;
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                _ => {
-                    // Any other key dismisses
-                    self.function_list_popup = None;
-                    self.overlay.function_list = None;
-                    self.dirty.mark_all();
-                    return CommandResult::NoOp;
-                }
-            }
-        }
-
-        // ── File picker navigation ── FILE PICKER
-        if let Some(picker) = &mut self.file_picker {
-            match key {
-                Key::Escape
-                | Key::Char('\x1b')
-                | Key::Ctrl('[')
-                | Key::Char('q')
-                | Key::Char('Q') => {
-                    self.file_picker = None;
-                    self.overlay.file_picker = None;
-                    self.dirty.mark_all();
-                    return CommandResult::NoOp;
-                }
-                Key::Up | Key::Char('k') | Key::PageUp => {
-                    picker.move_up();
-                    self.dirty.file_picker = true;
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                Key::Down | Key::Char('j') | Key::PageDown => {
-                    picker.sync_visible_height(self.term_height);
-                    picker.move_down();
-                    self.dirty.file_picker = true;
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                Key::Enter => {
-                    if let Some(entry) = picker.selected_entry() {
-                        if entry.is_dir {
-                            picker.go_into(&entry.path.clone());
-                            self.dirty.file_picker = true;
-                            return CommandResult::NoOp;
-                        } else {
-                            let path = entry.path.clone();
-                            let old_rect = self.overlay.file_picker;
-                            self.file_picker = None;
-                            self.overlay.file_picker = None;
-                            if let Some(rect) = old_rect {
-                                self.dirty.mark_popup_closed(rect);
-                            }
-                            return match self.open_file(&path) {
-                                Ok(_) => {
-                                    self.dirty.mark_all();
-                                    CommandResult::NoOp
-                                }
-                                Err(e) => CommandResult::Error(e.to_string()),
-                            };
-                        }
-                    }
-                    return CommandResult::NoOp;
-                }
-                Key::Char('-') => {
-                    picker.go_up();
-                    self.dirty.file_picker = true;
-                    return CommandResult::NoOp;
-                }
-                Key::Backspace => {
-                    picker.filter_pop();
-                    self.dirty.file_picker = true;
-                    return CommandResult::NoOp;
-                }
-                Key::Char(c) => {
-                    picker.filter_push(c);
-                    self.dirty.file_picker = true;
-                    return CommandResult::NoOp;
-                }
-                _ => return CommandResult::NoOp,
-            }
-        }
-
-        // ── LLM PROMPT MODE ──
-        if self.mode == Mode::LlmPrompt {
-            // Show hints when Ctrl-R is initially pressed
-            if key == Key::Ctrl('r') {
-                self.cmd_waiting_register = true;
-                self.which_key_hints = vec![
-                    ("Register".to_string(), String::new()),
-                    ("^W".to_string(), "word".to_string()),
-                    ("^L".to_string(), "line".to_string()),
-                    ("^A".to_string(), "whole line".to_string()),
-                    ("%".to_string(), "file path".to_string()),
-                    ("^P".to_string(), "abs file path".to_string()),
-                    ("ESC".to_string(), "cancel".to_string()),
-                ];
-                self.which_key_debounce_timer = None;
-                self.dirty.status_infobar = true;
-                self.dirty.cursor = true; // Ensure cursor stays visible in prompt
-                return CommandResult::ViewChanged; // Force render to show hints!
-            }
-
-            if self.cmd_waiting_register {
-                // Clear waiting state and infobar hints
-                self.cmd_waiting_register = false;
-                let had_hints = !self.which_key_hints.is_empty();
-                self.which_key_hints.clear();
-                if had_hints {
-                    self.dirty.status_infobar = true;
-                }
-
-                match key {
-                    Key::Ctrl('w') => {
-                        let word = self.word_under_cursor_in_current_buffer();
-                        if !word.is_empty() {
-                            self.llm_prompt
-                                .buffer
-                                .insert_str(self.llm_prompt.cursor, &word);
-                            self.llm_prompt.cursor += word.len();
-                            self.dirty.mark_all();
-                            return CommandResult::ViewChanged;
-                        } else {
-                            self.set_infobar_message("No word under cursor".to_string());
-                            return CommandResult::ViewChanged;
-                        }
-                    }
-                    Key::Ctrl('l') => {
-                        let line = self.current_line_content();
-                        if !line.is_empty() {
-                            self.llm_prompt
-                                .buffer
-                                .insert_str(self.llm_prompt.cursor, &line);
-                            self.llm_prompt.cursor += line.len();
-                            self.dirty.mark_all();
-                            return CommandResult::ViewChanged;
-                        } else {
-                            self.set_infobar_message("Current line is empty".to_string());
-                            return CommandResult::ViewChanged;
-                        }
-                    }
-                    Key::Char('%') | Key::Ctrl('p') => {
-                        // Insert absolute file path
-                        let path = self
-                            .current_buffer()
-                            .and_then(|b| b.file_path.as_ref())
-                            .and_then(|p| p.canonicalize().ok())
-                            .and_then(|p| p.to_str().map(|s| s.to_string()))
-                            .unwrap_or_default();
-
-                        if !path.is_empty() {
-                            self.llm_prompt
-                                .buffer
-                                .insert_str(self.llm_prompt.cursor, &path);
-                            self.llm_prompt.cursor += path.len();
-                            self.dirty.mark_all();
-                            return CommandResult::ViewChanged;
-                        } else {
-                            self.set_infobar_message("No file path for current buffer".to_string());
-                            return CommandResult::ViewChanged;
-                        }
-                    }
-                    Key::Ctrl('a') => {
-                        // Insert whole line from cursor
-                        let line = self.current_line_content();
-                        self.llm_prompt
-                            .buffer
-                            .insert_str(self.llm_prompt.cursor, &line);
-                        self.llm_prompt.cursor += line.len();
-                        self.dirty.mark_all();
-                        return CommandResult::ViewChanged;
-                    }
-                    Key::Escape | Key::Ctrl('c') => {
-                        // Cancel register wait, but let Escape fall through to cancel LlmPrompt mode entirely
-                    }
-                    _ => {
-                        // Invalid register key, cancel wait and swallow the key.
-                        // We must redraw to clear the hints from the infobar.
-                        return CommandResult::ViewChanged;
-                    }
-                }
-                // If we didn't return above (e.g. on Escape), fall through to normal LLM prompt handling
-            }
-
-            return match self.llm_prompt.handle_key(&key) {
-                PromptAction::Changed => {
-                    self.dirty.mark_all();
-                    CommandResult::ViewChanged
-                }
-                PromptAction::Submit => {
-                    let input = self.llm_prompt.text().to_string();
-                    self.llm_prompt.clear();
-                    self.llm_prompt.push_history(input.clone());
-                    self.clear_messages();
-                    self.mode = Mode::Normal;
-                    self.dirty.mark_all();
-                    return self.llm_send_from_prompt(input);
-                }
-                PromptAction::Cancel => {
-                    self.llm_prompt.clear();
-                    self.llm_active_preset = None;
-                    self.llm_active_context = None;
-                    self.llm_todo_prefix = false;
-                    self.mode = Mode::Normal;
-                    self.dirty.mark_all();
-                    return CommandResult::ModeChanged(Mode::Normal);
-                }
-                PromptAction::None => CommandResult::NoOp,
-            };
-        }
-
-        // ── Interactive help popup navigation ── HELP
-        if let Some(popup) = &mut self.help_popup {
-            match key {
-                Key::Escape => {
-                    self.help_popup = None;
-                    self.overlay.help = None;
-                    self.dirty.mark_all();
-                    return CommandResult::NoOp;
-                }
-                Key::Up | Key::Char('k') | Key::PageUp => {
-                    popup.move_up();
-                    self.dirty.help = true;
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                Key::Down | Key::Char('j') | Key::PageDown => {
-                    popup.move_down();
-                    self.dirty.help = true;
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-                _ => {
-                    let old_rect = self.overlay.help;
-                    self.help_popup = None;
-                    self.overlay.help = None;
-                    if let Some(rect) = old_rect {
-                        self.dirty.mark_popup_closed(rect);
-                    }
-                    self.dirty.cursor = true;
-                    return CommandResult::NoOp;
-                }
-            }
-        }
         //-- Escape in Normal mode (ESCAPE) --//
         if self.mode == Mode::Normal && key == Key::Escape {
             self.clear_messages();
@@ -2586,11 +1064,11 @@ impl Editor {
             self.which_key_hints.clear();
             self.cancel_which_key_debounce();
             self.keybinds.clear_pending();
-            self.mark_pending = false;
-            self.goto_mark_pending = false;
+            self.search.mark_pending = false;
+            self.search.goto_mark_pending = false;
             self.shortcut_pending_keys.clear();
-            if self.diff_popup.is_some() {
-                self.diff_popup = None;
+            if self.git.diff_popup.is_some() {
+                self.git.diff_popup = None;
                 self.dirty.diff = true;
                 self.dirty.cursor = true;
                 self.dirty.mark_all();
@@ -2692,7 +1170,7 @@ impl Editor {
         // ── Insert mode register prefix (Ctrl-R) ──
         if self.insert_register_pending {
             self.insert_register_pending = false;
-            self.register_popup = None;
+            self.popup.register = None;
             self.dirty.mark_all();
 
             if let Key::Char(c) = key {
@@ -2823,6 +1301,7 @@ impl Editor {
                     Key::Tab => {
                         self.command_completion.select_next();
                         if let Some(item) = self.command_completion.selected_item() {
+                            // item.text already contains the full command + arg, e.g. "e /tmp/foo"
                             self.command_prompt.buffer = item.text.clone();
                             self.command_prompt.cursor = self.command_prompt.buffer.len();
                         }
@@ -2966,7 +1445,7 @@ impl Editor {
         if !is_passthrough
             && self.mode != Mode::Command
             && self.mode != Mode::LlmPrompt
-            && !self.search_input_active
+            && !self.search.input_active
         {
             self.clear_messages();
 
@@ -3031,11 +1510,11 @@ impl Editor {
                 CommandResult::NoOp
             }
             Action::SetMark => {
-                self.mark_pending = true;
+                self.search.mark_pending = true;
                 CommandResult::NoOp
             }
             Action::GotoMark => {
-                self.goto_mark_pending = true;
+                self.search.goto_mark_pending = true;
                 CommandResult::NoOp
             }
             Action::JumpBack => self.jump_back(),
@@ -3096,10 +1575,10 @@ impl Editor {
                 }
 
                 // Mark this response for infobar + register 'e' instead of LLM buffer
-                self.llm_infobar_response = true;
-                self.llm_infobar_accumulator.clear();
-                self.llm_active_preset = Some(LlmPreset::CheckEnglish);
-                self.llm_active_context = Some(text.clone());
+                self.llm.infobar_response = true;
+                self.llm.infobar_accumulator.clear();
+                self.llm.active_preset = Some(LlmPreset::CheckEnglish);
+                self.llm.active_context = Some(text.clone());
 
                 self.set_status("Checking English…".to_string());
                 self.dirty.status_infobar = true;
@@ -3131,13 +1610,13 @@ impl Editor {
                     // ── We have a visual selection ──
                     // Open split scratchpad if single window, otherwise fallback to 1-line
                     if self.windows.len() == 1 {
-                        self.llm_todo_prefix = true;
+                        self.llm.todo_prefix = true;
                         return self.llm_setup_split_session(selected_text);
                     } else {
-                        self.llm_active_context = Some(selected_text);
-                        self.llm_todo_prefix = true;
-                        self.llm_active_preset = None;
-                        self.llm_prompt.clear();
+                        self.llm.active_context = Some(selected_text);
+                        self.llm.todo_prefix = true;
+                        self.llm.active_preset = None;
+                        self.llm.prompt.clear();
                         self.mode = Mode::LlmPrompt;
                         self.dirty.mark_all();
                         return CommandResult::ModeChanged(Mode::LlmPrompt);
@@ -3145,25 +1624,25 @@ impl Editor {
                 } else {
                     // ── No visual selection (Normal mode) ──
                     // Just use the simple 1-line prompt like before
-                    self.llm_active_context = None;
-                    self.llm_todo_prefix = false;
-                    self.llm_active_preset = None;
-                    self.llm_prompt.clear();
+                    self.llm.active_context = None;
+                    self.llm.todo_prefix = false;
+                    self.llm.active_preset = None;
+                    self.llm.prompt.clear();
                     self.mode = Mode::LlmPrompt;
                     self.dirty.mark_all();
                     return CommandResult::ModeChanged(Mode::LlmPrompt);
                 }
             }
             Action::LlmEnterPrompt => {
-                self.llm_active_preset = None;
-                self.llm_active_context = None;
-                self.llm_prompt.clear();
+                self.llm.active_preset = None;
+                self.llm.active_context = None;
+                self.llm.prompt.clear();
                 self.mode = Mode::LlmPrompt;
                 self.dirty.mark_all();
                 CommandResult::ModeChanged(Mode::LlmPrompt)
             }
             Action::LlmClearHistory => {
-                self.llm_buffer.clear_history();
+                self.llm.buffer.clear_history();
                 self.dirty.mark_all();
                 CommandResult::Message("LLM history cleared".to_string())
             }
@@ -3175,25 +1654,25 @@ impl Editor {
                 self.llm_quick_action(LlmPreset::TranslateToChinese, &ctx.unwrap_or_default())
             }
             Action::LlmQuickTranslateEnglish => {
-                self.llm_active_preset = Some(LlmPreset::TranslateToEnglish);
-                self.llm_active_context = self.get_selection_text();
-                self.llm_prompt.clear();
+                self.llm.active_preset = Some(LlmPreset::TranslateToEnglish);
+                self.llm.active_context = self.get_selection_text();
+                self.llm.prompt.clear();
                 self.mode = Mode::LlmPrompt;
                 self.dirty.mark_all();
                 CommandResult::ModeChanged(Mode::LlmPrompt)
             }
             Action::LlmQuickExplain => {
-                self.llm_active_preset = Some(LlmPreset::Explain);
-                self.llm_active_context = self.get_selection_text();
-                self.llm_prompt.clear();
+                self.llm.active_preset = Some(LlmPreset::Explain);
+                self.llm.active_context = self.get_selection_text();
+                self.llm.prompt.clear();
                 self.mode = Mode::LlmPrompt;
                 self.dirty.mark_all();
                 CommandResult::ModeChanged(Mode::LlmPrompt)
             }
             Action::LlmQuickSummarize => {
-                self.llm_active_preset = Some(LlmPreset::Summarize);
-                self.llm_active_context = self.get_selection_text();
-                self.llm_prompt.clear();
+                self.llm.active_preset = Some(LlmPreset::Summarize);
+                self.llm.active_context = self.get_selection_text();
+                self.llm.prompt.clear();
                 self.mode = Mode::LlmPrompt;
                 self.dirty.mark_all();
                 CommandResult::ModeChanged(Mode::LlmPrompt)
@@ -3386,7 +1865,7 @@ impl Editor {
                 if let Some(window) = self.windows.active_window() {
                     if let Some(buffer) = self.buffers.get(&window.buffer_id) {
                         if let Some(ref path) = buffer.file_path {
-                            self.position_map.set(path, window.cursor.position);
+                            self.search.position_map.set(path, window.cursor.position);
                         }
                     }
                 }
@@ -3497,7 +1976,7 @@ impl Editor {
             }
             Action::ReplaceChar => {
                 self.replace_char_pending = true;
-                self.replace_count = self.current_count;
+                self.search.replace_count = self.current_count;
                 CommandResult::NoOp
             }
             Action::OpenLineBelow => self.with_undo_group(|s| {
@@ -3808,7 +2287,7 @@ impl Editor {
 
             // ── Git ──────────────────────────────────────
             Action::GotoDefinition => {
-                if self.lsp_connected {
+                if self.lsp.connected {
                     self.push_jump_position();
                     self.request_lsp_goto_definition();
                 } else {
@@ -3833,12 +2312,12 @@ impl Editor {
             Action::GitRevertHunk => self.git_revert_hunk(),
             Action::GitCommit => self.git_commit_generate(),
             Action::GitGutterToggle => {
-                self.git_gutter_enabled = !self.git_gutter_enabled;
-                if !self.git_gutter_enabled {
+                self.git.gutter_enabled = !self.git.gutter_enabled;
+                if !self.git.gutter_enabled {
                     self.invalidate_git_gutter();
                 }
                 self.dirty.mark_all();
-                let state = if self.git_gutter_enabled { "on" } else { "off" };
+                let state = if self.git.gutter_enabled { "on" } else { "off" };
                 CommandResult::Message(format!("Git gutter: {}", state))
             }
             Action::GitStageHunk | Action::GitUnstageHunk => {
@@ -3904,7 +2383,7 @@ impl Editor {
             // ── Misc ────────────────────────────────────
             Action::Quit => {
                 self.flush_lsp_changes();
-                let _ = self.lsp_tx.send(crate::lsp::LspMessage::Shutdown);
+                let _ = self.lsp.tx.send(crate::lsp::LspMessage::Shutdown);
                 self.save_history();
                 self.save_all_positions();
                 let has_dirty = self.buffers.iter().any(|b| b.dirty);
@@ -3917,7 +2396,7 @@ impl Editor {
             }
             Action::ForceQuit => {
                 self.flush_lsp_changes();
-                let _ = self.lsp_tx.send(crate::lsp::LspMessage::Shutdown);
+                let _ = self.lsp.tx.send(crate::lsp::LspMessage::Shutdown);
                 self.save_history();
                 self.save_all_positions();
                 let has_dirty = self.buffers.iter().any(|b| b.dirty);
@@ -3947,9 +2426,9 @@ impl Editor {
             Action::GenerateTags => {
                 let file_path = self.current_buffer().and_then(|b| b.file_path.clone());
                 if let Some(ref path) = file_path {
-                    self.tag_manager.init(path);
+                    self.search.tag_manager.init(path);
                 }
-                match self.tag_manager.generate_tags() {
+                match self.search.tag_manager.generate_tags() {
                     Ok(msg) => CommandResult::Message(msg),
                     Err(err) => CommandResult::Error(err),
                 }
@@ -3975,7 +2454,7 @@ impl Editor {
             _ => {
                 if self.mode != Mode::Command
                     && self.mode != Mode::LlmPrompt
-                    && !self.search_input_active
+                    && !self.search.input_active
                 {
                     self.clear_messages();
                 }
@@ -3990,8 +2469,8 @@ impl Editor {
 
     pub fn tick(&mut self) {
         // ── Flush debounced LSP changes ──
-        if self.lsp_change_pending {
-            if let Some(deadline) = self.lsp_change_deadline {
+        if self.lsp.change_pending {
+            if let Some(deadline) = self.lsp.change_deadline {
                 if Instant::now() >= deadline {
                     self.flush_lsp_changes();
                 }
@@ -4034,301 +2513,6 @@ impl Editor {
                     self.dirty.windows = true;
                 }
             }
-        }
-    }
-    /// Poll for Codeium server startup result and show feedback.
-    fn tick_codeium_startup(&mut self) {
-        if let Some(result) = self.codeium.poll_startup() {
-            match result {
-                Ok(()) => {
-                    self.set_status("Codeium: connected ✓".to_string());
-                }
-                Err(e) => {
-                    self.set_infobar_message(format!("Codeium: {}", e));
-                    self.codeium.is_connected = false;
-                }
-            }
-            self.dirty.mark_all();
-        }
-    }
-
-    /// Show the register list popup (used by :reg and Ctrl-R in insert mode)
-    /// Resolve the contents of a register by name.
-    /// Supports: a-z (named), " + * (default/clipboard), % (current filename).
-    pub fn resolve_register(&self, c: char) -> Option<String> {
-        match c {
-            '"' | '+' | '*' => Some(self.yank_register.clone()),
-            '%' => self
-                .current_buffer()
-                .and_then(|b| b.file_path.as_ref())
-                .and_then(|p| p.to_str())
-                .map(|s| s.to_string()),
-            _ if c.is_ascii_lowercase() => self.get_named_register(c).map(|s| s.to_string()),
-            _ => None,
-        }
-    }
-    /// Show a popup listing all functions/methods in the current buffer.
-    /// Uses tree-sitter to find function nodes.
-    pub fn show_function_list(&mut self) -> CommandResult {
-        let entries = {
-            let window = match self.windows.active_window() {
-                Some(w) => w,
-                None => return CommandResult::Error("No active window".into()),
-            };
-            let buffer_id = window.buffer_id;
-            let buffer = match self.buffers.get_mut(&buffer_id) {
-                Some(b) => b,
-                None => return CommandResult::Error("No active buffer".into()),
-            };
-
-            if buffer.tree().is_none() {
-                buffer.init_tree_sitter();
-            } else {
-                buffer.reparse_tree();
-            }
-
-            crate::ed::text_object::collect_all_functions(buffer)
-        };
-
-        if entries.is_empty() {
-            return CommandResult::Message("No functions found in this buffer".into());
-        }
-        // Pre-select the function closest to the current cursor line
-        let cursor_line = self
-            .windows
-            .active_window()
-            .map(|w| w.cursor.position.line)
-            .unwrap_or(0);
-
-        let mut popup = crate::popup::FunctionListPopup::new(entries);
-        // Find nearest function above or at cursor
-        let mut best_idx = 0;
-        let mut best_dist = usize::MAX;
-        for (i, entry) in popup.all_entries.iter().enumerate() {
-            let dist = cursor_line as isize - entry.line as isize;
-            if dist >= 0 && (dist as usize) < best_dist {
-                best_dist = dist as usize;
-                best_idx = i;
-            }
-        }
-        popup.selected = best_idx;
-
-        self.function_list_popup = Some(popup);
-        self.dirty.mark_all();
-        CommandResult::ViewChanged
-    }
-
-    pub fn show_register_popup(&mut self) {
-        self.register_popup_title = "Registers".to_string();
-
-        let mut lines = Vec::new();
-
-        if !self.yank_register.is_empty() {
-            let is_multiline = self.yank_register.contains('\n');
-            let first_line = self
-                .yank_register
-                .lines()
-                .next()
-                .unwrap_or("")
-                .replace('\r', "\\r")
-                .replace('\t', "\\t");
-
-            let max_len = if is_multiline { 89 } else { 97 };
-            let mut preview = if first_line.chars().count() > max_len {
-                format!("{}…", first_line.chars().take(max_len).collect::<String>())
-            } else {
-                first_line
-            };
-
-            if is_multiline {
-                preview.push_str(" (...)");
-            }
-
-            lines.push(format!("\"\"   {}", preview));
-        }
-
-        if let Some(buffer) = self.current_buffer() {
-            let path_str = if let Some(path) = buffer.file_path.as_ref() {
-                path.to_str().unwrap_or("[Invalid Path]").to_string()
-            } else {
-                buffer.display_name()
-            };
-
-            let truncated = if path_str.chars().count() > 100 {
-                let char_count = path_str.chars().take(97).collect::<String>();
-                format!("{}…", char_count)
-            } else {
-                path_str
-            };
-            lines.push(format!("%    {}", truncated));
-        }
-
-        for c in 'a'..='z' {
-            if let Some(content) = self.get_named_register(c) {
-                if !content.is_empty() {
-                    let is_multiline = content.contains('\n');
-                    let first_line = content
-                        .lines()
-                        .next()
-                        .unwrap_or("")
-                        .replace('\r', "\\r")
-                        .replace('\t', "\\t");
-
-                    let max_len = if is_multiline { 89 } else { 97 };
-                    let mut preview = if first_line.chars().count() > max_len {
-                        format!("{}…", first_line.chars().take(max_len).collect::<String>())
-                    } else {
-                        first_line
-                    };
-
-                    if is_multiline {
-                        preview.push_str(" (...)");
-                    }
-
-                    lines.push(format!("\"{}   {}", c, preview));
-                }
-            }
-        }
-
-        if lines.is_empty() {
-            self.register_popup = None;
-            self.set_status("All registers are empty".to_string());
-        } else {
-            self.register_popup = Some(lines);
-        }
-        self.dirty.mark_all();
-    }
-
-    /// Show a popup listing all named marks (a-z) for quick navigation.
-    pub fn show_mark_list(&mut self) -> CommandResult {
-        let mut entries = Vec::new();
-
-        for (&name, &(buffer_id, pos)) in &self.marks {
-            let buffer = self.buffers.get(&buffer_id);
-            let file_name = buffer
-                .map(|b| b.display_name())
-                .unwrap_or_else(|| "[closed]".into());
-            let line_preview = buffer
-                .and_then(|b| {
-                    if pos.line < b.line_count() {
-                        Some(b.rope.line(pos.line).to_string().trim_end().to_string())
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_default();
-
-            entries.push(crate::popup::MarkEntry {
-                name,
-                buffer_id,
-                file_name,
-                line: pos.line,
-                col: pos.col,
-                line_preview,
-            });
-        }
-
-        // Sort by mark name for consistent display
-        entries.sort_by_key(|e| e.name);
-
-        if entries.is_empty() {
-            return CommandResult::Message("No marks set".into());
-        }
-
-        // Pre-select mark nearest to current cursor position
-        let cursor_line = self
-            .windows
-            .active_window()
-            .map(|w| w.cursor.position.line)
-            .unwrap_or(0);
-        let cursor_buf = self.windows.active_window().map(|w| w.buffer_id);
-
-        let mut popup = crate::popup::MarkListPopup::new(entries);
-        let mut best_idx = 0;
-        let mut best_dist = usize::MAX;
-        for (i, entry) in popup.entries.iter().enumerate() {
-            if Some(entry.buffer_id) == cursor_buf {
-                let dist = (cursor_line as isize - entry.line as isize).unsigned_abs();
-                if dist < best_dist {
-                    best_dist = dist;
-                    best_idx = i;
-                }
-            }
-        }
-        popup.selected = best_idx;
-
-        self.mark_list_popup = Some(popup);
-        self.dirty.mark_all();
-        CommandResult::ViewChanged
-    }
-    /// Rebuild the shortcut popup showing only entries matching the current prefix.
-    pub(crate) fn rebuild_shortcut_popup(&mut self) {
-        let prefix = self.shortcut_pending_keys.clone();
-        let prefix_len = prefix.len();
-
-        let matching: Vec<_> = self
-            .active_shortcuts
-            .iter()
-            .filter(|(keys, _)| keys.len() >= prefix_len && keys[..prefix_len] == prefix[..])
-            .collect();
-
-        let mode_name = self.mode.keybind_name();
-
-        // Measure column widths
-        let mut max_key_len = 0;
-        let mut max_desc_len = 0;
-        for (keys, action) in &matching {
-            let key_str = crate::misc::format_shortcut_keys(keys);
-            max_key_len = max_key_len.max(key_str.len());
-            max_desc_len = max_desc_len.max(action.label().len());
-        }
-
-        let mut lines = Vec::new();
-        for (keys, action) in &matching {
-            let key_str = crate::misc::format_shortcut_keys(keys);
-            let desc = action.label();
-
-            let original_keys = self.keybinds.keys_for_action_in_mode(mode_name, action);
-            let hint = if original_keys.is_empty() {
-                String::new()
-            } else {
-                format!("[{}]", original_keys.join(", "))
-            };
-
-            lines.push(format!(
-                "  {:<key_w$}  {:<desc_w$}  {}",
-                key_str,
-                desc,
-                hint,
-                key_w = max_key_len,
-                desc_w = max_desc_len,
-            ));
-        }
-
-        let prefix_str = crate::misc::format_shortcut_keys(&prefix);
-        let title = if prefix_str.is_empty() {
-            " Shortcuts ".to_string()
-        } else {
-            format!(" Shortcuts [{}] ", prefix_str)
-        };
-
-        self.float_popup = Some(FloatPopup::new(title, lines));
-        self.dirty.mark_all();
-    }
-    /// Handle the `:vocab <word>` command.
-    pub fn vocab_handle(&mut self, word: &str) -> CommandResult {
-        let word = word.trim();
-        if word.is_empty() {
-            return CommandResult::Error("Usage: :vocab <word>".into());
-        }
-
-        if self.vocab.add(word) {
-            if let Err(e) = self.vocab.save() {
-                return CommandResult::Error(format!("Failed to save vocabulary: {}", e));
-            }
-            CommandResult::Message(format!("Added '{}' to vocabulary", word))
-        } else {
-            CommandResult::Message(format!("'{}' already in vocabulary", word))
         }
     }
 } // end of imp editor

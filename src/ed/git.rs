@@ -64,18 +64,18 @@ pub trait GitExt {
 
 impl GitExt for Editor {
     fn invalidate_git_gutter(&mut self) {
-        if !self.config.enable_git || !self.git_gutter_enabled {
+        if !self.config.enable_git || !self.git.gutter_enabled {
             self.clear_git_gutter_state();
             return;
         }
-        if self.diff_mode_active {
-            self.diff_popup = None;
+        if self.git.diff_mode_active {
+            self.git.diff_popup = None;
         }
-        self.git_gutter_dirty_since = Some(Instant::now());
+        self.git.gutter_dirty_since = Some(Instant::now());
     }
 
     fn ensure_git_gutter(&mut self) -> bool {
-        if !self.config.enable_git || !self.git_gutter_enabled {
+        if !self.config.enable_git || !self.git.gutter_enabled {
             self.clear_git_gutter_state();
             return false;
         }
@@ -102,7 +102,7 @@ impl GitExt for Editor {
         let file_path = file_path.canonicalize().unwrap_or(file_path);
         let file_dir = file_path.parent().unwrap_or(file_path.as_path());
 
-        if self.git_provider.is_none() {
+        if self.git.provider.is_none() {
             match GitProvider::new(file_dir) {
                 Ok(gp) => {
                     if let Ok(branch) = gp.current_branch() {
@@ -112,7 +112,7 @@ impl GitExt for Editor {
                             }
                         }
                     }
-                    self.git_provider = Some(gp);
+                    self.git.provider = Some(gp);
                 }
                 Err(_) => {
                     self.clear_git_gutter_state();
@@ -121,11 +121,11 @@ impl GitExt for Editor {
             }
         }
 
-        if let Some(dirty_since) = self.git_gutter_dirty_since {
-            if dirty_since.elapsed().as_millis() < self.git_gutter_debounce_ms as u128 {
+        if let Some(dirty_since) = self.git.gutter_dirty_since {
+            if dirty_since.elapsed().as_millis() < self.git.gutter_debounce_ms as u128 {
                 return false;
             }
-            self.git_gutter_dirty_since = None;
+            self.git.gutter_dirty_since = None;
             if let Some(w) = self.windows.active_window() {
                 if let Some(buf) = self.buffers.get_mut(&w.buffer_id) {
                     buf.git_gutter.clear();
@@ -148,7 +148,7 @@ impl GitExt for Editor {
             return true;
         }
 
-        let gp = match &self.git_provider {
+        let gp = match &self.git.provider {
             Some(gp) => gp,
             None => return false,
         };
@@ -183,11 +183,12 @@ impl GitExt for Editor {
         }
 
         // Step 4: single unified cache
-        self.cached_diff_hunks = editor_hunks;
+        self.git.cached_diff_hunks = editor_hunks;
 
         if let Some(w) = self.windows.active_window() {
             if let Some(buf) = self.buffers.get_mut(&w.buffer_id) {
                 let ranges: Vec<HunkRange> = self
+                    .git
                     .cached_diff_hunks
                     .iter()
                     .map(|h| HunkRange {
@@ -206,10 +207,10 @@ impl GitExt for Editor {
     }
 
     fn tick_git(&mut self) {
-        if let Some(dirty_since) = self.git_gutter_dirty_since {
-            if dirty_since.elapsed().as_millis() >= self.git_gutter_debounce_ms as u128 {
+        if let Some(dirty_since) = self.git.gutter_dirty_since {
+            if dirty_since.elapsed().as_millis() >= self.git.gutter_debounce_ms as u128 {
                 self.ensure_git_gutter();
-                if self.diff_popup.is_some() {
+                if self.git.diff_popup.is_some() {
                     self.refresh_diff_popup_if_shown();
                 }
                 self.dirty.mark_all();
@@ -237,7 +238,7 @@ impl GitExt for Editor {
 
         // Extract hunk information before borrowing self mutably
         let hunk_info = {
-            let hunks = &self.cached_diff_hunks;
+            let hunks = &self.git.cached_diff_hunks;
 
             let next_idx = hunks
                 .iter()
@@ -268,7 +269,7 @@ impl GitExt for Editor {
         let (idx, target_line, diff_hunk, kind, hunk_len, total_hunks) = match hunk_info {
             Some(info) => info,
             None => {
-                self.diff_popup = None;
+                self.git.diff_popup = None;
                 self.set_status("No more hunks forward.".to_string());
                 return CommandResult::ViewChanged;
             }
@@ -319,7 +320,7 @@ impl GitExt for Editor {
 
         // Extract hunk information before borrowing self mutably
         let hunk_info = {
-            let hunks = &self.cached_diff_hunks;
+            let hunks = &self.git.cached_diff_hunks;
 
             let current_idx = hunks
                 .iter()
@@ -359,7 +360,7 @@ impl GitExt for Editor {
         let (idx, target_line, diff_hunk, kind, hunk_len, total_hunks) = match hunk_info {
             Some(info) => info,
             None => {
-                self.diff_popup = None;
+                self.git.diff_popup = None;
                 self.set_status("No more hunks backward.".to_string());
                 return CommandResult::ViewChanged;
             }
@@ -404,6 +405,7 @@ impl GitExt for Editor {
             .unwrap_or(0);
 
         let hunk = match self
+            .git
             .cached_diff_hunks
             .iter()
             .find(|h| cursor_line >= h.start && cursor_line < h.end)
@@ -447,7 +449,7 @@ impl GitExt for Editor {
         }
         self.clamp_cursor_to_buffer(&buffer_id);
 
-        self.diff_popup = None;
+        self.git.diff_popup = None;
         self.invalidate_git_gutter();
         self.lsp_did_open(&file_path);
         self.ensure_cursor_visible_all();
@@ -458,7 +460,7 @@ impl GitExt for Editor {
 
     fn show_hunk_popup(&mut self, hunk: &DiffHunk) {
         let popup = Self::build_diff_popup(hunk);
-        self.diff_popup = Some(popup);
+        self.git.diff_popup = Some(popup);
         self.dirty.mark_all();
     }
 
@@ -517,12 +519,12 @@ impl GitExt for Editor {
     }
 
     fn update_diff_popup(&mut self) {
-        if !self.diff_mode_active {
+        if !self.git.diff_mode_active {
             return;
         }
 
-        if !self.git_gutter_enabled || !self.config.enable_git || self.float_popup.is_some() {
-            self.diff_popup = None;
+        if !self.git.gutter_enabled || !self.config.enable_git || self.popup.float.is_some() {
+            self.git.diff_popup = None;
             return;
         }
 
@@ -536,29 +538,30 @@ impl GitExt for Editor {
 
         let buffer_id = self.windows.active_window().map(|w| w.buffer_id);
         if buffer_id.is_none() {
-            self.diff_popup = None;
+            self.git.diff_popup = None;
             return;
         }
 
         let hunk_idx = self
+            .git
             .cached_diff_hunks
             .iter()
             .position(|h| cursor_line >= h.start.saturating_sub(1) && cursor_line < h.end);
 
         match hunk_idx {
             Some(idx) => {
-                let hunk = &self.cached_diff_hunks[idx].diff;
+                let hunk = &self.git.cached_diff_hunks[idx].diff;
                 let popup = Self::build_diff_popup(hunk);
-                self.diff_popup = Some(popup);
+                self.git.diff_popup = Some(popup);
             }
             None => {
-                self.diff_popup = None;
+                self.git.diff_popup = None;
             }
         }
     }
 
     fn refresh_diff_popup_if_shown(&mut self) {
-        if self.diff_popup.is_none() {
+        if self.git.diff_popup.is_none() {
             return;
         }
 
@@ -571,18 +574,19 @@ impl GitExt for Editor {
         let _buffer_id = self.windows.active_window().map(|w| w.buffer_id);
 
         let hunk_idx = self
+            .git
             .cached_diff_hunks
             .iter()
             .position(|h| cursor_line >= h.start.saturating_sub(1) && cursor_line < h.end);
 
         match hunk_idx {
             Some(idx) => {
-                let hunk = &self.cached_diff_hunks[idx].diff;
-                self.diff_popup = Some(Self::build_diff_popup(hunk));
+                let hunk = &self.git.cached_diff_hunks[idx].diff;
+                self.git.diff_popup = Some(Self::build_diff_popup(hunk));
             }
             None => {
-                if self.diff_mode_active {
-                    self.diff_popup = None;
+                if self.git.diff_mode_active {
+                    self.git.diff_popup = None;
                 }
             }
         }
@@ -603,7 +607,7 @@ impl GitExt for Editor {
     }
 
     fn force_git_gutter_recompute(&mut self) {
-        self.git_gutter_dirty_since = None;
+        self.git.gutter_dirty_since = None;
         if let Some(w) = self.windows.active_window() {
             if let Some(buf) = self.buffers.get_mut(&w.buffer_id) {
                 buf.git_gutter.clear();
@@ -612,9 +616,9 @@ impl GitExt for Editor {
     }
 
     fn clear_git_gutter_state(&mut self) {
-        self.cached_diff_hunks.clear();
-        self.diff_popup = None;
-        self.git_gutter_dirty_since = None;
+        self.git.cached_diff_hunks.clear();
+        self.git.diff_popup = None;
+        self.git.gutter_dirty_since = None;
         if let Some(w) = self.windows.active_window() {
             if let Some(buf) = self.buffers.get_mut(&w.buffer_id) {
                 buf.git_gutter.clear();

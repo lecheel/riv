@@ -62,6 +62,11 @@ impl FileOpsExt for Editor {
 
         let buffer_id = self.buffers.open_file(path)?;
 
+        // Cache git root for display_name() path stripping
+        if let Some(buf) = self.buffers.get_mut(&buffer_id) {
+            buf.git_root = crate::misc::find_git_root(path);
+        }
+
         if let Some(window) = self.windows.active_window_mut() {
             window.set_buffer(buffer_id);
         } else {
@@ -71,9 +76,9 @@ impl FileOpsExt for Editor {
         self.restore_cursor_position();
         self.ensure_cursor_visible_all();
 
-        self.git_provider = None;
-        self.cached_diff_hunks.clear();
-        self.git_gutter_dirty_since = None; // bypass debounce
+        self.git.provider = None;
+        self.git.cached_diff_hunks.clear();
+        self.git.gutter_dirty_since = None; // bypass debounce
         if let Some(w) = self.windows.active_window() {
             if let Some(buf) = self.buffers.get_mut(&w.buffer_id) {
                 buf.git_gutter.clear();
@@ -128,6 +133,13 @@ impl FileOpsExt for Editor {
                     .get_mut(&buffer_id)
                     .ok_or_else(|| BufferError::Io(std::io::Error::other("Buffer not found")))?;
                 buffer.save()?;
+
+                // Re-cache git root in case the save created a new file
+                // or the user is in a newly initialized git repo
+                if let Some(ref path) = buffer.file_path {
+                    buffer.git_root = crate::misc::find_git_root(path);
+                }
+
                 buffer.file_path.clone()
             };
             if let Some(ref path) = file_path {
@@ -164,6 +176,8 @@ impl FileOpsExt for Editor {
                     .get_mut(&buffer_id)
                     .ok_or_else(|| BufferError::Io(std::io::Error::other("Buffer not found")))?;
                 buffer.save_to(path)?;
+                // Cache git root for the new path
+                buffer.git_root = crate::misc::find_git_root(path);
             }
             self.lsp_did_open(path);
 
@@ -194,15 +208,19 @@ impl FileOpsExt for Editor {
     }
 
     fn find_file(&mut self) -> CommandResult {
-        // Determine starting directory: current file's parent, or cwd.
         let start_dir = self
             .current_buffer()
             .and_then(|b| b.file_path.as_ref())
-            .and_then(|p| p.parent())
-            .map(|p| p.to_path_buf())
+            .and_then(|p| crate::misc::find_git_root(p)) // ← git root first
+            .or_else(|| {
+                self.current_buffer()
+                    .and_then(|b| b.file_path.as_ref())
+                    .and_then(|p| p.parent())
+                    .map(|p| p.to_path_buf())
+            })
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
 
-        self.file_picker = Some(FilePicker::new(&start_dir));
+        self.popup.file_picker = Some(FilePicker::new(&start_dir));
         self.dirty.mark_all();
         CommandResult::ViewChanged
     }
@@ -211,7 +229,7 @@ impl FileOpsExt for Editor {
     fn save_history(&self) {
         let data = HistoryData {
             command: self.command_prompt.history.clone(),
-            search: self.search_prompt.history.clone(),
+            search: self.search.prompt.history.clone(),
         };
         data.save();
     }
@@ -226,7 +244,7 @@ impl FileOpsExt for Editor {
             // 1. Persist file-backed buffers to disk (existing behavior)
             if let Some(buffer) = self.buffers.get(&buffer_id) {
                 if let Some(ref path) = buffer.file_path {
-                    self.position_map.set(path, pos);
+                    self.search.position_map.set(path, pos);
                 }
             }
 
@@ -336,7 +354,7 @@ impl FileOpsExt for Editor {
     // ── Format on save ──────────────────────────────────────────
 
     fn format_current_buffer_async(&mut self, save_after: bool) -> Result<(), String> {
-        if self.formatting_pending {
+        if self.lsp.formatting_pending {
             return Err("Already formatting…".into());
         }
 
@@ -381,10 +399,10 @@ impl FileOpsExt for Editor {
             .text();
 
         let app_tx = self.app_tx.clone();
-        self.formatting_pending = true;
-        self.formatting_buffer_id = Some(buffer_id);
+        self.lsp.formatting_pending = true;
+        self.lsp.formatting_buffer_id = Some(buffer_id);
 
-        self.llm_runtime.spawn(async move {
+        self.llm.runtime.spawn(async move {
             let result =
                 tokio::task::spawn_blocking(move || Editor::run_formatter(cmd, &args, &text)).await;
 
@@ -419,7 +437,7 @@ impl FileOpsExt for Editor {
         if let Some(window) = self.windows.active_window() {
             if let Some(buffer) = self.buffers.get(&window.buffer_id) {
                 if let Some(ref path) = buffer.file_path {
-                    self.position_map.set(path, window.cursor.position);
+                    self.search.position_map.set(path, window.cursor.position);
                     self.mru.update_position(
                         path,
                         window.cursor.position.line,
@@ -433,8 +451,8 @@ impl FileOpsExt for Editor {
         self.mru.save();
         // Try to save positions for other windows too
         // (requires WindowManager to support iteration — see note below)
-        self.position_map.cleanup();
-        self.position_map.save();
+        self.search.position_map.cleanup();
+        self.search.position_map.save();
     }
     /// Restore the cursor position for the active buffer.
     fn restore_cursor_position(&mut self) {
@@ -455,7 +473,7 @@ impl FileOpsExt for Editor {
         // 2. Fallback to cross-session map (file-backed only, for newly opened files)
         if let Some(buffer) = self.buffers.get(&buffer_id) {
             if let Some(ref path) = buffer.file_path {
-                if let Some(pos) = self.position_map.get(path) {
+                if let Some(pos) = self.search.position_map.get(path) {
                     if let Some(window) = self.windows.active_window_mut() {
                         window.cursor.position = pos;
                     }
@@ -495,6 +513,8 @@ impl Editor {
                     Err(e) => return Err(BufferError::Io(e)),
                 }
                 buffer.file_path = Some(path.to_path_buf());
+                // Cache git root for display_name() path stripping
+                buffer.git_root = crate::misc::find_git_root(path);
                 buffer.dirty = false;
                 buffer.clear_undo_history();
                 buffer.language = Some(
@@ -506,9 +526,9 @@ impl Editor {
                 buffer.init_tree_sitter();
             }
 
-            self.git_provider = None;
-            self.cached_diff_hunks.clear();
-            self.git_gutter_dirty_since = None;
+            self.git.provider = None;
+            self.git.cached_diff_hunks.clear();
+            self.git.gutter_dirty_since = None;
             if let Some(w) = self.windows.active_window() {
                 if let Some(buf) = self.buffers.get_mut(&w.buffer_id) {
                     buf.git_gutter.clear();

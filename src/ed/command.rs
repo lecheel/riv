@@ -373,7 +373,7 @@ impl CommandExt for Editor {
             let pattern: &str = p.trim();
             if !pattern.is_empty() {
                 self.record_search(pattern);
-                self.search_pattern = Some(pattern.to_string());
+                self.search.pattern = Some(pattern.to_string());
             }
             self.enter_mode(crate::editor::Mode::Normal);
             return self.process_action(Action::SearchNext);
@@ -382,7 +382,7 @@ impl CommandExt for Editor {
             let pattern: &str = p.trim();
             if !pattern.is_empty() {
                 self.record_search(pattern);
-                self.search_pattern = Some(pattern.to_string());
+                self.search.pattern = Some(pattern.to_string());
             }
             self.enter_mode(crate::editor::Mode::Normal);
             return self.process_action(Action::SearchPrev);
@@ -438,8 +438,8 @@ impl CommandExt for Editor {
 
         // Re-display substitute confirm prompt if active
         // (enter_mode clears messages, but we need the prompt to survive)
-        if self.substitute_confirm.is_some() {
-            if let Some(ref state) = self.substitute_confirm {
+        if self.search.substitute_confirm.is_some() {
+            if let Some(ref state) = self.search.substitute_confirm {
                 self.set_status(format!(
                     "replace with \"{}\"? (y/n/a/q/l)",
                     state.replacement
@@ -603,11 +603,11 @@ impl CommandExt for Editor {
     // ── Search history ──────────────────────────────────────────────
 
     fn record_search(&mut self, pattern: &str) {
-        self.search_prompt.push_history(pattern.to_string());
+        self.search.prompt.push_history(pattern.to_string());
     }
 
     fn search_history_up(&mut self) -> CommandResult {
-        if prompt_history_up(&mut self.search_prompt) {
+        if prompt_history_up(&mut self.search.prompt) {
             self.dirty.mark_all();
             CommandResult::ViewChanged
         } else {
@@ -616,7 +616,7 @@ impl CommandExt for Editor {
     }
 
     fn search_history_down(&mut self) -> CommandResult {
-        if prompt_history_down(&mut self.search_prompt) {
+        if prompt_history_down(&mut self.search.prompt) {
             self.dirty.mark_all();
             CommandResult::ViewChanged
         } else {

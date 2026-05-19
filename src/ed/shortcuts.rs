@@ -10,8 +10,8 @@ impl ShortcutsExt for Editor {
     fn show_shortcuts(&mut self) -> CommandResult {
         // Toggle off if already active
         if self.shortcut_active {
-            self.float_popup = None;
-            self.overlay.float = None;
+            self.popup.float = None;
+            self.popup.overlay.float = None;
             self.shortcut_active = false;
             self.dirty.mark_all();
             return CommandResult::NoOp;
@@ -71,8 +71,8 @@ impl ShortcutsExt for Editor {
         }
 
         let popup = FloatPopup::new(" Shortcuts ", lines);
-        self.float_popup = Some(popup);
-        self.overlay.float = Some(crate::dirty::Rect {
+        self.popup.float = Some(popup);
+        self.popup.overlay.float = Some(crate::dirty::Rect {
             x: 0,
             y: 0,
             w: 0,

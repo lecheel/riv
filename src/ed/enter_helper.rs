@@ -157,7 +157,7 @@ impl Editor {
 
         let lines = render_help_entries(&entries, 76);
 
-        self.help_popup = Some(HelpPopup::new(lines, self.term_width, self.term_height));
+        self.popup.help = Some(HelpPopup::new(lines, self.term_width, self.term_height));
         self.dirty.mark_all();
         CommandResult::NoOp
     }
@@ -169,7 +169,7 @@ impl Editor {
         let entries = self.keybinds.help_entries(mode_name);
         let lines = render_help_entries(&entries, 60);
 
-        self.help_popup = Some(HelpPopup::new(lines, self.term_width, self.term_height));
+        self.popup.help = Some(HelpPopup::new(lines, self.term_width, self.term_height));
         self.dirty.mark_all();
         CommandResult::NoOp
     }

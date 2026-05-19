@@ -296,6 +296,7 @@ pub struct Buffer {
     pub id: BufferId,
     /// Optional file path this buffer was loaded from / is associated with.
     pub file_path: Option<PathBuf>,
+    pub git_root: Option<PathBuf>,
     /// The underlying rope data structure.
     pub rope: Rope,
     /// Whether the buffer has unsaved changes.
@@ -360,6 +361,7 @@ impl Buffer {
         Self {
             id: new_buffer_id(),
             file_path: None,
+            git_root: None,
             rope: Rope::new(),
             dirty: false,
             language: None,
@@ -425,16 +427,18 @@ impl Buffer {
 
     /// Display name for the buffer (filename, override, or "[No Name]").
     pub fn display_name(&self) -> String {
-        // Priority: override > filename > fallback
+        // Priority: override > path logic > fallback
         if let Some(ref name) = self.display_name_override {
             return name.clone();
         }
-        self.file_path
-            .as_ref()
-            .and_then(|p| p.file_name())
-            .and_then(|n| n.to_str())
-            .unwrap_or("[No Name]")
-            .to_string()
+
+        // Scratch / unnamed buffers keep their fallback name
+        let path = match self.file_path.as_ref() {
+            Some(p) => p,
+            None => return "[No Name]".to_string(),
+        };
+
+        crate::misc::display_path(path, self.git_root.as_deref())
     }
 
     /// Set the display name override.

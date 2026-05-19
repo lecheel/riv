@@ -24,6 +24,7 @@ mod replace;
 mod ripgrep;
 mod search;
 mod shortcuts;
+mod show_popup;
 pub mod tag;
 pub mod text_object;
 pub mod visual;

@@ -45,7 +45,7 @@ impl BufferOpsExt for Editor {
             return CommandResult::Message("No buffers open".into());
         }
 
-        self.buffer_list_popup = Some(BufferListPopup::new(entries));
+        self.popup.buffer_list = Some(BufferListPopup::new(entries));
         self.dirty.mark_all();
         CommandResult::ViewChanged
     }
@@ -235,7 +235,7 @@ impl BufferOpsExt for Editor {
             return CommandResult::Message("No recent files".to_string());
         }
 
-        self.mru_popup = Some(MruPopup::new(entries));
+        self.popup.mru = Some(MruPopup::new(entries));
         self.dirty.mark_all();
         CommandResult::ViewChanged
     }

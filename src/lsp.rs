@@ -13,9 +13,11 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
 
+use crate::ed::build::find_workspace_root;
 use ropey::Rope;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -643,6 +645,7 @@ impl LanguageServer {
     pub async fn new(
         command: &str,
         args: &[&str],
+        root_dir: &Path,
         root_uri: &str,
     ) -> Result<(Self, Value), Box<dyn std::error::Error + Send + Sync>> {
         let mut child = tokio::process::Command::new(command)
@@ -650,6 +653,7 @@ impl LanguageServer {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
+            .current_dir(root_dir) // <-- FORCE CARGO TO RUN IN THE CORRECT DIRECTORY
             .spawn()?;
 
         let stdin = child.stdin.take().unwrap();
@@ -1547,6 +1551,7 @@ impl LspManager {
             }
         }
     }
+
     async fn start_lsp_for_file(&mut self, path: &PathBuf, text: &str) {
         let lang = detect_language_from_path(path);
         let command = match lang.lsp_command {
@@ -1554,12 +1559,27 @@ impl LspManager {
             None => return,
         };
         let args = lang.lsp_args;
-        let root_uri = format!(
-            "file://{}",
-            std::env::current_dir().unwrap_or_default().display()
+
+        let root = find_workspace_root(path);
+
+        // Ensure root is absolute before passing to the LSP process
+        let root = if root.is_absolute() {
+            root
+        } else {
+            std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join(&root)
+        };
+
+        log::debug!(
+            "start_lsp_for_file: path={} root={}",
+            path.display(),
+            root.display()
         );
 
-        match LanguageServer::new(command, args, &root_uri).await {
+        let root_uri = format!("file://{}", root.display());
+
+        match LanguageServer::new(command, args, &root, &root_uri).await {
             Ok((mut lsp, _init_response)) => {
                 self.supports_snippets = lsp.supports_snippets;
                 self.supports_completion_resolve = lsp.supports_completion_resolve;

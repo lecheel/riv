@@ -184,7 +184,7 @@ impl GitCommitExt for Editor {
             }
         }
 
-        self.git_commit_diff_summary = if summary_lines.is_empty() {
+        self.git.commit_diff_summary = if summary_lines.is_empty() {
             None
         } else {
             Some(summary_lines.join("\n"))
@@ -206,7 +206,7 @@ impl GitCommitExt for Editor {
             .replace("{diff}", &diff_output);
 
         // ── 6. Create / reuse GitCommit buffer ──────────────
-        self.git_commit_start_time = Some(std::time::Instant::now());
+        self.git.commit_start_time = Some(std::time::Instant::now());
 
         let buffer_id = if let Some(existing_id) = self.buffers.find_by_kind(BufferKind::GitCommit)
         {
@@ -240,7 +240,7 @@ impl GitCommitExt for Editor {
         }
 
         // ── 7. Mark as the active LLM commit target ─────────
-        self.git_commit_buffer_id = Some(buffer_id);
+        self.git.commit_buffer_id = Some(buffer_id);
 
         // ── 8. Send to LLM (single-shot, NOT session-based) ─
         let messages = vec![
@@ -253,8 +253,8 @@ impl GitCommitExt for Editor {
             ("user".to_string(), prompt),
         ];
 
-        self.llm_single_shot = true;
-        self.llm_infobar_response = false; // do NOT route to infobar
+        self.llm.single_shot = true;
+        self.llm.infobar_response = false; // do NOT route to infobar
         self.spawn_llm_request(messages);
 
         self.set_status("Generating commit message…".to_string());
@@ -263,10 +263,10 @@ impl GitCommitExt for Editor {
     }
 
     fn git_commit_on_llm_response(&mut self, response: &str) -> bool {
-        self.git_commit_start_time = None;
-        self.git_commit_diff_summary = None; // Clear animation summary
+        self.git.commit_start_time = None;
+        self.git.commit_diff_summary = None; // Clear animation summary
 
-        let commit_buf_id = match self.git_commit_buffer_id {
+        let commit_buf_id = match self.git.commit_buffer_id {
             Some(id) => id,
             None => return false,
         };
@@ -307,10 +307,10 @@ impl GitCommitExt for Editor {
     }
 
     fn git_commit_close(&mut self) -> CommandResult {
-        self.git_commit_start_time = None;
-        self.git_commit_diff_summary = None; // Clear animation summary
+        self.git.commit_start_time = None;
+        self.git.commit_diff_summary = None; // Clear animation summary
 
-        let buffer_id = match self.git_commit_buffer_id.take() {
+        let buffer_id = match self.git.commit_buffer_id.take() {
             Some(id) => id,
             None => {
                 // Fallback: check the active window
@@ -328,10 +328,10 @@ impl GitCommitExt for Editor {
         };
 
         // Cancel any in-flight LLM request for this commit
-        if let Some(handle) = self.llm_task_handle.take() {
+        if let Some(handle) = self.llm.task_handle.take() {
             handle.abort();
         }
-        self.git_commit_buffer_id = None;
+        self.git.commit_buffer_id = None;
 
         self.git_commit_switch_back();
         self.buffers.remove(&buffer_id);
@@ -340,21 +340,21 @@ impl GitCommitExt for Editor {
     }
 
     fn git_commit_on_llm_error(&mut self, error: &str) -> bool {
-        self.git_commit_start_time = None;
-        self.git_commit_diff_summary = None; // Clear animation summary
+        self.git.commit_start_time = None;
+        self.git.commit_diff_summary = None; // Clear animation summary
 
-        if self.git_commit_buffer_id.is_none() {
+        if self.git.commit_buffer_id.is_none() {
             return false;
         }
 
         if error == "[cancelled]" {
-            self.git_commit_buffer_id = None;
+            self.git.commit_buffer_id = None;
             let _ = self.git_commit_close();
             return true;
         }
 
         // Show error in the commit buffer itself so the user can see it
-        if let Some(commit_buf_id) = self.git_commit_buffer_id {
+        if let Some(commit_buf_id) = self.git.commit_buffer_id {
             if let Some(buffer) = self.buffers.get_mut(&commit_buf_id) {
                 buffer.rope = Rope::from_str(&format!(
                     "# Error generating commit message:\n# {}\n\n# Press q/Esc to cancel",
@@ -372,12 +372,12 @@ impl GitCommitExt for Editor {
     /// Called when user presses 'w' in the commit buffer.
     fn handle_commit_write(&mut self) -> CommandResult {
         // ── Don't commit while the LLM is still streaming ──
-        if self.llm_task_handle.is_some() {
+        if self.llm.task_handle.is_some() {
             return CommandResult::Message("Wait for LLM response to finish…".to_string());
         }
 
         // ── Identify the commit buffer ──
-        let buffer_id = match self.git_commit_buffer_id {
+        let buffer_id = match self.git.commit_buffer_id {
             Some(id) => id,
             None => return CommandResult::Error("No commit buffer active".to_string()),
         };
@@ -460,8 +460,8 @@ impl GitCommitExt for Editor {
                     .to_string();
 
                 // ── Cleanup ──
-                self.git_commit_buffer_id = None;
-                self.git_commit_diff_summary = None; // Clear animation summary
+                self.git.commit_buffer_id = None;
+                self.git.commit_diff_summary = None; // Clear animation summary
                 self.git_commit_switch_back();
                 self.buffers.remove(&buffer_id);
                 self.dirty.mark_all();
@@ -569,22 +569,22 @@ impl Editor {
     /// Animate the git commit buffer while LLM is generating.
     /// Called from `Editor::tick()`.
     pub fn tick_git_commit(&mut self) {
-        if self.git_commit_buffer_id.is_some() && self.llm_task_handle.is_some() {
-            if let Some(start) = self.git_commit_start_time {
+        if self.git.commit_buffer_id.is_some() && self.llm.task_handle.is_some() {
+            if let Some(start) = self.git.commit_start_time {
                 // Reuse the build spinner index (they won't run simultaneously)
-                self.build_spinner_idx = (self.build_spinner_idx + 1) % SPINNER_CHARS.len();
+                self.build.spinner_idx = (self.build.spinner_idx + 1) % SPINNER_CHARS.len();
                 let elapsed = start.elapsed().as_secs_f32();
-                let spinner = SPINNER_CHARS[self.build_spinner_idx];
+                let spinner = SPINNER_CHARS[self.build.spinner_idx];
 
                 let status_msg = format!("{} Generating commit ({:.1}s)", spinner, elapsed);
                 self.set_status(status_msg);
                 self.dirty.status_powerline = true;
                 self.dirty.status_cmdline = true;
 
-                if let Some(id) = self.git_commit_buffer_id {
+                if let Some(id) = self.git.commit_buffer_id {
                     if let Some(buf) = self.buffers.get_mut(&id) {
                         // Append the diff summary line beneath the header if available
-                        let summary_block = if let Some(ref summary) = self.git_commit_diff_summary
+                        let summary_block = if let Some(ref summary) = self.git.commit_diff_summary
                         {
                             format!("{}\n\n", summary)
                         } else {

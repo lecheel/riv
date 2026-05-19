@@ -332,7 +332,8 @@ pub fn draw_row(
     execute!(stdout, MoveTo(x, y))?;
     execute!(stdout, ResetColor)?;
     execute!(stdout, SetForegroundColor(style.border))?;
-    execute!(stdout, SetBackgroundColor(style.bg))?;
+    // FIX: border │ always on MANTLE, never inherits row highlight bg
+    execute!(stdout, SetBackgroundColor(catppuccin::MANTLE))?;
     execute!(stdout, Print("│"))?;
 
     if style.pad_left > 0 {
@@ -360,15 +361,15 @@ pub fn draw_row(
         execute!(stdout, SetBackgroundColor(style.bg))?;
         execute!(stdout, Print(&" ".repeat(remaining)))?;
     }
-    // print pad_right before the closing border:
     if style.pad_right > 0 {
         execute!(stdout, SetBackgroundColor(style.bg))?;
         execute!(stdout, Print(&" ".repeat(style.pad_right)))?;
     }
 
+    // FIX: border │ always on MANTLE, never inherits row highlight bg
     execute!(stdout, ResetColor)?;
     execute!(stdout, SetForegroundColor(style.border))?;
-    execute!(stdout, SetBackgroundColor(style.bg))?;
+    execute!(stdout, SetBackgroundColor(catppuccin::MANTLE))?;
     execute!(stdout, Print("│"))?;
 
     Ok(())

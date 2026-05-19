@@ -248,17 +248,17 @@ fn hints_handler(e: &mut Editor, _args: &str) -> CommandResult {
 }
 
 fn diff_toggle_handler(e: &mut Editor, _args: &str) -> CommandResult {
-    e.diff_mode_active = !e.diff_mode_active;
-    if e.diff_mode_active {
+    e.git.diff_mode_active = !e.git.diff_mode_active;
+    if e.git.diff_mode_active {
         e.update_diff_popup();
-        if e.diff_popup.is_some() {
+        if e.git.diff_popup.is_some() {
             e.dirty.mark_all();
             CommandResult::Message("Diff mode enabled".into())
         } else {
             CommandResult::Message("Diff mode enabled (no hunk at cursor)".into())
         }
     } else {
-        e.diff_popup = None;
+        e.git.diff_popup = None;
         e.dirty.mark_all();
         CommandResult::Message("Diff mode disabled".into())
     }
@@ -375,7 +375,7 @@ fn ls_handler(e: &mut Editor, _args: &str) -> CommandResult {
         return CommandResult::Message("No buffers open".into());
     }
 
-    e.buffer_list_popup = Some(BufferListPopup::new(entries));
+    e.popup.buffer_list = Some(BufferListPopup::new(entries));
     e.dirty.mark_all();
     CommandResult::ViewChanged
 }
@@ -473,7 +473,7 @@ fn file_picker_handler(e: &mut Editor, _args: &str) -> CommandResult {
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
 
-    e.file_picker = Some(FilePicker::new(&start_dir));
+    e.popup.file_picker = Some(FilePicker::new(&start_dir));
     e.dirty.mark_all();
     CommandResult::ViewChanged
 }
@@ -516,24 +516,24 @@ fn reg_handler(e: &mut Editor, _args: &str) -> CommandResult {
     }
 
     if lines.is_empty() {
-        e.register_popup = None;
+        e.popup.register = None;
         e.set_status("All registers are empty".to_string());
         return CommandResult::Message("All registers are empty".to_string());
     }
 
-    e.register_popup = Some(lines);
+    e.popup.register = Some(lines);
     e.dirty.mark_all();
     CommandResult::ViewChanged
 }
 
 fn nohlsearch_handler(e: &mut Editor, _args: &str) -> CommandResult {
-    e.search_highlight_enabled = false;
+    e.search.highlight_enabled = false;
     e.dirty.windows = true;
     CommandResult::Message("Search highlight disabled".into())
 }
 
 fn hlsearch_handler(e: &mut Editor, _args: &str) -> CommandResult {
-    e.search_highlight_enabled = true;
+    e.search.highlight_enabled = true;
     e.dirty.windows = true;
     CommandResult::Message("Search highlight enabled".into())
 }
@@ -543,9 +543,9 @@ fn hlsearch_handler(e: &mut Editor, _args: &str) -> CommandResult {
 fn tags_generate_handler(e: &mut Editor, _args: &str) -> CommandResult {
     let file_path = e.current_buffer().and_then(|b| b.file_path.clone());
     if let Some(ref path) = file_path {
-        e.tag_manager.init(path);
+        e.search.tag_manager.init(path);
     }
-    match e.tag_manager.generate_tags() {
+    match e.search.tag_manager.generate_tags() {
         Ok(msg) => {
             e.dirty.mark_all();
             CommandResult::Message(msg)
@@ -565,26 +565,26 @@ fn tag_handler(e: &mut Editor, args: &str) -> CommandResult {
         // Explicit tag name provided — initialize and search
         let file_path = e.current_buffer().and_then(|b| b.file_path.clone());
         if let Some(ref path) = file_path {
-            e.tag_manager.init(path);
+            e.search.tag_manager.init(path);
         }
-        if e.tag_manager.is_empty() && e.tag_manager.tag_file_exists() {
-            if let Err(err) = e.tag_manager.load_tags_file() {
+        if e.search.tag_manager.is_empty() && e.search.tag_manager.tag_file_exists() {
+            if let Err(err) = e.search.tag_manager.load_tags_file() {
                 return CommandResult::Error(err);
             }
         }
 
         // Strip qualifiers from the provided name too
         let tag_name = crate::ed::tag::strip_qualifiers(name);
-        let matches = e.tag_manager.find_tags(&tag_name);
+        let matches = e.search.tag_manager.find_tags(&tag_name);
         // Fallback to full name if stripped name finds nothing
         let matches = if matches.is_empty() && tag_name != name {
-            e.tag_manager.find_tags(name)
+            e.search.tag_manager.find_tags(name)
         } else {
             matches
         };
 
         if matches.is_empty() {
-            if e.tag_manager.tag_file_exists() {
+            if e.search.tag_manager.tag_file_exists() {
                 CommandResult::Error(format!("Tag '{}' not found", name))
             } else {
                 CommandResult::Error(format!("Tag '{}' not found (run :tags to generate)", name))
@@ -616,7 +616,7 @@ pub fn guide_handler(e: &mut Editor, args: &str) -> CommandResult {
 
     // ── :guide update ── Scan current buffer for markers ──
     if arg == "update" {
-        let mut guide = if let Some(g) = e.guide_popup.take() {
+        let mut guide = if let Some(g) = e.popup.guide.take() {
             g
         } else {
             crate::guide::Guide::load() // Loads empty if file missing
@@ -627,7 +627,7 @@ pub fn guide_handler(e: &mut Editor, args: &str) -> CommandResult {
             let path = match buffer.file_path.as_ref() {
                 Some(p) => p.clone(),
                 None => {
-                    e.guide_popup = Some(guide);
+                    e.popup.guide = Some(guide);
                     e.dirty.guide = true;
                     return CommandResult::Error("Current buffer has no file path".into());
                 }
@@ -635,14 +635,14 @@ pub fn guide_handler(e: &mut Editor, args: &str) -> CommandResult {
             let text = buffer.rope.to_string();
             (path, text)
         } else {
-            e.guide_popup = Some(guide);
+            e.popup.guide = Some(guide);
             e.dirty.guide = true;
             return CommandResult::Error("No active buffer".into());
         };
 
         match guide.sync_from_buffer(&file_path, &source) {
             Ok(result) => {
-                e.guide_popup = Some(guide);
+                e.popup.guide = Some(guide);
                 e.dirty.guide = true;
                 if result.added > 0 || result.updated > 0 {
                     CommandResult::Message(format!(
@@ -654,7 +654,7 @@ pub fn guide_handler(e: &mut Editor, args: &str) -> CommandResult {
                 }
             }
             Err(err) => {
-                e.guide_popup = Some(guide);
+                e.popup.guide = Some(guide);
                 e.dirty.guide = true;
                 CommandResult::Error(err)
             }
@@ -687,7 +687,7 @@ pub fn guide_handler(e: &mut Editor, args: &str) -> CommandResult {
             }
         }
 
-        e.guide_popup = Some(guide);
+        e.popup.guide = Some(guide);
         e.dirty.mark_all();
         CommandResult::ViewChanged
     }
@@ -897,7 +897,7 @@ fn keymap_handler(e: &mut Editor, args: &str) -> CommandResult {
             popup.selected += 1;
         }
 
-        e.keymap_popup = Some(popup);
+        e.popup.keymap = Some(popup);
         e.dirty.help = true;
         e.dirty.cursor = true;
         e.dirty.mark_all();
@@ -923,7 +923,7 @@ fn keymap_handler(e: &mut Editor, args: &str) -> CommandResult {
         }
 
         let popup = crate::popup::KeymapPopup::new(mode_name.to_string(), help_entries);
-        e.keymap_popup = Some(popup);
+        e.popup.keymap = Some(popup);
         e.dirty.help = true;
         e.dirty.cursor = true;
         e.dirty.mark_all();

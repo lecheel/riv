@@ -36,20 +36,21 @@ impl MarksExt for Editor {
         if let Some(window) = self.windows.active_window() {
             let buffer_id = window.buffer_id;
             let pos = window.cursor.position;
-            self.marks.insert(name, (buffer_id, pos));
+            self.search.marks.insert(name, (buffer_id, pos));
+            self.dirty.mark_all();
         }
         CommandResult::Message(format!("Mark '{}' set", name))
     }
 
     fn goto_mark(&mut self, name: char) -> CommandResult {
-        let (target_buf_id, target_pos) = match self.marks.get(&name) {
+        let (target_buf_id, target_pos) = match self.search.marks.get(&name) {
             Some(&(bid, pos)) => (bid, pos),
             None => return CommandResult::Error(format!("Mark '{}' not set", name)),
         };
 
         // Verify the buffer still exists
         if self.buffers.get(&target_buf_id).is_none() {
-            self.marks.remove(&name);
+            self.search.marks.remove(&name);
             return CommandResult::Error(format!("Mark '{}' buffer closed", name));
         }
 
@@ -77,18 +78,18 @@ impl MarksExt for Editor {
         // ── Primary: last_jump_mark toggle ──
         // Swapping current ↔ last_jump_mark gives the classic Vim ``
         // toggle: pressing `` repeatedly alternates between two positions.
-        if let Some((target_buf_id, target_pos)) = self.last_jump_mark.take() {
+        if let Some((target_buf_id, target_pos)) = self.search.last_jump_mark.take() {
             // Verify the target buffer still exists
             if self.buffers.get(&target_buf_id).is_none() {
                 // Buffer was closed; discard and fall through to tag stack
-                self.last_jump_mark = None;
+                self.search.last_jump_mark = None;
             } else {
                 // Save CURRENT position as the new last_jump_mark (toggle)
                 let current = self
                     .windows
                     .active_window()
                     .map(|w| (w.buffer_id, w.cursor.position));
-                self.last_jump_mark = current;
+                self.search.last_jump_mark = current;
 
                 // Switch buffer if needed
                 if let Some(window) = self.windows.active_window() {
@@ -111,7 +112,7 @@ impl MarksExt for Editor {
         // When last_jump_mark is empty (e.g. first `` after startup, or
         // after the toggle buffer was invalidated), use the tag stack
         // which contains the full history of gd / ctag / LSP jumps.
-        if self.tag_manager.stack_size() > 0 {
+        if self.search.tag_manager.stack_size() > 0 {
             return crate::ed::tag::tag_pop(self);
         }
 
