@@ -462,7 +462,7 @@ fn file_picker_handler(e: &mut Editor, _args: &str) -> CommandResult {
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
 
-    e.popup.file_picker = Some(FilePicker::new(&start_dir));
+    e.popup.file_picker = Some(FilePicker::new(&start_dir, e.config.file_picker_flat));
     e.dirty.mark_all();
     CommandResult::ViewChanged
 }

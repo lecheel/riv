@@ -39,6 +39,7 @@ toml = "0.8"
 
 # Filesystem
 dirs = "6"
+ignore = "0.4"
 
 # Logging
 log = "0.4"

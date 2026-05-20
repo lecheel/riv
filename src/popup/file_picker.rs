@@ -5,6 +5,7 @@ use crate::rounded_box::*;
 use crossterm::cursor::MoveTo;
 use crossterm::execute;
 use crossterm::style::{Print, ResetColor, SetBackgroundColor, SetForegroundColor};
+use ignore::WalkBuilder;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
@@ -24,10 +25,11 @@ pub struct FilePicker {
     pub filter: String,
     pub cwd: PathBuf,
     pub visible_height: usize,
+    pub flat: bool,
 }
 
 impl FilePicker {
-    pub fn new(initial_path: &Path) -> Self {
+    pub fn new(initial_path: &Path, flat: bool) -> Self {
         let effective_cwd = if initial_path.is_file() {
             initial_path
                 .parent()
@@ -66,6 +68,7 @@ impl FilePicker {
             filter: String::new(),
             cwd: effective_cwd,
             visible_height: 20,
+            flat,
         };
         picker.refresh_entries();
         picker
@@ -81,6 +84,17 @@ impl FilePicker {
     pub fn refresh_entries(&mut self) {
         self.all_entries.clear();
 
+        if self.flat {
+            self.refresh_entries_flat();
+        } else {
+            self.refresh_entries_tree();
+        }
+
+        self.apply_filter();
+    }
+
+    /// Tree mode: list current-directory entries only (existing behaviour).
+    fn refresh_entries_tree(&mut self) {
         if self.can_go_up() {
             if let Some(parent) = self.cwd.parent() {
                 self.all_entries.push(FileEntry {
@@ -121,8 +135,62 @@ impl FilePicker {
             self.all_entries.extend(dirs);
             self.all_entries.extend(files);
         }
+    }
 
-        self.apply_filter();
+    /// Flat mode: recursively walk cwd, respecting .gitignore, and list
+    /// every file with its relative path.
+    fn refresh_entries_flat(&mut self) {
+        let mut entries = Vec::new();
+
+        // WalkBuilder natively handles .gitignore, global gitignore
+        // (~/.gitignore), repo excludes, hidden files, and safely skips symlinks.
+        let walker = WalkBuilder::new(&self.cwd)
+            .hidden(true) // Skip hidden files/dirs (starts with .)
+            .git_ignore(true) // Respect .gitignore
+            .git_global(true) // Respect global gitignore (~/.gitignore)
+            .git_exclude(true) // Respect .git/info/exclude
+            .build();
+
+        for result in walker {
+            if let Ok(entry) = result {
+                // Skip the root directory itself
+                if entry.path() == self.cwd {
+                    continue;
+                }
+
+                // Only collect files in flat mode (directories are implicitly navigated)
+                let is_dir = entry.file_type().map_or(false, |ft| ft.is_dir());
+                if is_dir {
+                    continue;
+                }
+
+                let path = entry.path().to_path_buf();
+
+                // Calculate relative path for the display name
+                // e.g. turns "/home/user/project/src/main.rs" -> "src/main.rs"
+                let relative = entry.path().strip_prefix(&self.cwd).unwrap_or(entry.path());
+                let name = relative.to_string_lossy().to_string();
+
+                entries.push(FileEntry {
+                    name,
+                    path,
+                    is_dir: false,
+                    is_parent: false,
+                });
+            }
+        }
+
+        entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        self.all_entries = entries;
+    }
+
+    /// Toggle between flat and tree mode, then refresh.
+    pub fn toggle_flat(&mut self) {
+        self.flat = !self.flat;
+        self.filter.clear();
+        self.selected = 0;
+        self.scroll = 0;
+        self.refresh_entries();
     }
 
     pub(crate) fn apply_filter(&mut self) {
@@ -194,15 +262,20 @@ impl FilePicker {
     }
 
     pub fn go_up(&mut self) {
+        // Flat mode is rooted at the original directory; going up would
+        // trigger a massive recursive walk of the parent filesystem.
+        if self.flat {
+            return;
+        }
+
         if let Some(parent) = self.cwd.parent() {
-            // On some platforms, the root directory's parent() returns ""
             if parent.as_os_str().is_empty() {
                 return;
             }
             self.cwd = parent.to_path_buf();
-            self.filter.clear(); // Reset filter when changing directories
-            self.selected = 0; // Reset selection
-            self.scroll = 0; // Reset scroll
+            self.filter.clear();
+            self.selected = 0;
+            self.scroll = 0;
             self.refresh_entries();
         }
     }
@@ -346,12 +419,21 @@ pub fn render_file_picker(
 
     // ── Bottom border with status ──────────────────────────────────────
     let bottom_y = filter_y + 1 + content_rows as u16;
-    let footer_text = format!(
-        "[-] up  [Enter] open  [Esc]{}close  {}/{}",
-        if picker.filter_is_empty() { " " } else { " clear " },
-        picker.selected + 1,
-        picker.filtered.len(),
-    );
+
+    let footer_text = if picker.flat {
+        format!(
+            "[~] tree  [Enter] open  [Esc] close  {}/{}",
+            picker.selected + 1,
+            picker.filtered.len(),
+        )
+    } else {
+        format!(
+            "[-] up  [~] flat  [Enter] open  [Esc] close  {}/{}",
+            picker.selected + 1,
+            picker.filtered.len(),
+        )
+    };
+
     let footer_style = BoxStyle::default().with_footer(footer_text).with_bg(catppuccin::MANTLE);
     draw_bottom_border(stdout, x, bottom_y, popup_width, &footer_style)?;
 

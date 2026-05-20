@@ -774,8 +774,10 @@ impl Editor {
                 Some(CommandResult::NoOp)
             }
             Key::Enter => {
+                // In flat mode all entries are files; in tree mode we still
+                // need to check is_dir for directory navigation.
                 if let Some(entry) = picker.selected_entry() {
-                    if entry.is_dir {
+                    if entry.is_dir && !picker.flat {
                         picker.go_into(&entry.path.clone());
                         self.dirty.file_picker = true;
                         return Some(CommandResult::NoOp);
@@ -799,7 +801,19 @@ impl Editor {
                 Some(CommandResult::NoOp)
             }
             Key::Char('-') => {
-                picker.go_up();
+                if picker.flat {
+                    // In flat mode, treat '-' as a regular filter character
+                    picker.filter_push('-');
+                } else {
+                    // In tree mode, navigate up
+                    picker.go_up();
+                }
+                self.dirty.file_picker = true;
+                Some(CommandResult::NoOp)
+            }
+            // ── Toggle flat / tree mode ────────────────────────────
+            Key::Char('~') => {
+                picker.toggle_flat();
                 self.dirty.file_picker = true;
                 Some(CommandResult::NoOp)
             }

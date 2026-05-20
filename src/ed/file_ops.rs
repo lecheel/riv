@@ -213,7 +213,7 @@ impl FileOpsExt for Editor {
             })
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
 
-        self.popup.file_picker = Some(FilePicker::new(&start_dir));
+        self.popup.file_picker = Some(FilePicker::new(&start_dir, self.config.file_picker_flat));
         self.dirty.mark_all();
         CommandResult::ViewChanged
     }

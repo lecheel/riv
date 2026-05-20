@@ -271,6 +271,10 @@ pub struct Config {
     #[serde(default)]
     pub format_on_save: bool,
 
+    /// Show file picker as a flat recursive listing (no directory navigation).
+    #[serde(default)]
+    pub file_picker_flat: bool,
+
     /// Float shortcut menu mappings (key string → action string).
     #[serde(default)]
     pub shortcuts: std::collections::HashMap<String, String>,
@@ -305,6 +309,7 @@ impl Default for Config {
             llm: LlmConfig::default(),
             codeium: CodeiumConfig::default(),
             format_on_save: false,
+            file_picker_flat: false,
             shortcuts: std::collections::HashMap::new(),
         }
     }
