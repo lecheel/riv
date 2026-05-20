@@ -12,14 +12,13 @@ use std::path::Path;
 use std::time::Instant;
 
 use crate::ed::buffer_ops::BufferOpsExt;
+use crate::ed::completion::CompletionExt;
 use crate::ed::file_ops::FileOpsExt;
-use crate::ed::ghost_text::GhostTextExt;
 use crate::ed::git::GitExt;
 use crate::ed::replace::ReplaceExt;
 use crate::editor::{Editor, Mode};
 use crate::msgbox::AppMessage;
 use crate::popup::TagListPopup;
-use unicode_segmentation::UnicodeSegmentation;
 
 pub trait LspExt {
     fn poll_app_messages(&mut self);
@@ -43,6 +42,36 @@ pub trait LspExt {
 }
 
 impl LspExt for Editor {
+    fn flush_lsp_changes(&mut self) {
+        if !self.is_lsp_change_pending() {
+            return;
+        }
+        self.set_lsp_change_pending(false);
+        self.clear_lsp_change_deadline();
+
+        let Some(window) = self.windows.active_window() else {
+            return;
+        };
+        let buffer_id = window.buffer_id;
+
+        let (path, text) = {
+            let Some(buffer) = self.buffers.get(&buffer_id) else {
+                return;
+            };
+            let Some(ref path) = buffer.file_path else {
+                return;
+            };
+            (path.clone(), buffer.rope.to_string())
+        };
+
+        self.increment_lsp_doc_version();
+        self.send_lsp_message(crate::lsp::LspMessage::ChangeFile(
+            path,
+            String::new(),
+            text,
+            self.get_lsp_doc_version(),
+        ));
+    }
     fn poll_app_messages(&mut self) {
         while let Ok(msg) = self.try_recv_app_message() {
             if self.get_mode() == Mode::LlmPrompt && msg.suppressed_during_llm() {
@@ -52,24 +81,15 @@ impl LspExt for Editor {
             match msg {
                 AppMessage::LspReady => {
                     self.set_lsp_connected(true);
-
-                    // OPT: collect paths + text together to avoid borrowing self.buffers
-                    // while calling lsp_did_open. We now pass text in the message,
-                    // so lsp_did_open no longer re-reads from disk.
                     let paths: Vec<(std::path::PathBuf, String)> = self
                         .buffers
                         .iter()
-                        .filter_map(|b| {
-                            b.file_path
-                                .as_ref()
-                                .and_then(|p| std::fs::read_to_string(p).ok().map(|t| (p.clone(), t)))
-                        })
+                        .filter_map(|b| b.file_path.as_ref().map(|p| (p.clone(), b.rope.to_string())))
                         .collect();
 
-                    for (path, _text) in &paths {
-                        self.lsp_did_open(path);
+                    for (path, text) in paths {
+                        self.send_lsp_message(crate::lsp::LspMessage::OpenFile { path, text });
                     }
-
                     self.dirty.mark_all();
                 }
                 AppMessage::LspGotoDefinitionResult { locations } => {
@@ -77,44 +97,17 @@ impl LspExt for Editor {
                 }
                 AppMessage::LspCompletion(items) => {
                     self.set_lsp_completion_pending(false);
-
                     let Some(items) = items else {
                         continue;
                     };
                     if items.is_empty() {
                         continue;
                     }
-
-                    // ── PATCH 1 ──────────────────────────────────────────────────────────
-                    // Use the flag saved at request-time instead of re-detecting.
-                    // Re-detecting here is wrong: the cursor has already moved past the
-                    // trigger character, so detect_completion_trigger() returns None and
-                    // the member-access path is skipped, letting buffer words leak in.
-                    let after_trigger_char = self.lsp.completion_was_trigger;
-                    self.lsp.completion_was_trigger = false; // consume it
-                                                             // ─────────────────────────────────────────────────────────────────────
-
-                    let should_try_lsp_ghost = !after_trigger_char
-                        && !self.is_completion_active()
-                        && matches!(self.get_mode(), Mode::Insert | Mode::Replace)
-                        && self.is_ghost_text_enabled()
-                        && !self.is_ghost_text_visible();
-
-                    if should_try_lsp_ghost {
-                        if let Some(first) = items.first() {
-                            // OPT: use borrowed get_insert_text when possible
-                            let insert_text = first.get_insert_text().unwrap_or(&first.label).to_string();
-                            if !insert_text.is_empty() {
-                                self.process_lsp_ghost(first.label.clone(), insert_text);
-                                continue;
-                            }
-                        }
-                    }
-
                     if matches!(self.get_mode(), Mode::Insert | Mode::Replace) {
-                        crate::completion::CompletionEngine::update_unified_completions(self, Some(items));
+                        // merge_lsp reads session.mode directly — no context rewrite
+                        self.completion.merge_lsp(items);
                         self.dirty.mark_all();
-                        crate::ed::completion::CompletionExt::request_completion_resolve(self);
+                        self.request_completion_resolve();
                     }
                 }
 
@@ -245,50 +238,13 @@ impl LspExt for Editor {
 
         let line = window.cursor.position.line as u32;
         let character = window.cursor.position.col as u32;
-        let trigger = self.detect_completion_trigger();
 
-        // ── PATCH 1 ──────────────────────────────────────────────────────────
-        // Record whether this request was triggered by a trigger character
-        // (dot / colon).  We read this flag when the response arrives so we
-        // don't re-detect the trigger at response time (cursor has moved by then).
-        self.lsp.completion_was_trigger = trigger.is_some();
-        // ─────────────────────────────────────────────────────────────────────
+        // Use the improved trigger detection that scans past the current word
+        let trigger = self.detect_completion_trigger();
 
         self.send_lsp_message(crate::lsp::LspMessage::RequestCompletion(path, line, character, trigger));
         self.set_lsp_completion_pending(true);
     }
-
-    fn flush_lsp_changes(&mut self) {
-        if !self.is_lsp_change_pending() {
-            return;
-        }
-        self.set_lsp_change_pending(false);
-        self.clear_lsp_change_deadline();
-
-        let Some(window) = self.windows.active_window() else {
-            return;
-        };
-        let buffer_id = window.buffer_id;
-
-        let (path, text) = {
-            let Some(buffer) = self.buffers.get(&buffer_id) else {
-                return;
-            };
-            let Some(ref path) = buffer.file_path else {
-                return;
-            };
-            (path.clone(), buffer.rope.to_string())
-        };
-
-        self.increment_lsp_doc_version();
-        self.send_lsp_message(crate::lsp::LspMessage::ChangeFile(
-            path,
-            String::new(),
-            text,
-            self.get_lsp_doc_version(),
-        ));
-    }
-
     /// OPT: lsp_did_open now passes buffer text in the message,
     /// so the LSP worker doesn't need to re-read the file from disk.
     fn lsp_did_open(&mut self, path: &Path) {
@@ -546,37 +502,32 @@ impl Editor {
         self.lsp.completion_was_trigger
     }
 
-    /// OPT: detect completion trigger without grapheme segmentation
-    /// for the common case where col > 0. Falls back to grapheme
-    /// segmentation only when needed (multi-byte chars at cursor).
+    /// Detect completion trigger character by scanning backward past the
+    /// current word to find `.` or `::`.  This is necessary because the
+    /// cursor has typically moved past the trigger character by the time
+    /// we send the LSP request.
+    ///
+    /// Example: cursor at `Person.na|` → walks past `na` → finds `.` → returns "."
     fn detect_completion_trigger(&self) -> Option<String> {
         if let Some(window) = self.windows.active_window() {
             if let Some(buffer) = self.buffers.get(&window.buffer_id) {
                 let pos = window.cursor.position;
-                if pos.col > 0 {
-                    if let Some(line_text) = buffer.line_text(pos.line) {
-                        // OPT: fast path for ASCII — avoid grapheme segmentation
-                        let bytes = line_text.as_bytes();
-                        if pos.col <= bytes.len() {
-                            // Check if the byte before cursor column is a trigger
-                            // For simple ASCII this is O(1)
-                            let before = &bytes[..pos.col.min(bytes.len())];
-                            if before.is_ascii() {
-                                let last_char = before.last()?;
-                                if *last_char == b'.' || *last_char == b':' {
-                                    return Some((*last_char as char).to_string());
-                                }
-                                return None;
-                            }
-                        }
-
-                        // Fallback: full grapheme segmentation for multi-byte
-                        let graphemes: Vec<_> = line_text.graphemes(true).collect();
-                        if let Some(last) = graphemes.get(pos.col - 1) {
-                            if *last == "." || *last == ":" {
-                                return Some(last.to_string());
-                            }
-                        }
+                if pos.col == 0 {
+                    return None;
+                }
+                if let Some(line_text) = buffer.line_text(pos.line) {
+                    let bytes = line_text.as_bytes();
+                    let end = pos.col.min(bytes.len());
+                    if end == 0 {
+                        return None;
+                    }
+                    // Check if char immediately before cursor is a trigger (fast path)
+                    if bytes[end - 1] == b'.' {
+                        return Some(".".to_string());
+                    }
+                    // Check for :: (colon-colon)
+                    if end >= 2 && bytes[end - 1] == b':' && bytes[end - 2] == b':' {
+                        return Some("::".to_string());
                     }
                 }
             }

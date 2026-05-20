@@ -1464,9 +1464,7 @@ impl LspManager {
             std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(&root)
         };
 
-        log::debug!("start_lsp_for_file: path={} root={}", path.display(), root.display());
-
-        let root_uri = format!("file://{}", root.display());
+        let root_uri = path_to_uri(&root);
 
         match LanguageServer::new(command, args, &root, &root_uri).await {
             Ok((mut lsp, _init_response)) => {

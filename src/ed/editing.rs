@@ -262,46 +262,57 @@ impl EditingExt for Editor {
 
     fn delete_n_lines(&mut self, count: usize) {
         let count = count.max(1);
-        let buffer_id = self.windows.active_window().map(|w| w.buffer_id);
-        let start_line = self.windows.active_window().map(|w| w.cursor.position.line);
+        let (buffer_id, start_line) = match self.windows.active_window() {
+            Some(w) => (w.buffer_id, w.cursor.position.line),
+            None => return,
+        };
 
-        // Yank all lines first.
-        if let (Some(buffer_id), Some(start_line)) = (buffer_id, start_line) {
-            // ── Extract yank text ──
-            let yank_text = {
-                let mut yank_text = String::new();
-                if let Some(buffer) = self.buffers.get(&buffer_id) {
-                    let max_line = buffer.line_count();
-                    let end = (start_line + count).min(max_line);
-                    for i in start_line..end {
-                        if let Some(text) = buffer.line_text(i) {
-                            yank_text.push_str(text.trim_end_matches('\n'));
-                            yank_text.push('\n');
-                        }
-                    }
-                }
-                yank_text
+        // ── Extract yank text via single slice (O(M) instead of O(count * log N)) ──
+        let yank_text = {
+            let buffer = match self.buffers.get(&buffer_id) {
+                Some(b) => b,
+                None => return,
             };
-
-            // ── Set register (borrows self mutably) ──
-            self.set_yank_register(yank_text);
-            // Delete lines.
-            if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
-                for _ in 0..count {
-                    let line = self.windows.active_window().map(|w| w.cursor.position.line).unwrap_or(0);
-                    if line < buffer.line_count() {
-                        buffer.delete_line(line);
-                        buffer.dirty = true;
-                    }
-                }
-                // Clamp cursor: if we deleted past EOF, move to the last line.
-                if let Some(window) = self.windows.active_window_mut() {
-                    if window.cursor.position.line >= buffer.line_count() && buffer.line_count() > 0 {
-                        window.cursor.position.line = buffer.line_count() - 1;
-                    }
-                }
-                self.invalidate_git_gutter();
+            let max_line = buffer.line_count();
+            let end = (start_line + count).min(max_line);
+            if start_line >= end {
+                return;
             }
+            let start_char = buffer.rope.line_to_char(start_line);
+            let end_char = if end < max_line {
+                buffer.rope.line_to_char(end)
+            } else {
+                buffer.rope.len_chars()
+            };
+            buffer.rope.slice(start_char..end_char).to_string()
+        };
+
+        self.set_yank_register(yank_text);
+
+        // ── Single rope removal for the entire range ──
+        if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
+            let max_line = buffer.line_count();
+            let end = (start_line + count).min(max_line);
+            if start_line < end {
+                let start_char = buffer.rope.line_to_char(start_line);
+                let end_char = if end < max_line {
+                    buffer.rope.line_to_char(end)
+                } else {
+                    buffer.rope.len_chars()
+                };
+                buffer.rope.remove(start_char..end_char);
+                buffer.tree_dirty = true;
+                buffer.dirty = true;
+            }
+
+            // Clamp cursor
+            if let Some(window) = self.windows.active_window_mut() {
+                if window.cursor.position.line >= buffer.line_count() && buffer.line_count() > 0 {
+                    window.cursor.position.line = buffer.line_count() - 1;
+                }
+            }
+            // NOTE: Removed self.invalidate_git_gutter() here —
+            // process_event() already calls it centrally for ContentChanged.
         }
     }
 
@@ -1596,13 +1607,12 @@ impl EditingExt for Editor {
 
         Ok(())
     }
-    fn set_yank_register(&mut self, text: String) {
-        self.yank_register = text.clone();
 
-        // ── Named register routing (e.g. "ayy) ──
+    fn set_yank_register(&mut self, text: String) {
         if let Some(reg) = self.pending_register.take() {
-            self.set_named_register(reg, text);
+            self.set_named_register(reg, text.clone());
         }
+        self.yank_register = text; // Move instead of clone+drop
     }
     /// Store text in a named register (a–z).
     fn set_named_register(&mut self, name: char, content: String) {

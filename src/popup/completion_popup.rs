@@ -284,7 +284,7 @@ pub fn render_completion_popup(
 
     let items = &editor.completion.items;
     let selected = editor.completion.selected_index;
-    let trigger = editor.completion.context.as_ref().map(|c| c.trigger.as_str()).unwrap_or("");
+    let trigger = editor.completion.prefix.as_str();
 
     if items.is_empty() {
         return Ok(());

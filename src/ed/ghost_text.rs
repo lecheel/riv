@@ -168,7 +168,7 @@ impl GhostTextExt for Editor {
         let pos = window.cursor.position;
 
         // Compute the already-typed trigger so we can show only the suffix.
-        let trigger = self.completion.context.as_ref().map(|c| c.trigger.clone()).unwrap_or_default();
+        let trigger = self.completion.prefix.clone();
 
         let ghost_text = if !trigger.is_empty() && insert_text.starts_with(&trigger) {
             insert_text[trigger.len()..].to_string()

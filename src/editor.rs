@@ -755,7 +755,7 @@ impl Editor {
         // This catches ContentChanged from ALL paths: process_key's NoMatch
         // branch (insert-mode typing) AND process_action's editing actions.
         if result == CommandResult::ContentChanged {
-            self.invalidate_git_gutter(); // MAYBE CAN REMOVED
+            self.invalidate_git_gutter();
             self.notify_lsp_change();
         }
 
@@ -1833,27 +1833,39 @@ impl Editor {
                     CommandResult::ContentChanged
                 })
             }
-            Action::DeleteWord => self.with_undo_group(|s| {
-                for _ in 0..s.current_count {
-                    s.delete_word_before_cursor();
-                }
-                CommandResult::ContentChanged
-            }),
-            Action::DeleteWordForward => self.with_undo_group(|s| {
-                for _ in 0..s.current_count {
-                    s.delete_word_after_cursor();
-                }
-                CommandResult::ContentChanged
-            }),
-            Action::DeleteToLineEnd => self.with_undo_group(|s| {
-                s.delete_to_line_end();
-                CommandResult::ContentChanged
-            }),
+            Action::DeleteWord => {
+                self.record_action(RepeatableAction::DeleteWordBack, self.current_count);
+                self.with_undo_group(|s| {
+                    for _ in 0..s.current_count {
+                        s.delete_word_before_cursor();
+                    }
+                    CommandResult::ContentChanged
+                })
+            }
+            Action::DeleteWordForward => {
+                self.record_action(RepeatableAction::DeleteWordForward, self.current_count);
+                self.with_undo_group(|s| {
+                    for _ in 0..s.current_count {
+                        s.delete_word_after_cursor();
+                    }
+                    CommandResult::ContentChanged
+                })
+            }
+            Action::DeleteToLineEnd => {
+                self.record_action(RepeatableAction::DeleteToLineEnd, self.current_count);
+                self.with_undo_group(|s| {
+                    s.delete_to_line_end();
+                    CommandResult::ContentChanged
+                })
+            }
             Action::DeleteToFileEnd => self.with_undo_group(|s| s.delete_to_file_end()),
-            Action::DeleteToLineStart => self.with_undo_group(|s| {
-                s.delete_to_line_start();
-                CommandResult::ContentChanged
-            }),
+            Action::DeleteToLineStart => {
+                self.record_action(RepeatableAction::DeleteToLineStart, self.current_count);
+                self.with_undo_group(|s| {
+                    s.delete_to_line_start();
+                    CommandResult::ContentChanged
+                })
+            }
 
             Action::Register => {
                 self.set_status("TODO.".to_string());

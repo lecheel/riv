@@ -23,6 +23,14 @@ pub enum RepeatableAction {
 
     /// Delete line
     DeleteLine,
+    /// Delete to end of line (d$)
+    DeleteToLineEnd,
+    /// Delete to start of line (d0 / Ctrl-U in insert)
+    DeleteToLineStart,
+    /// Delete word forward (dw)
+    DeleteWordForward,
+    /// Delete word backward (Ctrl-W in insert, db in normal)
+    DeleteWordBack,
     DeleteAroundFunction,
     ToggleComment,
     /// Change (delete + insert)
@@ -100,6 +108,10 @@ impl RepeatExt for Editor {
                 return CommandResult::NoOp;
             }
             RepeatableAction::DeleteLine => Action::DeleteLine,
+            RepeatableAction::DeleteToLineEnd => Action::DeleteToLineEnd,
+            RepeatableAction::DeleteToLineStart => Action::DeleteToLineStart,
+            RepeatableAction::DeleteWordForward => Action::DeleteWordForward,
+            RepeatableAction::DeleteWordBack => Action::DeleteWord,
             RepeatableAction::DeleteAroundFunction => Action::DeleteAroundFunction,
             RepeatableAction::Insert(text) => Action::InsertText(text),
             RepeatableAction::DeleteChars { .. } => Action::DeleteChar,
