@@ -1,3 +1,4 @@
+//--+ prompt.rs
 //! src/prompt.rs
 //! Reusable mini input prompt with line editing and history.
 
@@ -10,6 +11,8 @@ pub enum PromptAction {
     Submit,
     Cancel,
 }
+
+const MAX_PROMPT_LEN: usize = 99;
 
 #[derive(Debug, Clone)]
 pub struct MiniInputPrompt {
@@ -60,13 +63,37 @@ impl MiniInputPrompt {
     pub fn handle_key(&mut self, key: &Key) -> PromptAction {
         match key {
             Key::Char(c) => {
+                // ── Enforce max length ──
+                if self.buffer.chars().count() >= MAX_PROMPT_LEN {
+                    return PromptAction::None;
+                }
                 self.buffer.insert(self.cursor, *c);
                 self.cursor += c.len_utf8();
                 PromptAction::Changed
             }
             Key::Paste(ref text) => {
-                self.buffer.insert_str(self.cursor, text.as_str());
-                self.cursor += text.len();
+                // ── Truncate paste to fit within max length ──
+                let current_len = self.buffer.chars().count();
+                let available = MAX_PROMPT_LEN.saturating_sub(current_len);
+                if available == 0 {
+                    return PromptAction::None;
+                }
+
+                // Sanitize: replace newlines with spaces to prevent prompt overflow
+                // and join pasted lines into a single continuous string.
+                let sanitized: String = text
+                    .chars()
+                    .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
+                    .take(available)
+                    .collect();
+
+                if sanitized.is_empty() {
+                    return PromptAction::None;
+                }
+
+                let byte_len = sanitized.len();
+                self.buffer.insert_str(self.cursor, &sanitized);
+                self.cursor += byte_len;
                 PromptAction::Changed
             }
             Key::Backspace => {

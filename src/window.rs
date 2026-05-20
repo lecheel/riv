@@ -5,6 +5,7 @@
 //! allowing arbitrary layouts like vertical-then-horizontal or vice versa.
 
 use crate::buffer::{BufferId, CursorPosition};
+use std::collections::HashMap;
 
 // ── Window ID ───────────────────────────────────────────────────────
 
@@ -100,6 +101,7 @@ pub struct Window {
     /// Set when entering a visual mode; `None` in Normal/Insert/Command.
     /// The selection range is from `selection_anchor` to `cursor.position`.
     pub selection_anchor: Option<crate::buffer::CursorPosition>,
+    pub cursor_memory: HashMap<BufferId, WindowCursor>,
 }
 
 impl Window {
@@ -115,6 +117,7 @@ impl Window {
             x_offset: 0,
             y_offset: 0,
             selection_anchor: None,
+            cursor_memory: HashMap::new(),
         }
     }
 
@@ -181,8 +184,16 @@ impl Window {
 
     /// Switch this window to view a different buffer.
     pub fn set_buffer(&mut self, buffer_id: BufferId) {
+        // 1. Save current buffer's cursor before leaving
+        self.cursor_memory.insert(self.buffer_id, self.cursor.clone());
+
+        // 2. Switch buffer
         self.buffer_id = buffer_id;
-        self.cursor = WindowCursor::default();
+
+        // 3. Restore cursor if we've been here before, otherwise default
+        self.cursor = self.cursor_memory.remove(&buffer_id).unwrap_or_default(); // ← FIX: new_id → buffer_id
+
+        // 4. Reset viewport (scroll position)
         self.viewport = Viewport::new();
     }
 }

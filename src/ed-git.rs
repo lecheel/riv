@@ -387,66 +387,9 @@ impl GitExt for Editor {
             None => return CommandResult::Error("Cursor is not in a hunk.".to_string()),
         };
 
-        // Compute cursor position after revert.
-        //
-        // apply_hunk_revert replaces the hunk's buffer range with the original
-        // content (Context + Delete lines in diff order).  The cursor should
-        // land on the first *restored* (formerly deleted) line, not the first
-        // context line.
-        //
-        // Example:
-        //     Archived,      ← context    (line 41)
-        //     }              ← context    (line 42)
-        //                     ← context   (line 43)
-        //   - // comment     ← DELETE     ← cursor should land HERE
-        //     fn main()...   ← context
-        //
-        // The first new_lineno points to line 41 (Archived,) — wrong.
-        // We need to skip past the context lines that precede the first
-        // Delete line in the original content.
-        let new_line_indices: Vec<usize> = hunk
-            .lines
-            .iter()
-            .filter_map(|dl| dl.new_lineno)
-            .map(|nl| nl.saturating_sub(1))
-            .collect();
-
-        let restore_cursor_line = if new_line_indices.is_empty() {
-            // Pure-delete hunk with no context (diff -U0): the reverted lines
-            // will be inserted at old_start.  Convert 1-based → 0-based.
-            hunk.old_start.saturating_sub(1)
-        } else {
-            let range_start = *new_line_indices.first().unwrap();
-
-            // Count context lines that appear before the first Delete in diff
-            // order.  After revert, original_lines are inserted at range_start,
-            // and the first restored delete line sits at:
-            //   range_start + context_before_first_delete
-            let mut ctx_before_delete = 0;
-            let mut has_delete = false;
-            for dl in &hunk.lines {
-                match dl.type_ {
-                    DiffLineType::Context => {
-                        if !has_delete {
-                            ctx_before_delete += 1;
-                        }
-                    }
-                    DiffLineType::Delete => {
-                        has_delete = true;
-                    }
-                    DiffLineType::Add | DiffLineType::HunkHeader => {}
-                }
-            }
-
-            if has_delete {
-                // Land on the first restored (formerly deleted) line.
-                range_start + ctx_before_delete
-            } else {
-                // Pure-add hunk: after revert the added lines are removed.
-                // Land at the start of the removed region.
-                range_start
-            }
-        };
+        // Compute cursor position: start of the hunk's region in the original
+        // file.  old_start is 1-based, so subtract 1 for 0-based.
+        let restore_cursor_line = hunk.old_start.saturating_sub(1);
 
         let buffer_id = match self.windows.active_window().map(|w| w.buffer_id) {
             Some(id) => id,

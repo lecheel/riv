@@ -445,7 +445,7 @@ impl GitDiffExt for Editor {
             }
         }
 
-        self.buffers.remove(&buffer_id);
+        // self.buffers.remove(&buffer_id);
         self.dirty.mark_all();
         CommandResult::ViewChanged
     }

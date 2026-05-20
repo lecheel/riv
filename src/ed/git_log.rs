@@ -361,7 +361,7 @@ impl GitLogExt for Editor {
             return self.git_log_refresh_with_count(count, grep_arg);
         }
 
-        // Create a new buffer.
+        // ── Create a new buffer ──
         let buffer_id = self.buffers.new_buffer();
         if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
             buffer.kind = BufferKind::GitLog;
@@ -374,7 +374,9 @@ impl GitLogExt for Editor {
             buffer.language = Some(Language::GitLog);
         }
 
-        self.save_current_position();
+        self.git.log_count = count;
+        self.git.log_grep = grep_arg.to_string();
+
         if let Some(window) = self.windows.active_window_mut() {
             window.set_buffer(buffer_id);
         }
@@ -541,6 +543,9 @@ impl GitLogExt for Editor {
             return CommandResult::NoOp;
         }
 
+        // SAVE cursor position before leaving GitLog
+        // self.save_current_position();
+
         let target_id = self
             .buffers
             .iter()
@@ -557,7 +562,7 @@ impl GitLogExt for Editor {
             }
         }
 
-        self.buffers.remove(&buffer_id);
+        // self.buffers.remove(&buffer_id);
         self.dirty.mark_all();
         CommandResult::ViewChanged
     }
@@ -607,7 +612,6 @@ impl GitLogExt for Editor {
         }
     }
 }
-
 // ── Editor helper methods ───────────────────────────────────────────
 
 impl Editor {
@@ -683,10 +687,11 @@ impl Editor {
             buffer.rope = Rope::from_str(&content);
         }
 
+        // Just clamp and ensure visible (preserves existing cursor on refresh!)
         if let Some(window) = self.windows.active_window_mut() {
-            window.cursor.position.line = 2;
-            window.cursor.position.col = 7;
-            window.cursor.desired_col = None;
+            let bid = window.buffer_id;
+            self.clamp_cursor_to_buffer(&bid);
+            self.ensure_cursor_visible(&bid);
         }
 
         self.dirty.mark_all();

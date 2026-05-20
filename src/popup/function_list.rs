@@ -164,7 +164,7 @@ pub fn render_function_list_popup(
     }
     let calc_width = max_kind + 1 + max_name + 3 + 6 + 4;
     let popup_width = calc_width.max(130).min(term_width as usize) as u16;
-    let popup_height = max_visible as u16 + 4;
+    let popup_height = max_visible as u16 + 3;
 
     let x = (term_width.saturating_sub(popup_width)) / 2;
     let y = (term_height.saturating_sub(status_height).saturating_sub(popup_height)) / 2;

@@ -494,10 +494,10 @@ impl Editor {
     fn get_lsp_change_debounce_ms(&self) -> u64 {
         self.lsp.change_debounce_ms
     }
-    fn increment_lsp_doc_version(&mut self) {
+    pub fn increment_lsp_doc_version(&mut self) {
         self.lsp.doc_version += 1;
     }
-    fn get_lsp_doc_version(&self) -> i32 {
+    pub fn get_lsp_doc_version(&self) -> i32 {
         self.lsp.doc_version
     }
     fn is_paste_in_progress(&self) -> bool {
