@@ -706,29 +706,27 @@ impl BufferWordIndex {
     }
 
     pub fn update_line(&mut self, line_idx: usize, line_text: Option<&str>) {
-        if line_idx >= self.lines.len() {
-            if let Some(text) = line_text {
-                let words = extract_line_words(text);
-                for w in &words {
-                    self.all_words.insert(w.clone());
-                }
-                self.lines.push(words);
-            } else {
-                self.lines.push(HashSet::new());
-            }
-            return;
+        // Ensure capacity
+        while self.lines.len() <= line_idx {
+            self.lines.push(HashSet::new());
         }
 
-        let old_words = &mut self.lines[line_idx];
+        // Replace the line's word set
+        let _old_words = std::mem::replace(
+            &mut self.lines[line_idx],
+            if let Some(text) = line_text {
+                extract_line_words(text)
+            } else {
+                HashSet::new()
+            },
+        );
 
-        if let Some(text) = line_text {
-            let new_words = extract_line_words(text);
-            for w in &new_words {
+        // Rebuild the global set from all lines (clears stale words)
+        self.all_words.clear();
+        for line_words in &self.lines {
+            for w in line_words {
                 self.all_words.insert(w.clone());
             }
-            *old_words = new_words;
-        } else {
-            old_words.clear();
         }
     }
 
@@ -797,61 +795,111 @@ fn extract_line_words(line_text: &str) -> HashSet<String> {
 }
 
 pub fn word_or_path_before_cursor(buffer: &Buffer, position: CursorPosition) -> (String, bool) {
-    if let Some(line_text) = buffer.line_text(position.line) {
-        if line_text.is_ascii() {
-            let bytes = line_text.as_bytes();
-            let end = position.col.min(bytes.len());
-            let mut start = end;
+    let Some(line_text) = buffer.line_text(position.line) else {
+        return (String::new(), false);
+    };
 
-            while start > 0 {
-                let b = bytes[start - 1];
-                if b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'.' || b == b'/' {
-                    start -= 1;
-                } else {
-                    break;
-                }
-            }
-
-            let text = &line_text[start..end];
-            let is_path = is_path_trigger(text);
-
-            if !is_path {
-                if let Some(dot_pos) = text.rfind('.') {
-                    let after_dot = &text[dot_pos + 1..];
-                    return (after_dot.to_string(), false);
-                }
-            }
-
-            return (text.to_string(), is_path);
-        }
-
-        let graphemes: Vec<_> = line_text.graphemes(true).collect();
-        let end = position.col.min(graphemes.len());
-
+    // ── ASCII fast path ──────────────────────────────────────────────
+    if line_text.is_ascii() {
+        let bytes = line_text.as_bytes();
+        let end = position.col.min(bytes.len());
         let mut start = end;
         while start > 0 {
-            let g = graphemes[start - 1];
-            if is_identifier_char(g) || is_path_char(g) {
+            let b = bytes[start - 1];
+            if b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'.' || b == b'/' {
                 start -= 1;
             } else {
                 break;
             }
         }
+        let text = &line_text[start..end];
 
-        let text = graphemes[start..end].join("");
-        let is_path = is_path_trigger(&text);
-
-        if !is_path {
-            if let Some(dot_pos) = text.rfind('.') {
-                let after_dot = &text[dot_pos + 1..];
-                return (after_dot.to_string(), false);
-            }
+        // "./" or "../" → path trigger (must check before dot-strip)
+        if is_path_trigger(text) {
+            return (text.to_string(), true);
         }
 
-        (text, is_path)
-    } else {
-        (String::new(), false)
+        // Bare "." — the dot itself is the trigger char handled by Case 1
+        // (has_trigger). No typed prefix exists yet; return empty so callers
+        // do not open a spurious MemberAccess session.
+        if text == "." {
+            return (String::new(), false);
+        }
+
+        // Member access: strip everything up to and including the last dot.
+        // "foo.bar" → "bar"   "foo." → ""   "foo.bar.baz" → "baz"
+        if let Some(dot_pos) = text.rfind('.') {
+            let after_dot = &text[dot_pos + 1..];
+            return (after_dot.to_string(), false);
+        }
+
+        return (text.to_string(), false);
     }
+
+    // ── Unicode grapheme fallback ────────────────────────────────────
+    let graphemes: Vec<_> = line_text.graphemes(true).collect();
+    let end = position.col.min(graphemes.len());
+    let mut start = end;
+    while start > 0 {
+        let g = graphemes[start - 1];
+        if is_identifier_char(g) || is_path_char(g) {
+            start -= 1;
+        } else {
+            break;
+        }
+    }
+    let text = graphemes[start..end].join("");
+
+    if is_path_trigger(&text) {
+        return (text, true);
+    }
+    if text == "." {
+        return (String::new(), false);
+    }
+    if let Some(dot_pos) = text.rfind('.') {
+        let after_dot = &text[dot_pos + 1..];
+        return (after_dot.to_string(), false);
+    }
+
+    (text, false)
+}
+
+/// Returns `true` when the character immediately before `word_start` is a
+/// member-access dot that is NOT part of `..` (range) or `./` / `../` (path).
+///
+/// # Examples
+/// ```
+/// // "foo.bar"  word_start = 4  → true
+/// // "foo."     word_start = 4  → true
+/// // "foo..bar" word_start = 5  → false  (..)
+/// // "./foo"    word_start = 2  → false  (./)
+/// // "."        word_start = 1  → false  (bare dot, no lhs)
+/// ```
+pub fn is_member_dot_before(line: &str, word_start: usize) -> bool {
+    if word_start == 0 {
+        return false;
+    }
+    let bytes = line.as_bytes();
+    // Must be a dot
+    if bytes.get(word_start - 1) != Some(&b'.') {
+        return false;
+    }
+    // Exclude ".." — range operator or parent path component
+    if word_start >= 2 && bytes.get(word_start - 2) == Some(&b'.') {
+        return false;
+    }
+    // Exclude "./" — already caught by is_path_trigger but be explicit
+    if bytes.get(word_start) == Some(&b'/') {
+        return false;
+    }
+    // There must be something to the left of the dot (not a bare leading dot)
+    if word_start == 1 {
+        // dot is at col 0 after accounting for word — it's a bare "."
+        return false;
+    }
+    // The char before the dot must be an identifier char (letter, digit, _)
+    // so we don't trigger on operators like "=.", "-.", etc.
+    matches!(bytes.get(word_start - 2), Some(&b) if b.is_ascii_alphanumeric() || b == b'_' || b == b')')
 }
 
 pub fn word_before_cursor(buffer: &Buffer, position: CursorPosition) -> String {

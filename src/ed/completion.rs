@@ -169,15 +169,16 @@ impl CompletionExt for Editor {
             word_or_path_before_cursor(buffer, cursor_pos)
         };
 
+        // Determine whether the cursor is in a member-access position.
+        // Uses the dedicated helper so "..", "./" and bare "." are excluded.
         let after_dot = !is_path && {
             let buffer = match self.buffers.get(&buffer_id) {
                 Some(b) => b,
                 None => return CommandResult::NoOp,
             };
             if let Some(line) = buffer.line_text(cursor_pos.line) {
-                let bytes = line.as_bytes();
                 let word_start = cursor_pos.col.saturating_sub(word.len());
-                word_start > 0 && bytes.get(word_start - 1) == Some(&b'.')
+                crate::completion::is_member_dot_before(&line, word_start)
             } else {
                 false
             }
@@ -207,12 +208,14 @@ impl CompletionExt for Editor {
         if word.len() >= min_len {
             self.completion
                 .open(mode, cursor_pos.col.saturating_sub(word.len()), cursor_pos.line);
+
             if !matches!(mode, TriggerMode::MemberAccess) {
                 let word_items = self.completion.word_index.collect_matching(&word, word.len());
                 self.completion.base_items.extend(word_items);
                 let vocab_items = collect_vocab_words(&self.vocab, &word);
                 self.completion.base_items.extend(vocab_items);
             }
+
             self.completion.set_prefix(&word);
             self.update_completion_ghost_text();
         }
@@ -220,12 +223,10 @@ impl CompletionExt for Editor {
         CommandResult::NoOp
     }
 
-    //--+ ./src/ed/completion.rs
     fn maybe_update_completion(&mut self) {
         if self.block_insert.is_some() {
             return;
         }
-
         let is_insert_or_replace = self.mode == crate::editor::Mode::Insert || self.mode == crate::editor::Mode::Replace;
         if !is_insert_or_replace {
             return;
@@ -235,6 +236,7 @@ impl CompletionExt for Editor {
             Some(w) => (w.buffer_id, w.cursor.position),
             None => return,
         };
+
         self.ensure_word_index_fresh();
 
         // ── Case 1: cursor just landed on a trigger character ─────────────────
@@ -245,24 +247,57 @@ impl CompletionExt for Editor {
             };
             last_char_before_cursor(buffer, cursor_pos).map(is_trigger_char).unwrap_or(false)
         };
+
         if has_trigger {
-            // Guard: Prevent double-initialization if already active at this exact position
+            // Guard: prevent double-init if already active at this exact position
             if self.completion.active && self.completion.is_member_access() {
                 if let Some(ref session) = self.completion.session {
                     if session.trigger_line == cursor_pos.line && session.trigger_col == cursor_pos.col {
-                        log::debug!("[ed/completion] maybe_update_completion (Case 1 Guard): Already active in MemberAccess.");
+                        log::debug!(
+                            "[ed/completion] maybe_update_completion (Case 1 Guard): \
+                         Already active in MemberAccess at this position."
+                        );
                         return;
                     }
                 }
             }
 
-            log::debug!("[ed/completion] maybe_update_completion (Case 1): Trigger char matching. Initializing MemberAccess.");
-            self.completion.open(TriggerMode::MemberAccess, cursor_pos.col, cursor_pos.line);
-            self.flush_lsp_changes();
-            self.request_lsp_completions();
-            self.update_completion_ghost_text();
-            self.dirty.completion = true;
-            return;
+            // Guard: bare "." that is NOT a member-access dot (e.g. a lone dot
+            // typed in an expression context with nothing to its left).
+            let is_real_member_dot = {
+                let buffer = match self.buffers.get(&buffer_id) {
+                    Some(b) => b,
+                    None => return,
+                };
+                if let Some(line) = buffer.line_text(cursor_pos.line) {
+                    // cursor_pos.col is AFTER the dot, so the dot is at col-1;
+                    // word_start == cursor_pos.col (nothing typed after dot yet).
+                    crate::completion::is_member_dot_before(&line, cursor_pos.col)
+                } else {
+                    false
+                }
+            };
+
+            if !is_real_member_dot {
+                // Trigger char is ":" (e.g. "::" path separator) or a stray ".".
+                // Let the normal word-completion path handle it or do nothing.
+                log::debug!(
+                    "[ed/completion] maybe_update_completion (Case 1): \
+                 Trigger char present but not a valid member dot — skipping MemberAccess."
+                );
+                // Fall through to Cases 2/3 for the word path.
+            } else {
+                log::debug!(
+                    "[ed/completion] maybe_update_completion (Case 1): \
+                 Valid member dot. Initializing MemberAccess session."
+                );
+                self.completion.open(TriggerMode::MemberAccess, cursor_pos.col, cursor_pos.line);
+                self.flush_lsp_changes();
+                self.request_lsp_completions();
+                self.update_completion_ghost_text();
+                self.dirty.completion = true;
+                return;
+            }
         }
 
         let (word, is_path) = {
@@ -274,44 +309,55 @@ impl CompletionExt for Editor {
         };
 
         log::debug!(
-            "[ed/completion] maybe_update_completion: Word resolved: '{}', Path: {}, Active state: {}",
+            "[ed/completion] maybe_update_completion: Word: '{}', Path: {}, Active: {}",
             word,
             is_path,
             self.completion.active
         );
 
-        // ── Case 2: popup already open — check boundaries & update prefix ──
+        // ── Case 2: popup already open — check boundaries & update prefix ──────
         if self.completion.active {
             if let Some(ref session) = self.completion.session {
                 if cursor_pos.line != session.trigger_line || cursor_pos.col < session.trigger_col {
-                    log::debug!("[ed/completion] maybe_update_completion (Case 2 Boundary Guard): Cursor out of bounds. Closing popup.");
+                    log::debug!(
+                        "[ed/completion] maybe_update_completion (Case 2 Boundary): \
+                     Cursor out of session bounds. Closing popup."
+                    );
                     self.close_completion_popup();
                 }
             }
         }
 
         if self.completion.active {
-            // Fix: Do not cancel MemberAccess sessions when the prefix after the dot is empty
+            // Keep MemberAccess session alive even when the prefix after the dot
+            // is empty (e.g. after backspace: "foo.aa" → "foo.").
             if word.is_empty() && !self.completion.is_member_access() {
-                log::debug!("[ed/completion] maybe_update_completion (Case 2): Empty word boundary. Closing popup.");
+                log::debug!(
+                    "[ed/completion] maybe_update_completion (Case 2): \
+                 Empty word, not MemberAccess. Closing popup."
+                );
                 self.close_completion_popup();
                 return;
             }
 
             let mode_changed = is_path != self.completion.is_path();
             if mode_changed {
-                log::debug!("[ed/completion] maybe_update_completion (Case 2): Path mode transition. Re-evaluating.");
+                log::debug!(
+                    "[ed/completion] maybe_update_completion (Case 2): \
+                 Path mode transition. Closing popup."
+                );
                 self.close_completion_popup();
                 return;
             }
 
-            // ── Repopulate local candidates for the modified prefix ──
             let session_mode = self.completion.session.as_ref().map(|s| s.mode);
             log::debug!(
-                "[ed/completion] maybe_update_completion (Case 2): Re-querying matching candidates for '{}'. Session mode: {:?}",
+                "[ed/completion] maybe_update_completion (Case 2): \
+             Re-querying candidates for '{}'. Session mode: {:?}",
                 word,
                 session_mode
             );
+
             if let Some(mode) = session_mode {
                 match mode {
                     TriggerMode::Word => {
@@ -334,18 +380,22 @@ impl CompletionExt for Editor {
                         };
                         self.completion.base_items.extend(path_items);
                     }
-                    TriggerMode::MemberAccess => {}
+                    TriggerMode::MemberAccess => {
+                        // LSP items are accumulated; local candidates not added
+                    }
                 }
             }
 
             let still_open = self.completion.set_prefix(&word);
             if !still_open {
-                log::debug!("[ed/completion] maybe_update_completion (Case 2): set_prefix returned false. Closing popup.");
+                log::debug!(
+                    "[ed/completion] maybe_update_completion (Case 2): \
+                 set_prefix returned false. Closing popup."
+                );
                 self.close_completion_popup();
                 return;
             }
 
-            // Fix: Remove the word.len() >= 2 guard to request completions on single-character prefixes
             if self.completion.is_member_access() {
                 let should = self
                     .completion_debounce_timer
@@ -364,27 +414,25 @@ impl CompletionExt for Editor {
         }
 
         // ── Case 3: popup closed — decide whether to open ─────────────────────
+        let after_dot = !is_path && {
+            let buffer = match self.buffers.get(&buffer_id) {
+                Some(b) => b,
+                None => return,
+            };
+            if let Some(line) = buffer.line_text(cursor_pos.line) {
+                let word_start = cursor_pos.col.saturating_sub(word.len());
+                crate::completion::is_member_dot_before(&line, word_start)
+            } else {
+                false
+            }
+        };
+
         let mode = if is_path {
             TriggerMode::Path
+        } else if after_dot {
+            TriggerMode::MemberAccess
         } else {
-            let after_dot = {
-                let buffer = match self.buffers.get(&buffer_id) {
-                    Some(b) => b,
-                    None => return,
-                };
-                if let Some(line) = buffer.line_text(cursor_pos.line) {
-                    let bytes = line.as_bytes();
-                    let word_start = cursor_pos.col.saturating_sub(word.len());
-                    word_start > 0 && bytes.get(word_start - 1) == Some(&b'.')
-                } else {
-                    false
-                }
-            };
-            if after_dot {
-                TriggerMode::MemberAccess
-            } else {
-                TriggerMode::Word
-            }
+            TriggerMode::Word
         };
 
         let min_len = match mode {
@@ -394,7 +442,8 @@ impl CompletionExt for Editor {
         };
 
         log::debug!(
-            "[ed/completion] maybe_update_completion (Case 3): Target mode: {:?}, word length: {}, min length required: {}",
+            "[ed/completion] maybe_update_completion (Case 3): \
+         Mode: {:?}, word len: {}, min len: {}",
             mode,
             word.len(),
             min_len
@@ -404,14 +453,16 @@ impl CompletionExt for Editor {
             return;
         }
 
-        self.completion.open(mode, cursor_pos.col - word.len(), cursor_pos.line);
+        self.completion
+            .open(mode, cursor_pos.col.saturating_sub(word.len()), cursor_pos.line);
 
         match mode {
             TriggerMode::Word => {
                 let word_items = self.completion.word_index.collect_matching(&word, word.len());
                 let vocab_items = collect_vocab_words(&self.vocab, &word);
                 log::debug!(
-                    "[ed/completion] maybe_update_completion (Case 3): Adding matches. WordIndex count: {}, Vocab count: {}",
+                    "[ed/completion] maybe_update_completion (Case 3): \
+                 WordIndex: {}, Vocab: {}",
                     word_items.len(),
                     vocab_items.len()
                 );
@@ -419,7 +470,10 @@ impl CompletionExt for Editor {
                 self.completion.base_items.extend(vocab_items);
                 self.completion.set_prefix(&word);
                 if self.completion.items.is_empty() {
-                    log::debug!("[ed/completion] maybe_update_completion (Case 3): No matching candidates. Cancelling session.");
+                    log::debug!(
+                        "[ed/completion] maybe_update_completion (Case 3): \
+                     No candidates. Cancelling."
+                    );
                     self.completion.cancel();
                     return;
                 }
@@ -431,7 +485,8 @@ impl CompletionExt for Editor {
                     collect_file_paths(&word, base_dir)
                 };
                 log::debug!(
-                    "[ed/completion] maybe_update_completion (Case 3): Adding matching path candidates. Count: {}",
+                    "[ed/completion] maybe_update_completion (Case 3): \
+                 Path candidates: {}",
                     path_items.len()
                 );
                 self.completion.base_items.extend(path_items);
@@ -447,6 +502,7 @@ impl CompletionExt for Editor {
         self.update_completion_ghost_text();
         self.dirty.completion = true;
     }
+
     fn select_next_completion(&mut self) -> CommandResult {
         if !self.completion.active {
             return CommandResult::NoOp;
@@ -491,6 +547,14 @@ impl CompletionExt for Editor {
             return CommandResult::NoOp;
         }
 
+        // TAB Sync Fallback: If active but the item list is empty, close the popup and return NoOp.
+        // This allows key routing systems to fall back to inserting standard tabs/spaces.
+        if self.completion.items.is_empty() {
+            log::debug!("[ed/completion] confirm_completion: Active but items list is empty. Closing popup.");
+            self.close_completion_popup();
+            return CommandResult::NoOp;
+        }
+
         let selected = self.resolve_selected_completion_item();
         log::debug!(
             "[ed/completion] confirm_completion: Resolved selection to confirm: {:?}",
@@ -507,7 +571,10 @@ impl CompletionExt for Editor {
         };
 
         let text = selected.text;
-        let trigger_len = self.completion.prefix.len();
+
+        // Corrected trigger prefix length calculation to use Unicode graphemes
+        // instead of raw byte counts. This aligns with grapheme-based columns.
+        let trigger_len = self.completion.prefix.graphemes(true).count();
 
         log::debug!(
             "[ed/completion] confirm_completion: Initiating insertion. Target: '{}', Deleting prefix length: {}",
@@ -585,8 +652,10 @@ impl CompletionExt for Editor {
 
         if cursor_offset_from_end > 0 {
             if let Some(window) = self.windows.active_window_mut() {
-                let trailing_chars_len: usize = clean_text.chars().rev().take(cursor_offset_from_end).map(|c| c.len_utf8()).sum();
-                window.cursor.position.col = window.cursor.position.col.saturating_sub(trailing_chars_len);
+                // Corrected cursor subtraction to compute graphemes instead of byte counts
+                // from the trailing characters of the clean_text insertion.
+                let trailing_graphemes_count = clean_text.graphemes(true).rev().take(cursor_offset_from_end).count();
+                window.cursor.position.col = window.cursor.position.col.saturating_sub(trailing_graphemes_count);
             }
         }
 
@@ -748,17 +817,15 @@ impl CompletionExt for Editor {
 
     fn ensure_word_index_fresh(&mut self) {
         let buffer_id = self.windows.active_window().map(|w| w.buffer_id);
-
         if let Some(bid) = buffer_id {
-            let needs_rebuild =
-                self.completion.word_index_buffer_id != Some(bid) || self.buffers.get(&bid).map(|b| b.dirty).unwrap_or(false);
-
-            if needs_rebuild {
+            if self.completion.word_index_buffer_id != Some(bid) {
+                // Switched to a different buffer -> full rebuild
                 if let Some(buffer) = self.buffers.get(&bid) {
                     self.completion.word_index.build_from_buffer(buffer);
                     self.completion.word_index_buffer_id = Some(bid);
                 }
             }
+            // Otherwise, already up-to-date via incremental updates.
         }
     }
 }
@@ -775,6 +842,37 @@ impl Editor {
             item.as_ref().map(|i| &i.text)
         );
         item
+    }
+    pub fn update_word_index_after_edit(
+        &mut self,
+        buffer_id: crate::buffer::BufferId,
+        start_line: usize,
+        old_line_count: usize,
+        new_line_count: usize,
+    ) {
+        if self.completion.word_index_buffer_id != Some(buffer_id) {
+            return;
+        }
+
+        let buffer = match self.buffers.get(&buffer_id) {
+            Some(b) => b,
+            None => return,
+        };
+
+        if new_line_count == old_line_count {
+            let text = buffer.line_text(start_line);
+            // Use `.as_deref()` to convert Option<String> to Option<&str>
+            self.completion.word_index.update_line(start_line, text.as_deref());
+        } else {
+            for line in start_line..new_line_count {
+                let text = buffer.line_text(line);
+                // Use `.as_deref()` here as well
+                self.completion.word_index.update_line(line, text.as_deref());
+            }
+            for line in new_line_count..old_line_count {
+                self.completion.word_index.update_line(line, None);
+            }
+        }
     }
 }
 

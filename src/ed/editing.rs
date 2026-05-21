@@ -108,52 +108,65 @@ impl EditingExt for Editor {
         }
     }
     fn insert_char_at_cursor(&mut self, c: char) {
+        let mut old_line_count = 0;
+        let mut new_line_count = 0;
+        let mut start_line = 0;
+        let mut bid = None;
+
         if let Some(window) = self.windows.active_window_mut() {
             let buffer_id = window.buffer_id;
+            bid = Some(buffer_id);
             let pos = window.cursor.position;
+            start_line = pos.line;
             if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
+                old_line_count = buffer.line_count();
                 let new_pos = buffer.insert_at(pos, &c.to_string());
                 window.cursor.position = new_pos;
                 buffer.dirty = true;
-                self.invalidate_git_gutter();
-            }
+                new_line_count = buffer.line_count(); // Fetch count before dropping borrow
+            } // Buffer mutable borrow drops here
         }
-        // Skip per-character completion + LSP updates during paste;
-        // handle_paste triggers one consolidated update after.
+
+        if let Some(id) = bid {
+            self.invalidate_git_gutter(); // Call outside the borrow
+            self.update_word_index_after_edit(id, start_line, old_line_count, new_line_count);
+        }
+
         if !self.paste_in_progress {
             self.maybe_update_completion();
         }
     }
 
     fn insert_newline_at_cursor(&mut self) {
-        // Skip completion cancel during paste — we cancel once after.
         if !self.paste_in_progress {
             self.completion.cancel();
         }
+        let mut old_line_count = 0;
+        let mut new_line_count = 0;
+        let mut start_line = 0;
+        let mut bid = None;
+
         if let Some(window) = self.windows.active_window_mut() {
             let buffer_id = window.buffer_id;
+            bid = Some(buffer_id);
             let pos = window.cursor.position;
+            start_line = pos.line;
 
-            // ── Compute auto-indentation ──
             let (insert_text, cursor_col, after_len) = {
                 let buffer = match self.buffers.get(&buffer_id) {
                     Some(b) => b,
                     None => return,
                 };
+                old_line_count = buffer.line_count();
                 let line_text = buffer.line_text(pos.line).unwrap_or_default();
                 let line_str = line_text.trim_end_matches('\n');
-
-                // Leading whitespace of the current line
                 let indent = get_line_indent(line_str);
-
-                // Split current line at cursor position
                 let graphemes: Vec<&str> = line_str.graphemes(true).collect();
                 let col = pos.col.min(graphemes.len());
                 let before: String = graphemes[..col].concat();
                 let after: String = graphemes[col..].concat();
-                let after_trim = after.trim_start(); // Remove old leading whitespace to prevent duplication
+                let after_trim = after.trim_start();
 
-                // Determine new indentation level
                 let mut new_indent = indent.clone();
                 let before_trim = before.trim_end();
                 if before_trim.ends_with('{') || before_trim.ends_with('(') || before_trim.ends_with('[') {
@@ -165,7 +178,6 @@ impl EditingExt for Editor {
                     new_indent.push_str(&one_level);
                 }
 
-                // If a closing delimiter follows the cursor, place it on its own line
                 let dedent_after = after_trim.starts_with('}') || after_trim.starts_with(')') || after_trim.starts_with(']');
 
                 let (text, c_col) = if dedent_after {
@@ -180,7 +192,6 @@ impl EditingExt for Editor {
                 (text, c_col, after.graphemes(true).count())
             };
 
-            // ── Delete the `after` part and insert new text ──
             if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
                 if after_len > 0 {
                     buffer.delete_at(pos, after_len);
@@ -189,8 +200,13 @@ impl EditingExt for Editor {
                 window.cursor.position = CursorPosition::new(pos.line + 1, cursor_col);
                 window.cursor.desired_col = None;
                 buffer.dirty = true;
-                self.invalidate_git_gutter();
-            }
+                new_line_count = buffer.line_count(); // Fetch count before dropping borrow
+            } // Buffer mutable borrow drops here
+        }
+
+        if let Some(id) = bid {
+            self.invalidate_git_gutter(); // Call outside the borrow
+            self.update_word_index_after_edit(id, start_line, old_line_count, new_line_count);
         }
     }
 
@@ -228,27 +244,37 @@ impl EditingExt for Editor {
     }
 
     fn delete_char_before_cursor(&mut self) {
+        let mut old_line_count = 0;
+        let mut new_line_count = 0;
+        let mut start_line = 0;
+        let mut bid = None;
+
         if let Some(window) = self.windows.active_window_mut() {
             let buffer_id = window.buffer_id;
-            if window.cursor.position.col > 0 || window.cursor.position.line > 0 {
-                let pos = window.cursor.position;
+            bid = Some(buffer_id);
+            let pos = window.cursor.position;
+            start_line = pos.line.saturating_sub(1);
+            if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
+                old_line_count = buffer.line_count();
                 if pos.col > 0 {
-                    if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
-                        buffer.delete_at(CursorPosition::new(pos.line, pos.col - 1), 1);
-                        window.cursor.position.col -= 1;
-                        buffer.dirty = true;
-                        self.invalidate_git_gutter();
-                    }
-                } else if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
+                    buffer.delete_at(CursorPosition::new(pos.line, pos.col - 1), 1);
+                    window.cursor.position.col -= 1;
+                    buffer.dirty = true;
+                } else if pos.line > 0 {
                     let prev_line_len = buffer.line_len(pos.line - 1);
                     let delete_pos = CursorPosition::new(pos.line - 1, prev_line_len);
                     buffer.delete_at(delete_pos, 1);
                     window.cursor.position.line -= 1;
                     window.cursor.position.col = prev_line_len;
                     buffer.dirty = true;
-                    self.invalidate_git_gutter();
                 }
-            }
+                new_line_count = buffer.line_count(); // Fetch count before dropping borrow
+            } // Buffer mutable borrow drops here
+        }
+
+        if let Some(id) = bid {
+            self.invalidate_git_gutter(); // Call outside the borrow
+            self.update_word_index_after_edit(id, start_line, old_line_count, new_line_count);
         }
     }
 
@@ -1150,6 +1176,9 @@ impl EditingExt for Editor {
                 buffer.reparse_tree();
                 let undo_count = buffer.undo_len();
                 buffer.recalc_dirty();
+
+                // Rebuild the index completely for bulk updates
+                self.completion.word_index.build_from_buffer(buffer);
 
                 // If undo stack is empty, the buffer is back to its saved/loaded state.
                 if undo_count == 0 {
