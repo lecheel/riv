@@ -1,4 +1,3 @@
-// completion.rs — Session-based completion engine
 // ──────────────────────────────────────────────────────────────
 // Architecture:
 //   open()        → starts a session (Word / MemberAccess / Path)
@@ -127,6 +126,10 @@ pub struct CompletionEngine {
     // cache
     pub word_index: BufferWordIndex,
     pub word_index_buffer_id: Option<crate::buffer::BufferId>,
+
+    /// Stable selection identity that survives re-filters and LSP merges.
+    /// Stores the lowercase text of the currently selected item.
+    pub selection_key: Option<String>,
 }
 
 impl CompletionEngine {
@@ -142,7 +145,53 @@ impl CompletionEngine {
             max_items: 50,
             word_index: BufferWordIndex::new(),
             word_index_buffer_id: None,
+            selection_key: None,
         }
+    }
+
+    /// Generate a unique key for a completion item that disambiguates
+    /// items sharing the same lowercase text (e.g. "Self" the type vs
+    /// "self" the keyword, or same-name methods from different traits).
+    fn item_key(item: &CompletionEntry) -> String {
+        let detail_key = item.detail.as_deref().unwrap_or("");
+        format!("{:?}|{}|{}", item.source, item.text.to_lowercase(), detail_key)
+    }
+
+    /// Resolve `selected_index` from `selection_key` after re-filtering.
+    /// Falls back to clamped index if key is lost.
+    fn resolve_selection(&mut self) {
+        if let Some(ref key) = self.selection_key {
+            if let Some(idx) = self.items.iter().position(|i| Self::item_key(i) == *key) {
+                log::debug!(
+                    "[completion] resolve_selection: Found key at index {} among {} items",
+                    idx,
+                    self.items.len()
+                );
+                self.selected_index = idx;
+                return;
+            }
+            log::debug!("[completion] resolve_selection: Selection key lost. Re-clamping index.");
+        }
+
+        let old_index = self.selected_index;
+        self.selected_index = self.selected_index.min(self.items.len().saturating_sub(1));
+        log::debug!(
+            "[completion] resolve_selection: Clamped selection from {} to {} (total items: {})",
+            old_index,
+            self.selected_index,
+            self.items.len()
+        );
+        self.sync_selection_key();
+    }
+
+    /// Sync `selection_key` from the current `selected_index`.
+    fn sync_selection_key(&mut self) {
+        self.selection_key = self.items.get(self.selected_index).map(|i| Self::item_key(i));
+        log::debug!(
+            "[completion] sync_selection_key: Selected index: {}, Synchronized key: {:?}",
+            self.selected_index,
+            self.selection_key
+        );
     }
 
     pub fn filter_items_pub(&self) -> Vec<CompletionEntry> {
@@ -159,6 +208,12 @@ impl CompletionEngine {
 
     // ── open — called exactly once per popup lifetime ────────────────
     pub fn open(&mut self, mode: TriggerMode, trigger_col: usize, trigger_line: usize) {
+        log::debug!(
+            "[completion] open: Initializing session. Mode: {:?}, Line: {}, Trigger Col: {}",
+            mode,
+            trigger_line,
+            trigger_col
+        );
         self.cancel();
         self.session = Some(CompletionSession {
             mode,
@@ -170,58 +225,151 @@ impl CompletionEngine {
         self.base_items.clear();
         self.items.clear();
         self.selected_index = 0;
+        self.selection_key = None;
     }
 
-    // ── set_prefix — called every keystroke while active ─────────────
-    // Returns false if the prefix is incompatible (caller should cancel).
+    // ── set_prefix — preserve selection across prefix change ─────────
     pub fn set_prefix(&mut self, new_prefix: &str) -> bool {
         let Some(session) = &self.session else {
+            log::debug!("[completion] set_prefix: Called without an active session");
             return false;
         };
+
+        log::debug!(
+            "[completion] set_prefix: Prefix updating from '{}' to '{}' (Mode: {:?})",
+            self.prefix,
+            new_prefix,
+            session.mode
+        );
 
         match session.mode {
             TriggerMode::MemberAccess => {
                 self.prefix = new_prefix.to_string();
-                // buffer words are noise in member-access — keep only LSP
                 self.base_items.retain(|i| i.source == CompletionSource::Lsp);
                 self.items = self.filter_items();
+                self.resolve_selection();
                 true
             }
             TriggerMode::Word => {
                 if new_prefix.len() < self.trigger_len {
+                    log::debug!(
+                        "[completion] set_prefix (Word): Rejected prefix '{}' (too short, min: {})",
+                        new_prefix,
+                        self.trigger_len
+                    );
                     return false;
                 }
                 self.prefix = new_prefix.to_string();
                 self.items = self.filter_items();
+                self.resolve_selection();
                 if self.items.is_empty() {
+                    log::debug!("[completion] set_prefix (Word): Empty items. Discarding selection key.");
+                    self.selection_key = None;
                     return false;
                 }
                 true
             }
             TriggerMode::Path => {
                 if new_prefix.len() < 2 {
+                    log::debug!("[completion] set_prefix (Path): Rejected prefix '{}' (too short)", new_prefix);
                     return false;
                 }
                 self.prefix = new_prefix.to_string();
                 self.items = self.filter_items();
+                self.resolve_selection();
                 true
             }
         }
     }
 
-    // ── merge_lsp — called when LSP response arrives ─────────────────
+    // ── merge_lsp — stable selection via key ─────────────────────────
     pub fn merge_lsp(&mut self, lsp_items: Vec<crate::lsp::CompletionItem>) {
-        if self.session.is_none() {
-            return;
-        }
+        let session = match &self.session {
+            Some(s) => s,
+            None => {
+                log::debug!("[completion] merge_lsp: Ignored, no active session");
+                return;
+            }
+        };
+
+        log::debug!("[completion] merge_lsp: Merging {} LSP candidates", lsp_items.len());
 
         let is_member = self.is_member_access();
         let prefix_lower = self.prefix.to_lowercase();
 
-        // remove stale LSP items from a previous request
-        self.base_items.retain(|i| i.source != CompletionSource::Lsp);
+        // ── MemberAccess stale-response guard ──
+        if is_member && !prefix_lower.is_empty() {
+            let current_has_matches = self
+                .base_items
+                .iter()
+                .any(|i| i.source == CompletionSource::Lsp && i.text.to_lowercase().starts_with(&prefix_lower));
+
+            let new_has_matches = lsp_items.iter().any(|item| {
+                let text = item.get_insert_text().unwrap_or(&item.label);
+                let text = text.split("(use ").next().unwrap_or(text).trim();
+                text.to_lowercase().starts_with(&prefix_lower)
+            });
+
+            if current_has_matches && !new_has_matches {
+                log::debug!(
+                    "[completion] merge_lsp: Discarding stale LSP response in MemberAccess mode \
+                 (current has matches for '{}', new response has 0)",
+                    prefix_lower
+                );
+                return;
+            }
+        }
+
+        // ── Remove or accumulate existing LSP items ──
+        //
+        // In MemberAccess mode we ACCUMULATE rather than replace.  The initial
+        // `.` trigger response contains method completions (e.g. `to_owned()`,
+        // `to_uppercase()`) that subsequent LSP requests — triggered by prefix
+        // changes — frequently omit, returning only trait-level names (e.g.
+        // `ToOwned`, `ToString`).  Accumulating ensures these completions
+        // survive across the session's lifetime.  Per-item dedup is handled
+        // below: if an item with the same lowercase text already exists its
+        // metadata is upgraded instead of pushing a duplicate.
+        if is_member {
+            // Keep existing LSP items — accumulate
+        } else {
+            self.base_items.retain(|i| i.source != CompletionSource::Lsp);
+        }
+
+        // Build a set of existing LSP item keys for dedup (only needed when accumulating)
+        let existing_lsp_keys: std::collections::HashSet<String> = if is_member {
+            self.base_items
+                .iter()
+                .filter(|i| i.source == CompletionSource::Lsp)
+                .map(|i| i.text.to_lowercase())
+                .collect()
+        } else {
+            std::collections::HashSet::new()
+        };
 
         for item in lsp_items {
+            // ── Per-item: skip global keywords in MemberAccess mode ──
+            if is_member {
+                if matches!(item.kind, Some(14)) {
+                    continue;
+                }
+                let label = item.label.as_str();
+                #[rustfmt::skip]
+            let is_rust_keyword = matches!(
+                label,
+                "fn" | "struct" | "impl" | "enum" | "trait" | "mod"
+                    | "use" | "pub" | "const" | "static" | "type" | "let" | "mut"
+                    | "ref" | "where" | "async" | "await"| "unsafe"| "extern"| "crate"
+                    | "self"| "super"| "if"| "else"| "match"| "loop"| "while"
+                    | "for"| "in"| "return"| "break"| "continue"| "as"| "dyn"
+                    | "move"| "yield"| "true"| "false"| "become"| "box"| "do"
+                    | "final"| "macro_rules"| "priv"| "typeof"| "unsized"| "virtual"| "try"
+            );
+                if is_rust_keyword {
+                    continue;
+                }
+            }
+
             let raw_label = item.label.clone();
             let label = raw_label.split("(use ").next().unwrap_or(&raw_label).trim().to_string();
             let text = item
@@ -237,6 +385,29 @@ impl CompletionEngine {
                 .as_ref()
                 .and_then(|v| v.as_str().map(String::from).or_else(|| v.get("value")?.as_str().map(String::from)));
 
+            // ── Per-item dedup for MemberAccess accumulation ──
+            let text_lower = text.to_lowercase();
+            if is_member && existing_lsp_keys.contains(&text_lower) {
+                // Item already exists — upgrade metadata if the new version is richer
+                if let Some(existing) = self
+                    .base_items
+                    .iter_mut()
+                    .find(|i| i.source == CompletionSource::Lsp && i.text.to_lowercase() == text_lower)
+                {
+                    if existing.documentation.is_none() && doc.is_some() {
+                        existing.documentation = doc.clone();
+                    }
+                    let new_detail = item.detail.as_ref().filter(|d| !d.trim().is_empty());
+                    if existing.detail.is_none() && new_detail.is_some() {
+                        existing.detail = Some(format!("{} [lsp]", new_detail.unwrap()));
+                    }
+                    if item.data.is_some() {
+                        existing.lsp_item = Some(item);
+                    }
+                }
+                continue;
+            }
+
             let lsp_boost = if is_member { 50.0 } else { 10.0 };
             let mut score = compute_score(&text, &prefix_lower) + lsp_boost;
 
@@ -245,16 +416,14 @@ impl CompletionEngine {
                     score += (50.0 - priority.min(50.0)) * 0.1;
                 }
             }
-
             score += match item.kind {
-                Some(3) | Some(2) => 3.0,  // Function / Method
-                Some(7) | Some(22) => 2.0, // Class / Struct
-                Some(6) | Some(5) => 1.0,  // Variable / Field
+                Some(3) | Some(2) => 3.0,
+                Some(7) | Some(22) => 2.0,
+                Some(6) | Some(5) => 1.0,
                 _ => 0.0,
             };
 
             let kind = item.kind.map(CompletionKind::from_lsp_kind).unwrap_or(CompletionKind::Text);
-
             let detail = match &item.detail {
                 Some(d) if !d.trim().is_empty() => Some(format!("{} [lsp]", d)),
                 _ => None,
@@ -273,8 +442,14 @@ impl CompletionEngine {
         }
 
         self.items = self.filter_items();
+        self.resolve_selection();
+        log::debug!(
+            "[completion] merge_lsp: Processing complete. Total base_items: {}, filtered items: {}, active key: {:?}",
+            self.base_items.len(),
+            self.items.len(),
+            self.selection_key
+        );
     }
-
     // ── filter_items — pure, reads self.base_items + self.prefix ─────
     fn filter_items(&self) -> Vec<CompletionEntry> {
         let prefix_lower = self.prefix.to_lowercase();
@@ -322,11 +497,44 @@ impl CompletionEngine {
             filtered.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
         }
 
-        // dedup by lowercase text
-        let mut seen = HashSet::new();
-        filtered.retain(|item| seen.insert(item.text.to_lowercase()));
-        filtered.truncate(self.max_items);
-        filtered
+        // ── Smart dedup — prefer LSP > Vocab > Buffer ──────
+        let mut best_for_key: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+
+        for (i, item) in filtered.iter().enumerate() {
+            let key = item.text.to_lowercase();
+            let priority = match item.source {
+                CompletionSource::Lsp => 3,
+                CompletionSource::Vocab => 2,
+                CompletionSource::BufferWords => 1,
+                _ => 0,
+            };
+            best_for_key
+                .entry(key)
+                .and_modify(|existing| {
+                    let existing_priority = match filtered[*existing].source {
+                        CompletionSource::Lsp => 3,
+                        CompletionSource::Vocab => 2,
+                        CompletionSource::BufferWords => 1,
+                        _ => 0,
+                    };
+                    if priority > existing_priority {
+                        *existing = i;
+                    }
+                })
+                .or_insert(i);
+        }
+
+        let keep_indices: std::collections::HashSet<usize> = best_for_key.values().copied().collect();
+
+        let mut result: Vec<CompletionEntry> = filtered
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| keep_indices.contains(i))
+            .map(|(_, item)| item)
+            .collect();
+
+        result.truncate(self.max_items);
+        result
     }
 
     // ── cancel — clears session, closes popup ────────────────────────
@@ -337,6 +545,7 @@ impl CompletionEngine {
         self.base_items.clear();
         self.items.clear();
         self.selected_index = 0;
+        self.selection_key = None;
     }
 
     // ── confirm ──────────────────────────────────────────────────────
@@ -353,6 +562,7 @@ impl CompletionEngine {
     pub fn select_next(&mut self) {
         if !self.items.is_empty() {
             self.selected_index = (self.selected_index + 1) % self.items.len();
+            self.sync_selection_key();
         }
     }
 
@@ -363,6 +573,7 @@ impl CompletionEngine {
             } else {
                 self.selected_index - 1
             };
+            self.sync_selection_key();
         }
     }
 
@@ -400,9 +611,8 @@ impl CompletionEngine {
         }
 
         if found {
-            let saved = self.selected_index;
             self.items = self.filter_items();
-            self.selected_index = saved.min(self.items.len().saturating_sub(1));
+            self.resolve_selection();
         }
     }
 
@@ -456,7 +666,6 @@ impl CompletionEngine {
         result
     }
 }
-
 // ============================================================================
 // Incremental Buffer Word Index
 // ============================================================================
@@ -589,7 +798,6 @@ fn extract_line_words(line_text: &str) -> HashSet<String> {
 
 pub fn word_or_path_before_cursor(buffer: &Buffer, position: CursorPosition) -> (String, bool) {
     if let Some(line_text) = buffer.line_text(position.line) {
-        // ASCII fast path
         if line_text.is_ascii() {
             let bytes = line_text.as_bytes();
             let end = position.col.min(bytes.len());
@@ -617,7 +825,6 @@ pub fn word_or_path_before_cursor(buffer: &Buffer, position: CursorPosition) -> 
             return (text.to_string(), is_path);
         }
 
-        // Fallback: grapheme-based extraction for multi-byte text
         let graphemes: Vec<_> = line_text.graphemes(true).collect();
         let end = position.col.min(graphemes.len());
 
@@ -867,15 +1074,6 @@ pub fn collect_vocab_words(vocab: &crate::vocab::VocabManager, prefix: &str) -> 
 
 // ── Scoring ─────────────────────────────────────────────────────────
 
-/// Score tiers:
-///   100.0 — exact match
-///    50.0 — prefix match (scaled by coverage)
-///     5.0 — substring match
-///     2.0 — fuzzy match
-///     0.0 — no match
-///
-/// LSP items receive an additional boost in the caller:
-///   +10.0 normal context, +50.0 member-access context
 #[inline]
 pub fn compute_score(text: &str, trigger: &str) -> f64 {
     if trigger.is_empty() {
@@ -887,10 +1085,17 @@ pub fn compute_score(text: &str, trigger: &str) -> f64 {
 
     if text_lower.starts_with(&trigger_lower) {
         if text_lower == trigger_lower {
-            return 100.0;
+            if text == trigger {
+                return 120.0; // Absolute top priority for exact case-sensitive match
+            }
+            return 90.0; // Penalize exact matches with case mismatch (e.g. Person vs person)
         }
         let coverage = trigger.len() as f64 / text.len().max(1) as f64;
-        return coverage * 50.0;
+        let mut score = coverage * 50.0;
+        if text.starts_with(trigger) {
+            score += 15.0; // Must exceed LSP Word-mode boost (+10.0) to guarantee case wins
+        }
+        return score;
     }
 
     if text_lower.contains(&trigger_lower) {
@@ -904,7 +1109,6 @@ pub fn compute_score(text: &str, trigger: &str) -> f64 {
     0.0
 }
 
-/// Simple fuzzy match: all needle chars appear in haystack in order.
 pub fn fuzzy_match(haystack: &str, needle: &str) -> bool {
     if needle.is_empty() {
         return true;

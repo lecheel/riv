@@ -2,6 +2,7 @@
 // ed/ghost_text.rs
 // ─────────────────────────────────────────────────────────────────────────────
 use crate::codeium::CodeiumResult;
+use crate::ed::completion::CompletionExt;
 use crate::ed::EditingExt;
 use crate::editor::{CommandResult, Editor};
 use crate::ghost_text::{GhostText, GhostTextSource};
@@ -52,6 +53,28 @@ fn get_completion_params(editor: &Editor) -> Option<CompletionParams> {
     })
 }
 
+/// Helper to safely strip prefix case-insensitively and return the suffix.
+pub fn case_insensitive_suffix(text: &str, prefix: &str) -> Option<String> {
+    if prefix.is_empty() {
+        return Some(text.to_string());
+    }
+
+    let mut text_chars = text.chars();
+    let mut prefix_chars = prefix.chars();
+
+    while let Some(p_char) = prefix_chars.next() {
+        if let Some(t_char) = text_chars.next() {
+            if !p_char.to_lowercase().eq(t_char.to_lowercase()) {
+                return None;
+            }
+        } else {
+            return None;
+        }
+    }
+
+    Some(text_chars.collect())
+}
+
 impl GhostTextExt for Editor {
     /// Auto-trigger: called after typing in insert mode (debounced).
     fn request_ghost_text(&mut self) {
@@ -62,6 +85,10 @@ impl GhostTextExt for Editor {
             return;
         }
         if !self.codeium.is_connected {
+            return;
+        }
+        // Guard: Do not request other suggestions if the completion list is already active
+        if self.completion.active {
             return;
         }
 
@@ -88,7 +115,6 @@ impl GhostTextExt for Editor {
             self.ghost_text.mark_requested();
         }
     }
-
     /// Auto-trigger alias kept for compatibility.
     fn request_codeium(&mut self) {
         self.request_ghost_text();
@@ -100,6 +126,11 @@ impl GhostTextExt for Editor {
             return;
         }
 
+        // If the user manually forces Codeium suggestions, close the completion list first
+        if self.completion.active {
+            self.close_completion_popup();
+        }
+
         let params = match get_completion_params(self) {
             Some(p) => p,
             None => {
@@ -107,8 +138,6 @@ impl GhostTextExt for Editor {
             }
         };
 
-        // Cancel any in-flight request so the response from the old position
-        // doesn't overwrite the one we're about to send.
         self.ghost_text.clear();
         self.codeium.cancel();
 
@@ -122,6 +151,11 @@ impl GhostTextExt for Editor {
     }
 
     fn process_codeium_ghost(&mut self, result: Option<CodeiumResult>) {
+        // Discard incoming Codeium suggestions if completion list is active
+        if self.completion.active {
+            return;
+        }
+
         match result {
             Some(codeium_result) => {
                 let _preview = if codeium_result.text.len() > 80 {
@@ -147,13 +181,7 @@ impl GhostTextExt for Editor {
             }
         }
     }
-
     /// Process an LSP completion item into ghost text.
-    ///
-    /// The `insert_text` is the full text the LSP would insert. We compute
-    /// the suffix after the already-typed `trigger` and show only that as
-    /// ghost text, consistent with how Codeium results work (they contain
-    /// only the part after the cursor).
     fn process_lsp_ghost(&mut self, _label: String, insert_text: String) {
         if insert_text.is_empty() {
             return;
@@ -170,8 +198,8 @@ impl GhostTextExt for Editor {
         // Compute the already-typed trigger so we can show only the suffix.
         let trigger = self.completion.prefix.clone();
 
-        let ghost_text = if !trigger.is_empty() && insert_text.starts_with(&trigger) {
-            insert_text[trigger.len()..].to_string()
+        let ghost_text = if let Some(suffix) = case_insensitive_suffix(&insert_text, &trigger) {
+            suffix
         } else {
             insert_text
         };
@@ -215,6 +243,12 @@ impl GhostTextExt for Editor {
             return CommandResult::NoOp;
         }
 
+        // If the ghost text came from the completion popup, close it so
+        // the popup doesn't linger after Right-arrow accepts the inline hint.
+        if ghost.source == crate::ghost_text::GhostTextSource::Completion {
+            self.close_completion_popup();
+        }
+
         self.ensure_undo_group();
         for ch in to_insert.chars() {
             match ch {
@@ -234,7 +268,6 @@ impl GhostTextExt for Editor {
         self.dirty.mark_all();
     }
 
-    /// Validate whether the current ghost text is still applicable.
     fn validate_ghost_text(&mut self) {
         if let Some(ref ghost) = self.ghost_text.current {
             let window = match self.windows.active_window() {
@@ -247,7 +280,9 @@ impl GhostTextExt for Editor {
             let pos = window.cursor.position;
 
             let invalid_position = !ghost.is_valid_at(pos.line, pos.col);
-            let popup_conflict = self.completion.active;
+
+            // Conflict with any ghost text source other than Completion if the list is active
+            let popup_conflict = self.completion.active && ghost.source != crate::ghost_text::GhostTextSource::Completion;
 
             if invalid_position || popup_conflict {
                 self.ghost_text.clear();
@@ -256,13 +291,16 @@ impl GhostTextExt for Editor {
         }
     }
 
-    /// Return true if the ghost text should be dismissed because the user
-    /// typed something that diverges from the suggestion.
     fn should_dismiss_ghost(&self) -> bool {
         let ghost = match self.ghost_text.current.as_ref() {
             Some(g) => g,
             None => return false,
         };
+
+        // Handled internally by `update_completion_ghost_text` loops
+        if ghost.source == crate::ghost_text::GhostTextSource::Completion {
+            return false;
+        }
 
         let window = match self.windows.active_window() {
             Some(w) => w,
@@ -270,7 +308,6 @@ impl GhostTextExt for Editor {
         };
         let pos = window.cursor.position;
 
-        // Wrong line or cursor before trigger — definitely dismiss.
         if pos.line != ghost.line || pos.col < ghost.start_col {
             return true;
         }
@@ -287,10 +324,8 @@ impl GhostTextExt for Editor {
 
         if let Some(line_text) = buffer.line_text(pos.line) {
             let typed_since_trigger: String = line_text.chars().skip(ghost.start_col).take(typed_count).collect();
-
             let suggestion_prefix: String = ghost.text.chars().take(typed_count).collect();
-
-            typed_since_trigger != suggestion_prefix
+            !typed_since_trigger.to_lowercase().starts_with(&suggestion_prefix.to_lowercase())
         } else {
             true
         }

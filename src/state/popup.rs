@@ -23,6 +23,7 @@ pub struct PopupState {
     pub help: Option<HelpPopup>,
     pub buffer_list: Option<crate::popup::BufferListPopup>,
     pub file_picker: Option<FilePicker>,
+    pub last_file_picker_dir: Option<std::path::PathBuf>,
     pub keymap: Option<crate::popup::KeymapPopup>,
     pub mru: Option<MruPopup>,
     pub register: Option<Vec<String>>,
@@ -43,6 +44,7 @@ impl PopupState {
             help: None,
             buffer_list: None,
             file_picker: None,
+            last_file_picker_dir: None,
             keymap: None,
             mru: None,
             register: None,
@@ -754,19 +756,22 @@ impl Editor {
             None => return None,
         };
         match key {
-            Key::Escape | Key::Char('\x1b') | Key::Ctrl('[') | Key::Char('q') | Key::Char('Q') => {
+            Key::Escape | Key::Char('\x1b') | Key::Ctrl('[') => {
+                // Save the current directory before closing
+                self.popup.last_file_picker_dir = Some(picker.cwd.clone());
+
                 self.popup.file_picker = None;
                 self.popup.overlay.file_picker = None;
                 self.dirty.mark_all();
                 Some(CommandResult::NoOp)
             }
-            Key::Up | Key::Char('k') | Key::PageUp => {
+            Key::Up | Key::PageUp => {
                 picker.move_up();
                 self.dirty.file_picker = true;
                 self.dirty.cursor = true;
                 Some(CommandResult::NoOp)
             }
-            Key::Down | Key::Char('j') | Key::PageDown => {
+            Key::Down | Key::PageDown => {
                 picker.sync_visible_height(self.term_height);
                 picker.move_down();
                 self.dirty.file_picker = true;
@@ -774,8 +779,6 @@ impl Editor {
                 Some(CommandResult::NoOp)
             }
             Key::Enter => {
-                // In flat mode all entries are files; in tree mode we still
-                // need to check is_dir for directory navigation.
                 if let Some(entry) = picker.selected_entry() {
                     if entry.is_dir && !picker.flat {
                         picker.go_into(&entry.path.clone());
@@ -783,6 +786,10 @@ impl Editor {
                         return Some(CommandResult::NoOp);
                     } else {
                         let path = entry.path.clone();
+
+                        // Save the current directory before closing
+                        self.popup.last_file_picker_dir = Some(picker.cwd.clone());
+
                         let old_rect = self.popup.overlay.file_picker;
                         self.popup.file_picker = None;
                         self.popup.overlay.file_picker = None;
@@ -798,20 +805,20 @@ impl Editor {
                         });
                     }
                 }
+                // If no entry selected, still save and close
+                self.popup.last_file_picker_dir = Some(picker.cwd.clone());
+                self.popup.file_picker = None;
                 Some(CommandResult::NoOp)
             }
             Key::Char('-') => {
                 if picker.flat {
-                    // In flat mode, treat '-' as a regular filter character
                     picker.filter_push('-');
                 } else {
-                    // In tree mode, navigate up
                     picker.go_up();
                 }
                 self.dirty.file_picker = true;
                 Some(CommandResult::NoOp)
             }
-            // ── Toggle flat / tree mode ────────────────────────────
             Key::Char('~') => {
                 picker.toggle_flat();
                 self.dirty.file_picker = true;
@@ -827,7 +834,15 @@ impl Editor {
                 self.dirty.file_picker = true;
                 Some(CommandResult::NoOp)
             }
-            _ => Some(CommandResult::NoOp),
+            _ => {
+                // Save the current directory before closing on unhandled keys
+                self.popup.last_file_picker_dir = Some(picker.cwd.clone());
+
+                self.popup.file_picker = None;
+                self.popup.overlay.file_picker = None;
+                self.dirty.mark_all();
+                Some(CommandResult::NoOp)
+            }
         }
     }
 

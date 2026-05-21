@@ -161,7 +161,7 @@ pub fn render_guide_popup(
 
     let bottom_y = filter_y + 1 + max_visible as u16;
     let footer = format!(
-        "[Enter] jump  [Esc] close  {}/{}",
+        "[Enter] jump  [Esc] close  {}/{}",
         if popup.filtered.is_empty() { 0 } else { popup.selected + 1 },
         popup.filtered.len(),
     );

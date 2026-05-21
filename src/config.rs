@@ -11,6 +11,16 @@ use thiserror::Error;
 
 // Add at the bottom of config.rs
 
+/// Completion presentation style.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum CompletionStyle {
+    #[default]
+    Popup,
+    Ghost,
+    Both,
+}
+
 /// Persistent command and search history.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HistoryData {
@@ -211,6 +221,10 @@ pub struct Config {
     pub tab_width: u8,
     pub indent_guides: bool,
 
+    /// Completion presentation style (popup, ghost, or both).
+    #[serde(default)]
+    pub completion_style: CompletionStyle,
+
     /// Whether to use actual tab characters.
     pub use_tabs: bool,
 
@@ -301,6 +315,7 @@ impl Default for Config {
             display_hunk: false,
             enable_completion: true,
             completion_trigger_len: 2,
+            completion_style: CompletionStyle::Popup,
             statusbar_style: "mode-filename-modified".to_string(),
             ruler: Some(80),
             keybindings: toml::Table::new(),
@@ -372,6 +387,7 @@ impl Config {
         self.enable_lsp = other.enable_lsp;
         self.enable_git = other.enable_git;
         self.enable_completion = other.enable_completion;
+        self.completion_style = other.completion_style;
         self.completion_trigger_len = other.completion_trigger_len;
         if !other.statusbar_style.is_empty() {
             self.statusbar_style = other.statusbar_style;

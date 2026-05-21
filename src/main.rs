@@ -39,6 +39,7 @@ mod render;
 pub mod ripgrep;
 mod rounded_box;
 mod session;
+mod snippet;
 mod state;
 mod status;
 mod tags;

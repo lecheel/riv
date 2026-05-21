@@ -1,14 +1,9 @@
-// ed/completion.rs — Optimized version
-// ──────────────────────────────────────────────────────────────
-// Key optimizations:
-//   1. Word index cache rebuild trigger on buffer change
-//   2. Simplified debounce — single timer, no redundant checks
-//   3. Reduced String allocations in confirm_completion
-//   4. Skip completion resolve when documentation already present
-// ──────────────────────────────────────────────────────────────
-
+//--+ ./src/ed/completion.rs
+// src/ed/completion.rs
 use crate::buffer::{Buffer, CursorPosition};
+use crate::completion::CompletionEntry;
 use crate::completion::{collect_file_paths, collect_vocab_words, word_or_path_before_cursor, TriggerMode};
+use crate::ed::ghost_text::case_insensitive_suffix;
 use crate::ed::lsp::LspExt;
 use crate::ed::EditingExt;
 use crate::editor::Editor;
@@ -23,9 +18,10 @@ pub trait CompletionExt {
     fn confirm_completion(&mut self) -> CommandResult;
     fn trigger_command_completion(&mut self);
     fn request_completion_resolve(&mut self);
-    /// OPT: Rebuild word index for the current buffer if stale.
     fn ensure_word_index_fresh(&mut self);
     fn close_completion_popup(&mut self);
+    fn update_completion_ghost_text(&mut self);
+    fn should_show_completion_popup(&self) -> bool;
 }
 
 fn completion_merge_overlap(completion: &str, remaining: &str) -> usize {
@@ -41,14 +37,12 @@ fn completion_merge_overlap(completion: &str, remaining: &str) -> usize {
     0
 }
 
-/// OPT: ASCII fast path for last-char detection.
 #[inline]
 fn last_char_before_cursor(buffer: &Buffer, pos: CursorPosition) -> Option<char> {
     if pos.col == 0 {
         return None;
     }
     if let Some(line) = buffer.line_text(pos.line) {
-        // Fast path: ASCII
         if line.is_ascii() {
             let bytes = line.as_bytes();
             if pos.col <= bytes.len() {
@@ -58,7 +52,6 @@ fn last_char_before_cursor(buffer: &Buffer, pos: CursorPosition) -> Option<char>
                 }
             }
         }
-        // Fallback
         let graphemes: Vec<&str> = line.graphemes(true).collect();
         return graphemes.get(pos.col - 1).and_then(|g| g.chars().next());
     }
@@ -71,13 +64,79 @@ fn is_trigger_char(ch: char) -> bool {
 }
 
 impl CompletionExt for Editor {
+    fn should_show_completion_popup(&self) -> bool {
+        self.completion.active
+            && (self.config.completion_style == crate::config::CompletionStyle::Popup
+                || self.config.completion_style == crate::config::CompletionStyle::Both)
+    }
+
+    fn update_completion_ghost_text(&mut self) {
+        let style = self.config.completion_style;
+        if style == crate::config::CompletionStyle::Popup {
+            return;
+        }
+
+        if !self.completion.active {
+            if let Some(ref ghost) = self.ghost_text.current {
+                if ghost.source == crate::ghost_text::GhostTextSource::Completion {
+                    log::debug!("[ed/completion] update_completion_ghost_text: Session inactive. Clearing ghost preview.");
+                    self.ghost_text.clear();
+                }
+            }
+            return;
+        }
+
+        if let Some(selected) = self.completion.selected_item() {
+            let window = match self.windows.active_window() {
+                Some(w) => w,
+                None => return,
+            };
+            let pos = window.cursor.position;
+            let prefix = &self.completion.prefix;
+
+            // Parse snippet syntax so ghost text shows clean display text,
+            // e.g. "max(other)" instead of "max(${1:other})$0"
+            let snippet_res = crate::snippet::parse_snippet_for_insert(&selected.text);
+            let display_text = snippet_res.text;
+
+            let ghost_text = if let Some(suffix) = case_insensitive_suffix(&display_text, prefix) {
+                suffix
+            } else {
+                display_text.clone()
+            };
+
+            log::debug!(
+            "[ed/completion] update_completion_ghost_text: Candidate: '{}', Clean display: '{}', Prefix: '{}', Computed suffix: '{}' (Col: {})",
+            selected.text,
+            display_text,
+            prefix,
+            ghost_text,
+            pos.col
+        );
+
+            if !ghost_text.is_empty() {
+                let ghost =
+                    crate::ghost_text::GhostText::new(ghost_text, pos.line, pos.col, crate::ghost_text::GhostTextSource::Completion);
+                self.ghost_text.set(ghost);
+                self.dirty.mark_all();
+            } else {
+                self.ghost_text.clear();
+            }
+        } else {
+            log::debug!("[ed/completion] update_completion_ghost_text: No selected entry. Clearing ghost preview.");
+            self.ghost_text.clear();
+        }
+    }
+
     fn close_completion_popup(&mut self) {
+        log::debug!("[ed/completion] close_completion_popup: Terminating popup session");
         let old_rect = self.popup.overlay.completion;
         self.completion.cancel();
         self.popup.overlay.completion = None;
         if let Some(rect) = old_rect {
             self.dirty.mark_popup_closed(rect);
         }
+        self.update_completion_ghost_text();
         self.dirty.windows = true;
         self.dirty.cursor = true;
     }
@@ -88,7 +147,6 @@ impl CompletionExt for Editor {
             return CommandResult::NoOp;
         }
 
-        // OPT: single debounce check
         if let Some(timer) = self.completion_debounce_timer {
             if timer.elapsed().as_millis() < self.completion_debounce_ms.into() {
                 return CommandResult::NoOp;
@@ -101,23 +159,21 @@ impl CompletionExt for Editor {
             None => return CommandResult::NoOp,
         };
 
-        let buffer = match self.buffers.get(&buffer_id) {
-            Some(b) => b,
-            None => return CommandResult::NoOp,
-        };
-
-        // OPT: ensure word index is fresh before triggering
-        // let _ = buffer;
         self.ensure_word_index_fresh();
 
-        let buffer = match self.buffers.get(&buffer_id) {
-            Some(b) => b,
-            None => return CommandResult::NoOp,
+        let (word, is_path) = {
+            let buffer = match self.buffers.get(&buffer_id) {
+                Some(b) => b,
+                None => return CommandResult::NoOp,
+            };
+            word_or_path_before_cursor(buffer, cursor_pos)
         };
 
-        // replace with the new open() path:
-        let (word, is_path) = word_or_path_before_cursor(buffer, cursor_pos);
         let after_dot = !is_path && {
+            let buffer = match self.buffers.get(&buffer_id) {
+                Some(b) => b,
+                None => return CommandResult::NoOp,
+            };
             if let Some(line) = buffer.line_text(cursor_pos.line) {
                 let bytes = line.as_bytes();
                 let word_start = cursor_pos.col.saturating_sub(word.len());
@@ -126,6 +182,7 @@ impl CompletionExt for Editor {
                 false
             }
         };
+
         let mode = if is_path {
             TriggerMode::Path
         } else if after_dot {
@@ -133,12 +190,21 @@ impl CompletionExt for Editor {
         } else {
             TriggerMode::Word
         };
+
         let min_len = match mode {
             TriggerMode::MemberAccess => 0,
             TriggerMode::Path => 2,
             TriggerMode::Word => self.completion.trigger_len,
         };
-        let triggered = if word.len() >= min_len {
+
+        log::debug!(
+            "[ed/completion] trigger_completion: Manual request. Word: '{}', Mode: {:?}, Min Len req: {}",
+            word,
+            mode,
+            min_len
+        );
+
+        if word.len() >= min_len {
             self.completion
                 .open(mode, cursor_pos.col.saturating_sub(word.len()), cursor_pos.line);
             if !matches!(mode, TriggerMode::MemberAccess) {
@@ -148,14 +214,13 @@ impl CompletionExt for Editor {
                 self.completion.base_items.extend(vocab_items);
             }
             self.completion.set_prefix(&word);
-            self.completion.active
-        } else {
-            false
-        };
+            self.update_completion_ghost_text();
+        }
 
         CommandResult::NoOp
     }
 
+    //--+ ./src/ed/completion.rs
     fn maybe_update_completion(&mut self) {
         if self.block_insert.is_some() {
             return;
@@ -171,44 +236,117 @@ impl CompletionExt for Editor {
             None => return,
         };
         self.ensure_word_index_fresh();
-        let buffer = match self.buffers.get(&buffer_id) {
-            Some(b) => b,
-            None => return,
-        };
 
         // ── Case 1: cursor just landed on a trigger character ─────────────────
-        if let Some(last_ch) = last_char_before_cursor(buffer, cursor_pos) {
-            if is_trigger_char(last_ch) {
-                self.completion.open(TriggerMode::MemberAccess, cursor_pos.col, cursor_pos.line);
-                self.flush_lsp_changes();
-                self.request_lsp_completions();
-                self.dirty.completion = true;
-                return;
+        let has_trigger = {
+            let buffer = match self.buffers.get(&buffer_id) {
+                Some(b) => b,
+                None => return,
+            };
+            last_char_before_cursor(buffer, cursor_pos).map(is_trigger_char).unwrap_or(false)
+        };
+        if has_trigger {
+            // Guard: Prevent double-initialization if already active at this exact position
+            if self.completion.active && self.completion.is_member_access() {
+                if let Some(ref session) = self.completion.session {
+                    if session.trigger_line == cursor_pos.line && session.trigger_col == cursor_pos.col {
+                        log::debug!("[ed/completion] maybe_update_completion (Case 1 Guard): Already active in MemberAccess.");
+                        return;
+                    }
+                }
+            }
+
+            log::debug!("[ed/completion] maybe_update_completion (Case 1): Trigger char matching. Initializing MemberAccess.");
+            self.completion.open(TriggerMode::MemberAccess, cursor_pos.col, cursor_pos.line);
+            self.flush_lsp_changes();
+            self.request_lsp_completions();
+            self.update_completion_ghost_text();
+            self.dirty.completion = true;
+            return;
+        }
+
+        let (word, is_path) = {
+            let buffer = match self.buffers.get(&buffer_id) {
+                Some(b) => b,
+                None => return,
+            };
+            word_or_path_before_cursor(buffer, cursor_pos)
+        };
+
+        log::debug!(
+            "[ed/completion] maybe_update_completion: Word resolved: '{}', Path: {}, Active state: {}",
+            word,
+            is_path,
+            self.completion.active
+        );
+
+        // ── Case 2: popup already open — check boundaries & update prefix ──
+        if self.completion.active {
+            if let Some(ref session) = self.completion.session {
+                if cursor_pos.line != session.trigger_line || cursor_pos.col < session.trigger_col {
+                    log::debug!("[ed/completion] maybe_update_completion (Case 2 Boundary Guard): Cursor out of bounds. Closing popup.");
+                    self.close_completion_popup();
+                }
             }
         }
 
-        let (word, is_path) = word_or_path_before_cursor(buffer, cursor_pos);
-
-        // ── Case 2: popup already open — update prefix ────────────────────────
         if self.completion.active {
-            if word.is_empty() {
+            // Fix: Do not cancel MemberAccess sessions when the prefix after the dot is empty
+            if word.is_empty() && !self.completion.is_member_access() {
+                log::debug!("[ed/completion] maybe_update_completion (Case 2): Empty word boundary. Closing popup.");
                 self.close_completion_popup();
                 return;
             }
 
             let mode_changed = is_path != self.completion.is_path();
             if mode_changed {
-                self.close_completion_popup();
-            }
-
-            let still_open = self.completion.set_prefix(&word);
-            if !still_open {
+                log::debug!("[ed/completion] maybe_update_completion (Case 2): Path mode transition. Re-evaluating.");
                 self.close_completion_popup();
                 return;
             }
 
-            // re-request LSP when typing chars after dot (debounced)
-            if self.completion.is_member_access() && word.len() >= 2 {
+            // ── Repopulate local candidates for the modified prefix ──
+            let session_mode = self.completion.session.as_ref().map(|s| s.mode);
+            log::debug!(
+                "[ed/completion] maybe_update_completion (Case 2): Re-querying matching candidates for '{}'. Session mode: {:?}",
+                word,
+                session_mode
+            );
+            if let Some(mode) = session_mode {
+                match mode {
+                    TriggerMode::Word => {
+                        self.completion
+                            .base_items
+                            .retain(|i| i.source == crate::completion::CompletionSource::Lsp);
+                        let word_items = self.completion.word_index.collect_matching(&word, word.len());
+                        let vocab_items = collect_vocab_words(&self.vocab, &word);
+                        self.completion.base_items.extend(word_items);
+                        self.completion.base_items.extend(vocab_items);
+                    }
+                    TriggerMode::Path => {
+                        self.completion
+                            .base_items
+                            .retain(|i| i.source == crate::completion::CompletionSource::Lsp);
+                        let path_items = {
+                            let buffer = self.buffers.get(&buffer_id);
+                            let base_dir = buffer.and_then(|b| b.file_path.as_deref());
+                            collect_file_paths(&word, base_dir)
+                        };
+                        self.completion.base_items.extend(path_items);
+                    }
+                    TriggerMode::MemberAccess => {}
+                }
+            }
+
+            let still_open = self.completion.set_prefix(&word);
+            if !still_open {
+                log::debug!("[ed/completion] maybe_update_completion (Case 2): set_prefix returned false. Closing popup.");
+                self.close_completion_popup();
+                return;
+            }
+
+            // Fix: Remove the word.len() >= 2 guard to request completions on single-character prefixes
+            if self.completion.is_member_access() {
                 let should = self
                     .completion_debounce_timer
                     .map(|t| t.elapsed().as_millis() >= 150)
@@ -220,6 +358,7 @@ impl CompletionExt for Editor {
                 }
             }
 
+            self.update_completion_ghost_text();
             self.dirty.completion = true;
             return;
         }
@@ -228,8 +367,11 @@ impl CompletionExt for Editor {
         let mode = if is_path {
             TriggerMode::Path
         } else {
-            // check if word sits right after a dot
             let after_dot = {
+                let buffer = match self.buffers.get(&buffer_id) {
+                    Some(b) => b,
+                    None => return,
+                };
                 if let Some(line) = buffer.line_text(cursor_pos.line) {
                     let bytes = line.as_bytes();
                     let word_start = cursor_pos.col.saturating_sub(word.len());
@@ -251,49 +393,76 @@ impl CompletionExt for Editor {
             TriggerMode::Word => self.completion.trigger_len,
         };
 
+        log::debug!(
+            "[ed/completion] maybe_update_completion (Case 3): Target mode: {:?}, word length: {}, min length required: {}",
+            mode,
+            word.len(),
+            min_len
+        );
+
         if word.len() < min_len {
             return;
         }
 
         self.completion.open(mode, cursor_pos.col - word.len(), cursor_pos.line);
 
-        // seed local items for Word/Path modes
         match mode {
             TriggerMode::Word => {
                 let word_items = self.completion.word_index.collect_matching(&word, word.len());
                 let vocab_items = collect_vocab_words(&self.vocab, &word);
+                log::debug!(
+                    "[ed/completion] maybe_update_completion (Case 3): Adding matches. WordIndex count: {}, Vocab count: {}",
+                    word_items.len(),
+                    vocab_items.len()
+                );
                 self.completion.base_items.extend(word_items);
                 self.completion.base_items.extend(vocab_items);
                 self.completion.set_prefix(&word);
                 if self.completion.items.is_empty() {
+                    log::debug!("[ed/completion] maybe_update_completion (Case 3): No matching candidates. Cancelling session.");
                     self.completion.cancel();
                     return;
                 }
             }
             TriggerMode::Path => {
-                let base_dir = buffer.file_path.as_deref();
-                let path_items = collect_file_paths(&word, base_dir);
+                let path_items = {
+                    let buffer = self.buffers.get(&buffer_id);
+                    let base_dir = buffer.and_then(|b| b.file_path.as_deref());
+                    collect_file_paths(&word, base_dir)
+                };
+                log::debug!(
+                    "[ed/completion] maybe_update_completion (Case 3): Adding matching path candidates. Count: {}",
+                    path_items.len()
+                );
                 self.completion.base_items.extend(path_items);
                 self.completion.set_prefix(&word);
             }
             TriggerMode::MemberAccess => {
-                // no local items — LSP only
                 self.completion.set_prefix(&word);
             }
         }
 
         self.flush_lsp_changes();
         self.request_lsp_completions();
+        self.update_completion_ghost_text();
         self.dirty.completion = true;
     }
-
     fn select_next_completion(&mut self) -> CommandResult {
         if !self.completion.active {
             return CommandResult::NoOp;
         }
+        let old_index = self.completion.selected_index;
         self.completion.select_next();
+        log::debug!(
+            "[ed/completion] select_next_completion: Selection index cycled from {} to {} (Key: {:?})",
+            old_index,
+            self.completion.selected_index,
+            self.completion.selection_key
+        );
         self.request_completion_resolve();
+        self.update_completion_ghost_text();
         self.dirty.mark_completion_scroll();
+        self.dirty.status_infobar = true;
         CommandResult::NoOp
     }
 
@@ -301,10 +470,148 @@ impl CompletionExt for Editor {
         if !self.completion.active {
             return CommandResult::NoOp;
         }
+        let old_index = self.completion.selected_index;
         self.completion.select_prev();
+        log::debug!(
+            "[ed/completion] select_prev_completion: Selection index cycled from {} to {} (Key: {:?})",
+            old_index,
+            self.completion.selected_index,
+            self.completion.selection_key
+        );
         self.request_completion_resolve();
+        self.update_completion_ghost_text();
         self.dirty.mark_completion_scroll();
+        self.dirty.status_infobar = true;
         CommandResult::NoOp
+    }
+
+    fn confirm_completion(&mut self) -> CommandResult {
+        if !self.completion.active {
+            log::debug!("[ed/completion] confirm_completion: Request ignored, no active session");
+            return CommandResult::NoOp;
+        }
+
+        let selected = self.resolve_selected_completion_item();
+        log::debug!(
+            "[ed/completion] confirm_completion: Resolved selection to confirm: {:?}",
+            selected.as_ref().map(|i| &i.text)
+        );
+
+        let selected = match selected {
+            Some(item) => item,
+            None => {
+                log::debug!("[ed/completion] confirm_completion: Resolution failed. Closing popup.");
+                self.close_completion_popup();
+                return CommandResult::NoOp;
+            }
+        };
+
+        let text = selected.text;
+        let trigger_len = self.completion.prefix.len();
+
+        log::debug!(
+            "[ed/completion] confirm_completion: Initiating insertion. Target: '{}', Deleting prefix length: {}",
+            text,
+            trigger_len
+        );
+
+        // Delete trigger prefix before cursor
+        if trigger_len > 0 {
+            if let Some(window) = self.windows.active_window_mut() {
+                let pos = window.cursor.position;
+                let delete_start = pos.col.saturating_sub(trigger_len);
+                let buffer_id = window.buffer_id;
+                if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
+                    buffer.delete_at(CursorPosition::new(pos.line, delete_start), trigger_len);
+                    window.cursor.position.col = delete_start;
+                }
+            }
+        }
+
+        let snippet_res = crate::snippet::parse_snippet_for_insert(&text);
+        let clean_text = snippet_res.text;
+        let clean_chars_count = clean_text.chars().count();
+
+        let overlap: usize = if let Some(window) = self.windows.active_window() {
+            let pos = window.cursor.position;
+            let buffer_id = window.buffer_id;
+            if let Some(buffer) = self.buffers.get(&buffer_id) {
+                if let Some(line_text) = buffer.line_text(pos.line) {
+                    if line_text.is_ascii() {
+                        let remaining = &line_text.as_bytes()[pos.col.min(line_text.len())..];
+                        let remaining_str = std::str::from_utf8(remaining).unwrap_or("");
+                        completion_merge_overlap(&clean_text, remaining_str)
+                    } else {
+                        let remaining: String = line_text.graphemes(true).skip(pos.col).collect();
+                        completion_merge_overlap(&clean_text, &remaining)
+                    }
+                } else {
+                    0
+                }
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+
+        if overlap > 0 {
+            log::debug!(
+                "[ed/completion] confirm_completion: Detected overlap of {} characters. Deleting trailing overlap.",
+                overlap
+            );
+            if let Some(window) = self.windows.active_window() {
+                let pos = window.cursor.position;
+                let buffer_id = window.buffer_id;
+                if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
+                    buffer.delete_at(CursorPosition::new(pos.line, pos.col), overlap);
+                }
+            }
+        }
+
+        self.insert_text_at_cursor(&clean_text);
+
+        let mut target_char_offset = if !snippet_res.stops.is_empty() {
+            snippet_res.stops[0].0
+        } else {
+            snippet_res.final_offset
+        };
+
+        if snippet_res.stops.is_empty() && clean_text.ends_with("()") && target_char_offset == clean_chars_count {
+            target_char_offset = clean_chars_count.saturating_sub(1);
+        }
+
+        let cursor_offset_from_end = clean_chars_count.saturating_sub(target_char_offset);
+
+        if cursor_offset_from_end > 0 {
+            if let Some(window) = self.windows.active_window_mut() {
+                let trailing_chars_len: usize = clean_text.chars().rev().take(cursor_offset_from_end).map(|c| c.len_utf8()).sum();
+                window.cursor.position.col = window.cursor.position.col.saturating_sub(trailing_chars_len);
+            }
+        }
+
+        let old_rect = self.popup.overlay.completion;
+        self.completion.cancel();
+        self.popup.overlay.completion = None;
+
+        if let Some(window) = self.windows.active_window() {
+            let buffer_id = window.buffer_id;
+            if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
+                buffer.reparse_if_dirty();
+            }
+        }
+
+        if let Some(rect) = old_rect {
+            self.dirty.mark_popup_closed(rect);
+        }
+        self.update_completion_ghost_text();
+        self.dirty.mark_all();
+
+        if text.ends_with('/') {
+            self.maybe_update_completion();
+        }
+
+        CommandResult::ContentChanged
     }
 
     fn request_completion_resolve(&mut self) {
@@ -312,7 +619,6 @@ impl CompletionExt for Editor {
             return;
         }
 
-        // OPT: skip resolve if documentation already present
         let lsp_item = self.completion.selected_item().and_then(|item| {
             if item.source == crate::completion::CompletionSource::Lsp && item.documentation.is_none() && item.lsp_item.is_some() {
                 item.lsp_item.clone()
@@ -323,108 +629,12 @@ impl CompletionExt for Editor {
 
         if let Some(lsp_item) = lsp_item {
             if lsp_item.data.is_some() {
+                log::debug!(
+                    "[ed/completion] request_completion_resolve: Requesting resolved metadata for item '{}'",
+                    lsp_item.label
+                );
                 let _ = self.lsp.tx.send(crate::lsp::LspMessage::ResolveCompletionItem(lsp_item));
             }
-        }
-    }
-
-    fn confirm_completion(&mut self) -> CommandResult {
-        if !self.completion.active {
-            return CommandResult::NoOp;
-        }
-
-        if let Some((text, trigger_len)) = self.completion.confirm() {
-            // Step 1: Delete the trigger text before cursor
-            if trigger_len > 0 {
-                if let Some(window) = self.windows.active_window_mut() {
-                    let pos = window.cursor.position;
-                    let delete_start = pos.col.saturating_sub(trigger_len);
-                    let buffer_id = window.buffer_id;
-                    if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
-                        buffer.delete_at(CursorPosition::new(pos.line, delete_start), trigger_len);
-                        window.cursor.position.col = delete_start;
-                    }
-                }
-            }
-
-            // Step 2: Smart merge — detect overlapping suffix
-            let overlap: usize = if let Some(window) = self.windows.active_window() {
-                let pos = window.cursor.position;
-                let buffer_id = window.buffer_id;
-                if let Some(buffer) = self.buffers.get(&buffer_id) {
-                    if let Some(line_text) = buffer.line_text(pos.line) {
-                        // OPT: ASCII fast path for overlap detection
-                        if line_text.is_ascii() {
-                            let remaining = &line_text.as_bytes()[pos.col.min(line_text.len())..];
-                            let remaining_str = std::str::from_utf8(remaining).unwrap_or("");
-                            completion_merge_overlap(&text, remaining_str)
-                        } else {
-                            let remaining: String = line_text.graphemes(true).skip(pos.col).collect();
-                            completion_merge_overlap(&text, &remaining)
-                        }
-                    } else {
-                        0
-                    }
-                } else {
-                    0
-                }
-            } else {
-                0
-            };
-
-            if overlap > 0 {
-                if let Some(window) = self.windows.active_window() {
-                    let pos = window.cursor.position;
-                    let buffer_id = window.buffer_id;
-                    if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
-                        buffer.delete_at(CursorPosition::new(pos.line, pos.col), overlap);
-                    }
-                }
-            }
-
-            // Step 3: Insert the full completion text
-            self.insert_text_at_cursor(&text);
-
-            // Step 4: Dismiss popup and reparse
-            let old_rect = self.popup.overlay.completion;
-            self.completion.cancel();
-            self.popup.overlay.completion = None;
-
-            if let Some(window) = self.windows.active_window() {
-                let buffer_id = window.buffer_id;
-                if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
-                    buffer.reparse_if_dirty();
-                }
-            }
-
-            if let Some(rect) = old_rect {
-                self.dirty.mark_popup_closed(rect);
-            }
-            self.dirty.mark_all();
-
-            if text.ends_with('/') {
-                self.maybe_update_completion();
-            }
-
-            CommandResult::ContentChanged
-        } else {
-            let old_rect = self.popup.overlay.completion;
-            self.completion.cancel();
-            self.popup.overlay.completion = None;
-
-            if let Some(rect) = old_rect {
-                self.dirty.mark_popup_closed(rect);
-            }
-
-            if let Some(window) = self.windows.active_window() {
-                let buffer_id = window.buffer_id;
-                if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
-                    buffer.reparse_if_dirty();
-                }
-            }
-
-            self.dirty.mark_all();
-            CommandResult::NoOp
         }
     }
 
@@ -490,7 +700,6 @@ impl CompletionExt for Editor {
             }
         }
 
-        // Regular command name completion
         let input_lower = input.to_lowercase();
 
         let mut items: Vec<crate::completion::CompletionEntry> = self
@@ -537,8 +746,6 @@ impl CompletionExt for Editor {
         self.command_completion.selected_index = 0;
     }
 
-    /// OPT: Rebuild the buffer word index if the buffer has changed.
-    /// Uses the buffer's dirty flag to avoid unnecessary rebuilds.
     fn ensure_word_index_fresh(&mut self) {
         let buffer_id = self.windows.active_window().map(|w| w.buffer_id);
 
@@ -553,6 +760,21 @@ impl CompletionExt for Editor {
                 }
             }
         }
+    }
+}
+
+impl Editor {
+    fn resolve_selected_completion_item(&self) -> Option<CompletionEntry> {
+        // `resolve_selection` already keeps `selected_index` pointing at the
+        // correct item after every re-filter and LSP merge.  Doing another
+        // key-based `.find()` here can match the WRONG item when two
+        // completions share the same lowercase text (e.g. "Self" vs "self").
+        let item = self.completion.selected_item().cloned();
+        log::debug!(
+            "[ed/completion] resolve_selected_completion_item: Resolved to {:?}",
+            item.as_ref().map(|i| &i.text)
+        );
+        item
     }
 }
 

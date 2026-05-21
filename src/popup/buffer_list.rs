@@ -203,7 +203,7 @@ pub fn render_buffer_list_popup(
     // ── Bottom border with status ──────────────────────────────────────
     let bottom_y = filter_y + 1 + visible_rows as u16;
     let footer = format!(
-        "[Enter] switch  [Esc] close  {}/{}",
+        "[Enter] switch  [Esc] close  {}/{}",
         if popup.filtered.is_empty() { 0 } else { popup.selected + 1 },
         popup.filtered.len(),
     );

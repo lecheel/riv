@@ -201,23 +201,37 @@ impl FileOpsExt for Editor {
     }
 
     fn find_file(&mut self) -> CommandResult {
-        let start_dir = self
+        // 1. Prefer the directory of the currently active file (resolved absolute + canonicalized)
+        let buffer_dir = self
             .current_buffer()
             .and_then(|b| b.file_path.as_ref())
-            .and_then(|p| crate::misc::find_git_root(p)) // ← git root first
-            .or_else(|| {
-                self.current_buffer()
-                    .and_then(|b| b.file_path.as_ref())
-                    .and_then(|p| p.parent())
-                    .map(|p| p.to_path_buf())
+            .and_then(|p| {
+                let abs_path = if p.is_absolute() {
+                    p.clone()
+                } else if let Ok(cwd) = std::env::current_dir() {
+                    cwd.join(p)
+                } else {
+                    p.clone()
+                };
+                let canonical_path = std::fs::canonicalize(&abs_path).unwrap_or(abs_path);
+                canonical_path.parent().map(|parent| parent.to_path_buf())
             })
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+            .filter(|p| p.is_dir());
 
-        self.popup.file_picker = Some(FilePicker::new(&start_dir, self.config.file_picker_flat));
+        // 2. Fall back to the last directory used in the file picker
+        let last_dir = self.popup.last_file_picker_dir.clone();
+
+        // 3. Fall back to the current working directory
+        let fallback_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+
+        let start_dir = buffer_dir.or(last_dir).unwrap_or(fallback_dir);
+        let final_start_dir = std::fs::canonicalize(&start_dir).unwrap_or(start_dir);
+
+        self.popup.last_file_picker_dir = Some(final_start_dir.clone());
+        self.popup.file_picker = Some(FilePicker::new(&final_start_dir, self.config.file_picker_flat));
         self.dirty.mark_all();
         CommandResult::ViewChanged
     }
-
     /// Save command and search history to disk.
     fn save_history(&self) {
         let data = HistoryData {

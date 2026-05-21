@@ -3,7 +3,7 @@ mod buffer_ops;
 pub mod build;
 mod codeium;
 mod command;
-mod completion;
+pub mod completion;
 mod editing;
 mod enter_helper;
 mod file_ops;

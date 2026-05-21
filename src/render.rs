@@ -1,5 +1,3 @@
-//! All rendering logic for riv: windows, status line, popups, and softwrap layout.
-
 use crossterm::cursor::MoveTo;
 use crossterm::execute;
 use crossterm::style::{Color, Print, ResetColor, SetBackgroundColor, SetForegroundColor};
@@ -7,12 +5,14 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::dirty::Rect;
+use crate::ed::CompletionExt;
 use crate::editor::{Editor, FloatPopup, Mode, SearchDirection};
 use crate::highlight::Highlighter;
 use crate::misc::sanitize_single_line;
 use crate::rounded_box::*;
 use crate::terminal::Terminal;
 use crate::terminal_sanitize::sanitize_for_display;
+
 // Convenience — wraps the cow into a &str for Print
 macro_rules! safe {
     ($s:expr_2021) => {
@@ -129,10 +129,6 @@ fn render_window(
     let cursor_col = window.cursor.position.col;
 
     // ── Visual selection rectangle ──────────────────────────────────
-    // In Visual modes, use selection_anchor directly.
-    // In Command mode (when entered from visual via `:`), also show the
-    // selection so the user can see the :'<,'> range.
-    // Fallback to visual_selection_range when anchor was cleared.
     let selection_rect: Option<(usize, usize, usize, usize)> = window
         .selection_anchor
         .and_then(|anchor| {
@@ -156,7 +152,6 @@ fn render_window(
             }
         })
         .or_else(|| {
-            // Fallback: use persisted visual_selection_range for Command mode
             if editor.mode == Mode::Command {
                 editor
                     .visual_selection_range
@@ -166,7 +161,6 @@ fn render_window(
             }
         });
 
-    // Dimmer selection colours for Command mode (frozen :'<,'> range)
     let (sel_bg, sel_fg) = if editor.mode == Mode::Command {
         (
             Color::Rgb {
@@ -202,7 +196,6 @@ fn render_window(
         0u16
     };
 
-    // ── Mark gutter (between line numbers and git gutter) ──
     let mark_at_line: std::collections::HashMap<usize, char> = editor.search.marks
         .iter()
         .filter(|(_, (bid, _))| *bid == buffer_id)
@@ -212,8 +205,6 @@ fn render_window(
     let content_width =
         width.saturating_sub(gutter_width + mark_gutter_width + git_gutter_width) as usize;
 
-    // Pre‑compute the display‑width of the scroll offset so we can adjust
-    // selection overlay positions for horizontal scrolling.
     let scroll_offset_display_w: usize = if scroll_col > 0 && !editor.config.word_wrap {
         let line_content = buffer.line_text(cursor_line).unwrap_or_default();
         let g: Vec<_> = line_content
@@ -255,7 +246,7 @@ fn render_window(
         };
 
         let graphemes: Vec<_> = line_text.graphemes(true).collect();
-        let _cursor_wrap_row = if editor.config.word_wrap {
+        let cursor_wrap_row = if editor.config.word_wrap {
             softwrap_row_offset(line_text, cursor_col, content_width)
         } else {
             0
@@ -263,7 +254,6 @@ fn render_window(
 
         let line_spans = highlighter.highlight_line(line_text, buffer.language);
 
-        // Pre‑compute per‑line scroll offset display width for selection positioning
         let line_scroll_offset_w: usize = if scroll_col > 0 && !editor.config.word_wrap {
             graphemes[..scroll_col.min(graphemes.len())]
                 .iter()
@@ -391,7 +381,6 @@ fn render_window(
             // Calculate which slice of the line to show
             let mut wrap_start_grapheme = 0usize;
             let display = if editor.config.word_wrap {
-                // ── unchanged ──
                 let mut rows_so_far = 0;
                 let mut row_col = 0usize;
                 let mut start_grapheme = 0usize;
@@ -442,7 +431,6 @@ fn render_window(
                 wrap_start_grapheme = start_grapheme;
                 graphemes[start_grapheme..end_grapheme.min(graphemes.len())].join("")
             } else {
-                // ── FIX: set wrap_start_grapheme for non-wrap mode ──
                 wrap_start_grapheme = scroll_col;
 
                 let visible: String = if scroll_col < graphemes.len() {
@@ -513,12 +501,11 @@ fn render_window(
                     &display,
                     &offset_spans,
                     is_cursor_line,
-                    None, // guides only on wrap_row == 0
+                    None,
                 )?;
             }
 
-            // Clear rest of line — account for indent guides rendered
-            // beyond the text boundary (e.g. on empty lines).
+            // Clear rest of line
             let display_w = UnicodeWidthStr::width(display.as_str());
             let max_guide_col = guide_cols.iter().max().map(|&c| c + 1).unwrap_or(0);
             let effective_w = display_w.max(max_guide_col);
@@ -533,11 +520,65 @@ fn render_window(
             if is_cursor_line {
                 execute!(stdout, ResetColor)?;
             }
+ 
+            // ── Inline Ghost Text Overlay ──
+            let is_cursor_row = is_cursor_line && wrap_row == cursor_wrap_row;
+            if is_cursor_row && editor.ghost_text.is_visible() {
+                if let Some(ref ghost) = editor.ghost_text.current {
+                    let is_completion = ghost.source == crate::ghost_text::GhostTextSource::Completion;
+                    let is_valid = (!is_completion || editor.completion.active)
+                        && ghost.line == line_idx
+                        && ghost.start_col == cursor_col
+                        && ghost.pinned_generation == editor.ghost_text.generation;
+
+                    if is_valid {
+                        let remaining_ghost = ghost.remaining_text(cursor_col);
+                        if !remaining_ghost.is_empty() {
+                            let rel_cursor_col = cursor_col.saturating_sub(wrap_start_grapheme);
+                            let display_graphemes: Vec<_> = display.graphemes(true).collect();
+                            let up_to_cursor_text: String = display_graphemes[..rel_cursor_col.min(display_graphemes.len())]
+                                .iter()
+                                .map(|g| g.to_string())
+                                .collect();
+                            let cursor_offset_x = UnicodeWidthStr::width(up_to_cursor_text.as_str());
+                            let content_start_x = x_offset + gutter_width + mark_gutter_width + git_gutter_width;
+                            let ghost_x = content_start_x + cursor_offset_x as u16;
+
+                            let max_ghost_w = (content_start_x + content_width as u16).saturating_sub(ghost_x) as usize;
+                            let truncated_ghost = truncate_to_width(remaining_ghost, max_ghost_w);
+                            let ghost_w = UnicodeWidthStr::width(truncated_ghost);
+
+                            execute!(
+                                stdout,
+                                MoveTo(ghost_x, y),
+                                SetBackgroundColor(Color::DarkGrey),
+                                SetForegroundColor(Color::Rgb { r: 40, g: 40, b: 58 }),
+                                Print(&truncated_ghost),
+                                ResetColor
+                            )?;
+
+                            let trailing: String = display_graphemes[rel_cursor_col.min(display_graphemes.len())..].join("");
+                            if !trailing.is_empty() {
+                                let trailing_x = ghost_x + ghost_w as u16;
+                                let max_trailing_w = (content_start_x + content_width as u16).saturating_sub(trailing_x) as usize;
+                                let truncated_trailing = truncate_to_width(&trailing, max_trailing_w);
+                                if !truncated_trailing.is_empty() {
+                                    execute!(
+                                        stdout,
+                                        MoveTo(trailing_x, y),
+                                        SetBackgroundColor(Color::DarkGrey),
+                                        Print(&truncated_trailing),
+                                        ResetColor
+                                    )?;
+                                }
+                            }
+                        }
+                    }
+                }
+            }            
+            
             // ── Visual selection overlay ─────────────────────────────
             if let Some((sel_top, sel_bot, sel_left, sel_right)) = selection_rect {
-                // Determine if this line is in the selection.
-                // In Command mode we always render line-wise (VisualLine style)
-                // since :'<,'> operates on full lines.
                 let in_sel_line = match editor.mode {
                     Mode::VisualLine => line_idx >= sel_top && line_idx <= sel_bot,
                     Mode::VisualBlock => line_idx >= sel_top && line_idx <= sel_bot,
@@ -566,14 +607,12 @@ fn render_window(
                                 (0, graphemes.len())
                             }
                         }
-                        // Command mode: always line-wise for :'<,'>
                         Mode::Command => (0, graphemes.len()),
                         _ => continue,
                     };
                     let vis_left = vis_left.min(graphemes.len());
                     let vis_right = vis_right.min(graphemes.len());
                     if vis_left < vis_right {
-                        // Clip selection to the visible grapheme range for this wrap row
                         let clip_left = vis_left.max(wrap_start_grapheme);
                         let wrap_end_grapheme =
                             wrap_start_grapheme + display.graphemes(true).count();
@@ -588,30 +627,22 @@ fn render_window(
                             let content_start_x =
                                 x_offset + gutter_width + mark_gutter_width + git_gutter_width;
 
-                            // Compute screen column of selection start,
-                            // accounting for horizontal scroll offset
                             let mut sel_start_screen_col = 0usize;
                             for gi in 0..clip_left {
                                 sel_start_screen_col += UnicodeWidthStr::width(graphemes[gi]);
                             }
-                            // Subtract the scroll offset so the position is
-                            // relative to the visible content area, not the
-                            // start of the full line.
                             if !editor.config.word_wrap {
                                 sel_start_screen_col =
                                     sel_start_screen_col.saturating_sub(line_scroll_offset_w);
                             }
                             let sel_start_x = content_start_x as usize + sel_start_screen_col;
-                            // Only draw if the selection is within the visible content area
                             if sel_start_x < content_start_x as usize + content_width
                                 && sel_display_w > 0
                                 && sel_start_x >= content_start_x as usize
                             {
-                                // Clip selection width so it doesn't overflow the content area
                                 let max_sel_w =
                                     content_start_x as usize + content_width - sel_start_x;
                                 let actual_sel_text = if sel_display_w > max_sel_w {
-                                    // Truncate graphemes to fit
                                     let mut truncated = String::new();
                                     let mut w = 0usize;
                                     for g in sel_graphemes.iter() {
@@ -643,109 +674,7 @@ fn render_window(
                 }
             }
 
-            // ── Visual selection overlay ─────────────────────────────
-            if let Some((sel_top, sel_bot, sel_left, sel_right)) = selection_rect {
-                // Determine if this line is in the selection.
-                // In Command mode we always render line-wise (VisualLine style)
-                // since :'<,'> operates on full lines.
-                let in_sel_line = match editor.mode {
-                    Mode::VisualLine => line_idx >= sel_top && line_idx <= sel_bot,
-                    Mode::VisualBlock => line_idx >= sel_top && line_idx <= sel_bot,
-                    Mode::Visual => {
-                        if sel_top != sel_bot {
-                            line_idx >= sel_top && line_idx <= sel_bot
-                        } else {
-                            line_idx == sel_top
-                        }
-                    }
-                    Mode::Command => line_idx >= sel_top && line_idx <= sel_bot,
-                    _ => false,
-                };
-                if in_sel_line {
-                    let (vis_left, vis_right) = match editor.mode {
-                        Mode::VisualLine => (0, graphemes.len()),
-                        Mode::VisualBlock => (sel_left, sel_right + 1),
-                        Mode::Visual => {
-                            if sel_top == sel_bot {
-                                (sel_left, sel_right + 1)
-                            } else if line_idx == sel_top {
-                                (sel_left, graphemes.len())
-                            } else if line_idx == sel_bot {
-                                (0, sel_right + 1)
-                            } else {
-                                (0, graphemes.len())
-                            }
-                        }
-                        Mode::Command => (0, graphemes.len()),
-                        _ => continue,
-                    };
-                    let vis_left = vis_left.min(graphemes.len());
-                    let vis_right = vis_right.min(graphemes.len());
-                    if vis_left < vis_right {
-                        let clip_left = vis_left.max(wrap_start_grapheme);
-                        let wrap_end_grapheme =
-                            wrap_start_grapheme + display.graphemes(true).count();
-                        let clip_right = vis_right.min(wrap_end_grapheme);
-
-                        if clip_left < clip_right {
-                            let sel_graphemes: Vec<_> =
-                                graphemes[clip_left..clip_right].iter().collect();
-                            let sel_text: String =
-                                sel_graphemes.iter().map(|g| g.to_string()).collect();
-                            let sel_display_w = UnicodeWidthStr::width(sel_text.as_str());
-                            let content_start_x =
-                                x_offset + gutter_width + mark_gutter_width + git_gutter_width;
-
-                            let mut sel_start_screen_col = 0usize;
-                            for gi in 0..clip_left {
-                                sel_start_screen_col += UnicodeWidthStr::width(graphemes[gi]);
-                            }
-                            if !editor.config.word_wrap {
-                                sel_start_screen_col =
-                                    sel_start_screen_col.saturating_sub(line_scroll_offset_w);
-                            }
-                            let sel_start_x = content_start_x as usize + sel_start_screen_col;
-                            if sel_start_x < content_start_x as usize + content_width
-                                && sel_display_w > 0
-                                && sel_start_x >= content_start_x as usize
-                            {
-                                let max_sel_w =
-                                    content_start_x as usize + content_width - sel_start_x;
-                                let actual_sel_text = if sel_display_w > max_sel_w {
-                                    let mut truncated = String::new();
-                                    let mut w = 0usize;
-                                    for g in sel_graphemes.iter() {
-                                        let gw = g.width();
-                                        if w + gw > max_sel_w {
-                                            break;
-                                        }
-                                        truncated.push_str(g);
-                                        w += gw;
-                                    }
-                                    truncated
-                                } else {
-                                    sel_text
-                                };
-
-                                if !actual_sel_text.is_empty() {
-                                    execute!(
-                                        stdout,
-                                        MoveTo(sel_start_x as u16, y),
-                                        SetBackgroundColor(sel_bg),
-                                        SetForegroundColor(sel_fg),
-                                        Print(&actual_sel_text),
-                                        ResetColor
-                                    )?;
-                                }
-                            }
-                        }
-                    }
-                }
-            } // ← selection rect block ENDS here
-
             // ── Search highlight overlay ─────────────────────────
-            // NOTE: This MUST be outside the selection_rect block above,
-            // otherwise highlights only appear during visual selection.
             if editor.search.highlight_enabled
                 && !editor.search.matches.is_empty()
                 && !editor.search.matches_dirty
@@ -819,12 +748,12 @@ fn render_window(
                                         r: 249,
                                         g: 226,
                                         b: 175,
-                                    }, // Catppuccin Yellow
+                                    },
                                     Color::Rgb {
                                         r: 30,
                                         g: 30,
                                         b: 46,
-                                    }, // Catppuccin Mantle
+                                    },
                                 )
                             } else {
                                 (
@@ -832,12 +761,12 @@ fn render_window(
                                         r: 55,
                                         g: 50,
                                         b: 35,
-                                    }, // Dark warm
+                                    },
                                     Color::Rgb {
                                         r: 249,
                                         g: 226,
                                         b: 175,
-                                    }, // Catppuccin Yellow
+                                    },
                                 )
                             };
                             execute!(
@@ -863,7 +792,6 @@ fn render_window(
                     }
 
                     let (vis_left, vis_right, overlay_text, bg_col, fg_col) = if is_active_phase {
-                        // Active phase: draw the single-char label (a, b, c...)
                         if let Some(label) = editor
                             .jump
                             .labels
@@ -882,7 +810,6 @@ fn render_window(
                             continue;
                         }
                     } else {
-                        // PendingChar2 phase: highlight the 2-char pattern (like search highlight)
                         let len = editor.jump.input.chars().count();
                         (
                             target.col,
@@ -929,8 +856,6 @@ fn render_window(
                                 let max_sel_w =
                                     content_start_x as usize + content_width - sel_start_x;
 
-                                // If the label (1 char) is shorter than the match (2 chars), pad it
-                                // so the background highlight covers the entire match cleanly.
                                 let actual_sel_text = if UnicodeWidthStr::width(
                                     overlay_text.as_str(),
                                 ) < sel_display_w
@@ -1277,7 +1202,6 @@ fn render_float_popup(
     let content_rows = display_lines.len();
     let total_height = (content_rows + 2) as u16;
 
-    // ── Bottom-right: grow upward from status bar, 1-col margin on right ──
     let x = term_width.saturating_sub(pw).saturating_sub(1);
     let y = term_height
         .saturating_sub(status_height)
@@ -1292,7 +1216,6 @@ fn render_float_popup(
 
     draw_border(stdout, x, y, pw, total_height, &border_style)?;
 
-    // ── Render each line with shortcut hints if in shortcut mode ──
     for (i, line) in display_lines.iter().enumerate() {
         let row_y = y + 1 + i as u16;
 
@@ -1301,7 +1224,6 @@ fn render_float_popup(
             .with_bg(catppuccin::MANTLE);
 
         if editor.shortcut_active {
-            // Line format from shortcuts.rs: "  {key:<width$}  {description}"
             let trimmed = line.trim_start();
             let (key_str, display_text) = match trimmed.split_once(|c: char| c.is_whitespace()) {
                 Some((k, rest)) => (k, rest.trim_start()),
@@ -1310,19 +1232,15 @@ fn render_float_popup(
 
             let mut segments = vec![Segment::new("[", catppuccin::TEXT)];
 
-            // Highlight the already-typed prefix vs remaining keys
             let pending_str = crate::misc::format_shortcut_keys(&editor.shortcut_pending_keys);
 
             if !pending_str.is_empty() && key_str.starts_with(&pending_str) {
-                // Highlight the typed part (e.g. "g")
                 segments.push(Segment::new(&pending_str, catppuccin::PEACH));
-                // Dim the remaining part (e.g. ",x")
                 let remaining = &key_str[pending_str.len()..];
                 if !remaining.is_empty() {
                     segments.push(Segment::new(remaining, catppuccin::OVERLAY0));
                 }
             } else {
-                // No pending prefix, show the full key sequence in green
                 segments.push(Segment::new(key_str, catppuccin::GREEN));
             }
 
@@ -1410,7 +1328,6 @@ fn render_separators(
 fn set_cursor_style(editor: &Editor, stdout: &mut std::io::Stdout) -> Result<(), Box<dyn std::error::Error>> {
     match editor.mode {
         Mode::Normal => {
-            // Change from BlinkingBlock to SteadyBlock – no flash
             let _ = execute!(stdout, crossterm::cursor::SetCursorStyle::SteadyBlock);
         }
         Mode::Insert | Mode::Replace => {
@@ -1441,7 +1358,6 @@ fn position_cursor(
 
     if editor.search.input_active {
         let cmdline_y = term_height.saturating_sub(2);
-        // Calculate display width of text up to cursor
         let before_cursor = &editor.search.prompt.buffer[..editor.search.prompt.cursor];
         let cursor_col = 1 + UnicodeWidthStr::width(before_cursor) as u16;
         let cursor_col = cursor_col.min(term_width.saturating_sub(1));
@@ -1533,8 +1449,6 @@ fn position_cursor(
             }
             col.saturating_sub(vp.scroll_col as usize)
         } else {
-            // No word wrap: compute actual display width of visible portion
-            // between the horizontal scroll offset and the cursor.
             if let Some(cursor_line_text) = buffer.and_then(|b| b.line_text(cursor_line)) {
                 let line_text = cursor_line_text.trim_end_matches('\n');
                 let graphemes: Vec<_> = line_text.graphemes(true).collect();
@@ -1622,10 +1536,6 @@ fn render_single_buffer_line(
                 vrow += softwrap_rows(&txt, content_width);
             }
         }
-        // For the target line itself, we only need the first visual row
-        // (the one at the start of the line — the cursor's wrap row would
-        // need softwrap_row_offset but for single-line update we redraw
-        // ALL visual rows of this logical line)
         vrow
     } else {
         screen_row
@@ -1664,6 +1574,11 @@ fn render_single_buffer_line(
 
     let graphemes: Vec<_> = line_text.graphemes(true).collect();
     let line_spans = highlighter.highlight_line(line_text, buffer.language);
+    let cursor_wrap_row = if editor.config.word_wrap {
+        softwrap_row_offset(line_text, cursor_col, content_width)
+    } else {
+        0
+    };
 
     let line_scroll_offset_w: usize = if scroll_col > 0 && !editor.config.word_wrap {
         graphemes[..scroll_col.min(graphemes.len())]
@@ -1674,8 +1589,12 @@ fn render_single_buffer_line(
         0
     };
 
-    // ── Check if the completion popup covers any of these rows ──
-    let completion_rect = editor.popup.overlay.completion;
+    // Only clip if the popup is actually being drawn
+    let completion_rect = if editor.should_show_completion_popup() {
+        editor.popup.overlay.completion
+    } else {
+        None
+    };
 
     for wrap_row in 0..wrap_rows {
         let row_screen = visual_screen_row + wrap_row;
@@ -1806,14 +1725,9 @@ fn render_single_buffer_line(
             execute!(stdout, Print(" "))?;
         }
 
-        // Calculate display text (same logic as render_window)
-
-        // In render_window, inside the `for wrap_row` loop,
-        // replace the non-word-wrap branch of the display computation:
-
+        // Calculate display text
         let mut wrap_start_grapheme = 0usize;
         let display = if editor.config.word_wrap {
-            // ── unchanged ──
             let mut rows_so_far = 0;
             let mut row_col = 0usize;
             let mut start_grapheme = 0usize;
@@ -1864,7 +1778,6 @@ fn render_single_buffer_line(
             wrap_start_grapheme = start_grapheme;
             graphemes[start_grapheme..end_grapheme.min(graphemes.len())].join("")
         } else {
-            // ── FIX: set wrap_start_grapheme for non-wrap mode ──
             wrap_start_grapheme = scroll_col;
 
             let visible: String = if scroll_col < graphemes.len() {
@@ -1894,14 +1807,25 @@ fn render_single_buffer_line(
             }
         };
 
-        // Render highlighted text
+        // Print line content with syntax highlighting + inline indent guides
+        let guide_cols = if editor.config.indent_guides && wrap_row == 0 {
+            guide_cols_for_line(editor, buffer, abs_line, wrap_start_grapheme, scroll_col)
+        } else {
+            std::collections::HashSet::new()
+        };
+        let guide_cols_opt = if guide_cols.is_empty() {
+            None
+        } else {
+            Some(&guide_cols)
+        };
+
         if wrap_row == 0 {
             crate::highlight::render_highlighted_line(
                 stdout,
                 &display,
                 &line_spans,
                 is_cursor_line,
-                None,
+                guide_cols_opt,
             )?;
         } else {
             let offset_spans: Vec<crate::highlight::HighlightSpan> = line_spans
@@ -1928,9 +1852,12 @@ fn render_single_buffer_line(
             )?;
         }
 
-        // Clear rest of line
+        // Clear rest of line - account for indent guides rendered beyond text boundary
         let display_w = UnicodeWidthStr::width(display.as_str());
-        let remaining = content_width.saturating_sub(display_w);
+        let max_guide_col = guide_cols.iter().max().map(|&c| c + 1).unwrap_or(0);
+        let effective_w = display_w.max(max_guide_col);
+        let remaining = content_width.saturating_sub(effective_w);
+
         if is_cursor_line {
             execute!(stdout, SetBackgroundColor(Color::DarkGrey))?;
         }
@@ -1941,17 +1868,60 @@ fn render_single_buffer_line(
             execute!(stdout, ResetColor)?;
         }
 
-        // Clear rest of line
-        let display_w = UnicodeWidthStr::width(display.as_str());
-        let remaining = content_width.saturating_sub(display_w);
-        if is_cursor_line {
-            execute!(stdout, SetBackgroundColor(Color::DarkGrey))?;
-        }
-        if remaining > 0 {
-            execute!(stdout, Print(&" ".repeat(remaining)))?;
-        }
-        if is_cursor_line {
-            execute!(stdout, ResetColor)?;
+        // ── Inline Ghost Text Overlay ──
+        let is_cursor_row = is_cursor_line && wrap_row == cursor_wrap_row;
+        if is_cursor_row && editor.ghost_text.is_visible() {
+            if let Some(ref ghost) = editor.ghost_text.current {
+                let is_completion = ghost.source == crate::ghost_text::GhostTextSource::Completion;
+                let is_valid = (!is_completion || editor.completion.active)
+                    && ghost.line == abs_line
+                    && ghost.start_col == cursor_col
+                    && ghost.pinned_generation == editor.ghost_text.generation;
+
+                if is_valid {
+                    let remaining_ghost = ghost.remaining_text(cursor_col);
+                    if !remaining_ghost.is_empty() {
+                        let rel_cursor_col = cursor_col.saturating_sub(wrap_start_grapheme);
+                        let display_graphemes: Vec<_> = display.graphemes(true).collect();
+                        let up_to_cursor_text: String = display_graphemes[..rel_cursor_col.min(display_graphemes.len())]
+                            .iter()
+                            .map(|g| g.to_string())
+                            .collect();
+                        let cursor_offset_x = UnicodeWidthStr::width(up_to_cursor_text.as_str());
+                        let content_start_x = window.x_offset + gutter_width + mark_gutter_width + git_gutter_width;
+                        let ghost_x = content_start_x + cursor_offset_x as u16;
+
+                        let max_ghost_w = (content_start_x + content_width as u16).saturating_sub(ghost_x) as usize;
+                        let truncated_ghost = truncate_to_width(remaining_ghost, max_ghost_w);
+                        let ghost_w = UnicodeWidthStr::width(truncated_ghost);
+
+                        execute!(
+                            stdout,
+                            MoveTo(ghost_x, y),
+                            SetBackgroundColor(Color::DarkGrey),
+                            SetForegroundColor(Color::Rgb { r: 40, g: 40, b: 58 }),
+                            Print(&truncated_ghost),
+                            ResetColor
+                        )?;
+
+                        let trailing: String = display_graphemes[rel_cursor_col.min(display_graphemes.len())..].join("");
+                        if !trailing.is_empty() {
+                            let trailing_x = ghost_x + ghost_w as u16;
+                            let max_trailing_w = (content_start_x + content_width as u16).saturating_sub(trailing_x) as usize;
+                            let truncated_trailing = truncate_to_width(&trailing, max_trailing_w);
+                            if !truncated_trailing.is_empty() {
+                                execute!(
+                                    stdout,
+                                    MoveTo(trailing_x, y),
+                                    SetBackgroundColor(Color::DarkGrey),
+                                    Print(&truncated_trailing),
+                                    ResetColor
+                                )?;
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // ── Search highlight overlay ─────────────────────────
@@ -2063,10 +2033,31 @@ fn render_single_buffer_line(
 
     Ok(())
 }
+
 // -----------------------------------------------------------------------------
 // Main render entry point
 // -----------------------------------------------------------------------------
 pub fn render(editor: &mut Editor, terminal: &mut Terminal, highlighter: &mut Highlighter) -> Result<(), Box<dyn std::error::Error>> {
+    // Sync the completion ghost text preview right before rendering
+    editor.update_completion_ghost_text();
+    if editor.mode != Mode::Insert && editor.mode != Mode::Replace {
+        let mut changed = false;
+        if editor.completion.active {
+            editor.completion.cancel();
+            editor.popup.overlay.completion = None;
+            changed = true;
+        }
+        if let Some(ref ghost) = editor.ghost_text.current {
+            if ghost.source == crate::ghost_text::GhostTextSource::Completion {
+                editor.ghost_text.clear();
+                changed = true;
+            }
+        }
+        if changed {
+            editor.dirty.windows = true;
+        }
+    }
+
     let (term_width, term_height) = terminal.size().unwrap_or((80, 24));
     let stdout = terminal.stdout_mut();
 
@@ -2090,20 +2081,19 @@ pub fn render(editor: &mut Editor, terminal: &mut Terminal, highlighter: &mut Hi
 
     // ══════════════════════════════════════════════════════════════════
     //  FAST PATH: Single-line update (completion popup is active)
-    //
-    //  When the completion popup is showing and the user types a character,
-    //  only the current line needs redrawing. Redrawing the entire window
-    //  would clear the popup's screen area, causing a visible flash.
     // ══════════════════════════════════════════════════════════════════
     if let Some(line) = editor.dirty.single_line {
         render_single_buffer_line(editor, stdout, line, highlighter)?;
 
-        // Always re-render the completion popup on top
-        if editor.completion.active && !editor.completion.items.is_empty() {
+        if editor.should_show_completion_popup() && !editor.completion.items.is_empty() {
             crate::popup::completion_popup::render_completion_popup(editor, stdout, term_width, term_height)?;
         }
 
-        // Cursor must be repositioned
+        // Also refresh the candidate infobar list on keystroke fast-path updates
+        if editor.completion.active {
+            render_infobar(editor, stdout, term_width, term_height)?;
+        }
+
         position_cursor(editor, stdout, term_width, term_height)?;
 
         editor.dirty.clear();
@@ -2151,12 +2141,12 @@ pub fn render(editor: &mut Editor, terminal: &mut Terminal, highlighter: &mut Hi
     if editor.dirty.full || editor.dirty.status_cmdline {
         render_cmdline(editor, stdout, term_width, term_height)?;
     }
-    if editor.dirty.full || editor.dirty.status_infobar {
+    // Redraw the infobar on explicit dirty flags or when active completion lists update
+    if editor.dirty.full || editor.dirty.status_infobar || editor.completion.active {
         render_infobar(editor, stdout, term_width, term_height)?;
     }
 
     // ── 5. Popups ──
-    // If windows were redrawn, ALL active popups must be redrawn on top.
     let must_draw_all_popups = editor.dirty.full || editor.dirty.windows;
 
     // Float popup
@@ -2166,14 +2156,14 @@ pub fn render(editor: &mut Editor, terminal: &mut Terminal, highlighter: &mut Hi
         }
     }
 
-    // Register popup (bottom-up)
+    // Register popup
     if must_draw_all_popups || editor.popup.register.is_some() {
         if let Some(ref lines) = editor.popup.register {
             crate::popup::register::render_register_popup(&editor.popup.register_title, lines, stdout, term_width, term_height)?;
         }
     }
 
-    // Mark list popup (bottom-up)
+    // Mark list popup
     if must_draw_all_popups || editor.dirty.mark_list {
         if let Some(popup) = &editor.popup.mark_list {
             crate::popup::render_mark_list_popup(popup, stdout, term_width, term_height)?;
@@ -2199,8 +2189,8 @@ pub fn render(editor: &mut Editor, terminal: &mut Terminal, highlighter: &mut Hi
         }
     }
 
-    // Completion popup (special: high-frequency, never use clear_rect)
-    if (must_draw_all_popups || editor.dirty.completion) && editor.completion.active && !editor.completion.items.is_empty() {
+    // Completion popup
+    if (must_draw_all_popups || editor.dirty.completion) && editor.should_show_completion_popup() && !editor.completion.items.is_empty() {
         crate::popup::completion_popup::render_completion_popup(editor, stdout, term_width, term_height)?;
     }
 
@@ -2275,7 +2265,6 @@ fn restore_region(
         let ww = window.width;
         let wh = window.height;
 
-        // Skip windows that don't overlap
         if rect.x + rect.w <= wx || rect.x >= wx + ww || rect.y + rect.h <= wy || rect.y >= wy + wh {
             continue;
         }
@@ -2385,7 +2374,7 @@ fn render_powerline(
             .unwrap_or_else(|| "text".to_string());
         let buf_pos = format!(" {} {} ", glyphs::BUFFER_ICON, editor.buffers.len());
 
-        // Function name segment (optional)
+        // Function name segment
         let func_display = editor.current_function_name.as_deref().map(|name| {
             if name.chars().count() > 25 {
                 format!("{}…", name.chars().take(24).collect::<String>())
@@ -2419,13 +2408,10 @@ fn render_powerline(
 
         let padding = (term_width as usize).saturating_sub(left_approx + right_approx);
 
-        // Padding between left and right
         execute!(stdout, SetBackgroundColor(surface2))?;
         execute!(stdout, Print(&" ".repeat(padding)))?;
 
-        // Function name (or plain separator if absent)
         if let Some(ref display) = func_display {
-            // SURFACE2 → SURFACE1
             execute!(
                 stdout,
                 SetForegroundColor(surface1),
@@ -2441,7 +2427,6 @@ fn render_powerline(
                 stdout,
                 Print(&format!(" {} {} ", glyphs::FUNCTION, display))
             )?;
-            // SURFACE1 → SURFACE0
             execute!(
                 stdout,
                 SetForegroundColor(surface0),
@@ -2449,7 +2434,6 @@ fn render_powerline(
             )?;
             execute!(stdout, Print(glyphs::SEPARATOR_RIGHT))?;
         } else {
-            // No function: SURFACE2 → SURFACE0 directly
             execute!(
                 stdout,
                 SetForegroundColor(surface0),
@@ -2458,7 +2442,6 @@ fn render_powerline(
             execute!(stdout, Print(glyphs::SEPARATOR_RIGHT))?;
         }
 
-        // Filetype
         execute!(
             stdout,
             SetForegroundColor(subtext),
@@ -2466,7 +2449,6 @@ fn render_powerline(
         )?;
         execute!(stdout, Print(&format!(" UTF-8 {} ", ft_text)))?;
 
-        // SURFACE0 → SURFACE1
         execute!(
             stdout,
             SetForegroundColor(surface1),
@@ -2474,7 +2456,6 @@ fn render_powerline(
         )?;
         execute!(stdout, Print(glyphs::SEPARATOR_RIGHT))?;
 
-        // Buffer position
         execute!(
             stdout,
             SetForegroundColor(subtext),
@@ -2512,7 +2493,6 @@ fn render_cmdline(
     execute!(stdout, MoveTo(0, cmdline_y))?;
     execute!(stdout, SetBackgroundColor(surface0))?;
 
-    // ── Register prefix visual feedback ──
     if editor.register_pending {
         execute!(stdout, SetForegroundColor(yellow))?;
         execute!(stdout, Print("\""))?;
@@ -2541,7 +2521,6 @@ fn render_cmdline(
 
         let printed = 1 + UnicodeWidthStr::width(editor.search.prompt.buffer.as_str());
 
-        // Sanitize feedback to single line, max 120 chars, fitting term_width
         let feedback = if let Some(ref msg) = editor.error_message {
             Some((sanitize_single_line(msg, 120, max_width), red))
         } else {
@@ -2651,9 +2630,8 @@ fn render_fmtinfo(
     let popup_width = term_width;
     let x = 0;
 
-    let max_line_w = popup_width.saturating_sub(2) as usize; // content area inside borders
+    let max_line_w = popup_width.saturating_sub(2) as usize;
 
-    // ── Pre-compute visual rows with color info ──
     struct VisualRow {
         text: String,
         color: Color,
@@ -2668,7 +2646,6 @@ fn render_fmtinfo(
         }
         logical_count += 1;
 
-        // Color-code by prefix
         let trimmed = line.trim_start();
         let color = if trimmed.starts_with("error") {
             catppuccin::RED
@@ -2684,7 +2661,6 @@ fn render_fmtinfo(
             catppuccin::TEXT
         };
 
-        // Wrap the line into visual rows
         if max_line_w == 0 || line.is_empty() {
             visual_rows.push(VisualRow {
                 text: String::new(),
@@ -2717,7 +2693,7 @@ fn render_fmtinfo(
     }
 
     let visible_count = visual_rows.len().min(max_visual_rows);
-    let total_height = visible_count as u16 + 2; // +2 for border top/bottom
+    let total_height = visible_count as u16 + 2;
 
     let y = term_height.saturating_sub(status_height).saturating_sub(total_height);
 
@@ -2746,6 +2722,7 @@ fn render_fmtinfo(
     Ok(())
 }
 
+#[rustfmt::skip]
 fn render_infobar(
     editor: &Editor,
     stdout: &mut std::io::Stdout,
@@ -2765,7 +2742,81 @@ fn render_infobar(
     execute!(stdout, MoveTo(0, infobar_y))?;
     execute!(stdout, SetBackgroundColor(surface0))?;
 
-    if !editor.which_key_hints.is_empty() {
+    if editor.completion.active {
+        if editor.completion.items.is_empty() {
+            execute!(stdout, SetForegroundColor(overlay0), Print(" [LSP] Loading completions..."))?;
+            let pad = max_width.saturating_sub(" [LSP] Loading completions...".len());
+            if pad > 0 {
+                execute!(stdout, Print(&" ".repeat(pad)))?;
+            }
+        } else {
+            let total_count = editor.completion.items.len();
+            let selected_idx = editor.completion.selected_index;
+
+            // Print candidate count prefix: "[8] "
+            let count_str = format!("[{}] ", total_count);
+            execute!(stdout, SetForegroundColor(overlay0), Print(&count_str))?;
+            let mut col = UnicodeWidthStr::width(count_str.as_str());
+
+            // Sliding window of 5 candidates to keep the active item in focus
+            let window_size = 5;
+            let start_idx = if selected_idx < window_size {
+                0
+            } else {
+                selected_idx.saturating_sub(window_size - 1).min(total_count.saturating_sub(window_size))
+            };
+
+            for i in 0..window_size {
+                let item_idx = start_idx + i;
+                if item_idx >= total_count {
+                    break;
+                }
+
+                if i > 0 {
+                    if col + 1 > max_width {
+                        break;
+                    }
+                    execute!(stdout, SetForegroundColor(overlay0), Print(" "))?;
+                    col += 1;
+                }
+
+                let item = &editor.completion.items[item_idx];
+                let is_selected = item_idx == selected_idx;
+
+                // Extract a clean, compact display name
+                let clean_name = {
+                    let label = &item.label;
+                    let end_idx = label.find(|c| c == '(' || c == ':' || c == '<')
+                        .unwrap_or(label.len());
+                    let base = label[..end_idx].trim();
+                    if label.contains('(') {
+                        format!("{}(...)", base)
+                    } else {
+                        base.to_string()
+                    }
+                };
+
+                let item_w = UnicodeWidthStr::width(clean_name.as_str());
+                if col + item_w > max_width {
+                    break;
+                }
+
+                if is_selected {
+                    execute!(stdout, SetForegroundColor(crossterm_colors::GREEN))?;
+                } else {
+                    execute!(stdout, SetForegroundColor(subtext))?;
+                }
+                execute!(stdout, Print(&clean_name))?;
+                col += item_w;
+            }
+
+            let pad = max_width.saturating_sub(col);
+            if pad > 0 {
+                execute!(stdout, Print(&" ".repeat(pad)))?;
+            }
+        }
+
+    } else if !editor.which_key_hints.is_empty() {
         let max_col = max_width;
         let mut col = 0usize;
 
@@ -2810,10 +2861,9 @@ fn render_infobar(
             execute!(stdout, Print(&" ".repeat(pad)))?;
         }
     } else if let Some(ref msg) = editor.infobar_message {
-        // NEW: show formatter errors and other infobar messages
         let display = sanitize_single_line(msg, 120, max_width);
         let printed = UnicodeWidthStr::width(display.as_str());
-        execute!(stdout, SetForegroundColor(crossterm_colors::YELLOW))?;
+        execute!(stdout, SetForegroundColor(crossterm_colors::GREEN))?;
         execute!(stdout, Print(&display))?;
         let pad = max_width.saturating_sub(printed);
         if pad > 0 {
@@ -2908,6 +2958,7 @@ fn guide_cols_for_line(
         })
         .collect()
 }
+
 /// Calculate the indentation depth of a line.
 fn indent_depth(line_text: &str, tab_width: usize) -> usize {
     let mut depth = 0;

@@ -2,7 +2,6 @@ use std::path::PathBuf;
 
 use crate::action::Action;
 use crate::command::CommandRegistry;
-use crate::popup::FilePicker;
 use crate::window::SplitDirection;
 
 use crate::ed::build::BuildExt;
@@ -236,6 +235,7 @@ fn help_handler(e: &mut Editor, _args: &str) -> CommandResult {
          Keys: h/j/k/l i o O dd yy p grg Ctrl-u/d Ctrl-w s/v"
             .into(),
     );
+    e.dirty.status_infobar = true;
     CommandResult::NoOp
 }
 
@@ -455,16 +455,7 @@ fn fmt_ts_handler(e: &mut Editor, _args: &str) -> CommandResult {
 }
 
 fn file_picker_handler(e: &mut Editor, _args: &str) -> CommandResult {
-    let start_dir = e
-        .current_buffer()
-        .and_then(|b| b.file_path.as_ref())
-        .and_then(|p| p.parent())
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-
-    e.popup.file_picker = Some(FilePicker::new(&start_dir, e.config.file_picker_flat));
-    e.dirty.mark_all();
-    CommandResult::ViewChanged
+    e.find_file()
 }
 
 fn reg_handler(e: &mut Editor, _args: &str) -> CommandResult {

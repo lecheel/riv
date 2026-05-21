@@ -78,6 +78,65 @@ pub const FUNCTION_KINDS: &[&str] = &[
     "function_definition",
 ];
 
+/// Prefixes that begin a new function/method/class declaration.
+/// Used by the safety net to detect if a deletion range would span
+/// multiple function boundaries.
+const FN_DECL_PREFIXES: &[&str] = &[
+    // Rust
+    "fn ",
+    "pub fn ",
+    "pub(crate) fn ",
+    "pub(super) fn ",
+    "async fn ",
+    "pub async fn ",
+    "pub(crate) async fn ",
+    // JavaScript / TypeScript
+    "function ",
+    "async function ",
+    "export function ",
+    "export default function ",
+    "function* ",
+    "async function* ",
+    // Python
+    "def ",
+    "async def ",
+    "class ",
+    // Go
+    "func ",
+    // C / C++ (common patterns — tree-sitter does the heavy lifting)
+    "static ",
+    "inline ",
+    "void ",
+    "int ",
+    "bool ",
+    "char ",
+    "double ",
+    "float ",
+    "long ",
+    "short ",
+    "unsigned ",
+    "size_t ",
+    "auto ",
+];
+
+/// Count how many function-declaration lines exist in `[start_line, end_line]`.
+fn count_fn_declarations(buffer: &Buffer, start_line: usize, end_line: usize) -> usize {
+    let mut count = 0;
+    for line in start_line..=end_line {
+        if let Some(text) = buffer.line_text(line) {
+            let trimmed = text.trim();
+            // Must end with `(`, `{`, `<`, or `:` (Python) — avoids
+            // false positives like `// function ` comments or `let x = func()`
+            // which contain a keyword but aren't declarations.
+            let looks_like_decl = trimmed.ends_with('(') || trimmed.ends_with('{') || trimmed.ends_with('<') || trimmed.ends_with(':'); // Python: `def foo(self):`
+            if looks_like_decl && FN_DECL_PREFIXES.iter().any(|p| trimmed.starts_with(p)) {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
 /// Walk the entire tree-sitter tree and collect every function/method node
 /// in source order.  Returns `(kind_prefix, name, signature_snippet, line)`.
 pub fn collect_all_functions(buffer: &Buffer) -> Vec<FunctionEntry> {
@@ -384,6 +443,52 @@ impl TextObjectExt for Editor {
         }
 
         let line_count = end_line - start_line + 1;
+
+        // ──────────────────────────────────────────────────────────
+        //  SAFETY NET #1: refuse to delete across multiple function
+        //  declarations.  This catches stale tree-sitter trees that
+        //  return an oversized range, and any bug in compute_range
+        //  / ensure_range_includes_braces that expands too far.
+        // ──────────────────────────────────────────────────────────
+        {
+            let buffer = match self.buffers.get(&buffer_id) {
+                Some(b) => b,
+                None => return CommandResult::NoOp,
+            };
+            let decl_count = count_fn_declarations(buffer, start_line, end_line);
+            if decl_count > 1 {
+                return CommandResult::Error(format!(
+                    "Safety: range spans {} function declarations — aborting. \
+                     Use V+d or :d to delete if intentional.",
+                    decl_count
+                ));
+            }
+        }
+
+        // ──────────────────────────────────────────────────────────
+        //  SAFETY NET #2: refuse to delete an unreasonably large
+        //  range.  A single function that's 500+ lines is extremely
+        //  rare; if we see it, something is wrong.
+        // ──────────────────────────────────────────────────────────
+        const MAX_FUNCTION_LINES: usize = 500;
+        if line_count > MAX_FUNCTION_LINES {
+            return CommandResult::Error(format!(
+                "Safety: function spans {} lines (max {}) — aborting. \
+                     Use V+d or :d to delete if intentional.",
+                line_count, MAX_FUNCTION_LINES
+            ));
+        }
+
+        // ──────────────────────────────────────────────────────────
+        //  SAFETY NET #3: the computed range shouldn't extend far
+        //  beyond the raw tree-sitter range.  Around mode adds at
+        //  most 1 blank line on each side; ensure_range_includes_braces
+        //  adds at most ~20.  Anything beyond that is suspect.
+        // ──────────────────────────────────────────────────────────
+        const MAX_DRIFT: usize = 25;
+        if start_line + MAX_DRIFT < raw_start || end_line > raw_end + MAX_DRIFT {
+            return CommandResult::Error("Safety: computed range far exceeds tree-sitter range — aborting.".into());
+        }
 
         let result = match operator {
             // ── Delete ─────────────────────────────────────────────────
@@ -922,7 +1027,6 @@ fn ensure_range_includes_braces(buffer: &Buffer, raw_start: usize, raw_end: usiz
     let mut end = raw_end;
 
     if open.is_none() {
-        // Scan backward (up to 20 lines) for the opening brace.
         let limit = raw_start.saturating_sub(20);
         for line in (limit..raw_start).rev() {
             if let Some(text) = buffer.line_text(line) {
@@ -930,25 +1034,16 @@ fn ensure_range_includes_braces(buffer: &Buffer, raw_start: usize, raw_end: usiz
                     start = line;
                     break;
                 }
-                // Don't cross into another function declaration
+                // ★ Don't cross into another function declaration
                 let trimmed = text.trim();
-                if trimmed.starts_with("fn ")
-                    || trimmed.starts_with("pub fn ")
-                    || trimmed.starts_with("async fn ")
-                    || trimmed.starts_with("pub async fn ")
-                    || trimmed.starts_with("function ")
-                    || trimmed.starts_with("def ")
-                    || trimmed.starts_with("func ")
-                {
-                    break;
+                if FN_DECL_PREFIXES.iter().any(|p| trimmed.starts_with(p)) {
+                    break; // stop scanning backward
                 }
             }
         }
-        if start == raw_start {}
     }
 
     if close.is_none() {
-        // Scan forward (up to 20 lines) for the closing brace.
         let max = buffer.line_count();
         let limit = (raw_end + 20).min(max);
         for line in (raw_end + 1)..limit {
@@ -957,9 +1052,13 @@ fn ensure_range_includes_braces(buffer: &Buffer, raw_start: usize, raw_end: usiz
                     end = line;
                     break;
                 }
+                // ★ Don't cross into another function declaration
+                let trimmed = text.trim();
+                if FN_DECL_PREFIXES.iter().any(|p| trimmed.starts_with(p)) {
+                    break; // stop scanning forward
+                }
             }
         }
-        if end == raw_end {}
     }
 
     (start, end)
@@ -1045,6 +1144,22 @@ fn compute_range(buffer: &Buffer, raw_start: usize, raw_end: usize, kind: TextOb
                 raw_start
             };
 
+            // ★ Safety: if the absorbed line is a function declaration, don't absorb it.
+            let start = if start < raw_start {
+                if let Some(text) = buffer.line_text(start) {
+                    let trimmed = text.trim();
+                    if FN_DECL_PREFIXES.iter().any(|p| trimmed.starts_with(p)) {
+                        raw_start // refuse to absorb
+                    } else {
+                        start
+                    }
+                } else {
+                    start
+                }
+            } else {
+                start
+            };
+
             // At most one trailing blank line.
             let max = buffer.line_count().saturating_sub(1);
             let end = if raw_end < max {
@@ -1054,6 +1169,22 @@ fn compute_range(buffer: &Buffer, raw_start: usize, raw_end: usize, kind: TextOb
                 }
             } else {
                 raw_end
+            };
+
+            // ★ Safety: if the absorbed trailing line is a function declaration, don't absorb it.
+            let end = if end > raw_end {
+                if let Some(text) = buffer.line_text(end) {
+                    let trimmed = text.trim();
+                    if FN_DECL_PREFIXES.iter().any(|p| trimmed.starts_with(p)) {
+                        raw_end // refuse to absorb
+                    } else {
+                        end
+                    }
+                } else {
+                    end
+                }
+            } else {
+                end
             };
 
             let open_brace = open.unwrap_or(raw_start);

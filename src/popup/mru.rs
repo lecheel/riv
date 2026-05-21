@@ -347,7 +347,7 @@ pub fn render_mru_popup(
     // ── Bottom border with status ──────────────────────────────────────
     let bottom_y = filter_y + 1 + content_rows as u16;
     let footer = format!(
-        "[Home] {}  [Del] remove  [Enter] open  [Esc]{}close  {}/{}",
+        "[Home] {}  [Del] remove  [Enter] open  [Esc]{}close  {}/{}",
         if popup.sort_by_frequency {
             "recency"
         } else {

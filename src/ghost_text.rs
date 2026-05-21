@@ -12,6 +12,7 @@ pub enum GhostTextSource {
     Codeium,
     /// LSP inline hint (future).
     LspInlineHint,
+    Completion,
 }
 
 impl GhostTextSource {
@@ -19,6 +20,7 @@ impl GhostTextSource {
         match self {
             GhostTextSource::Codeium => "Codeium",
             GhostTextSource::LspInlineHint => "LSP",
+            GhostTextSource::Completion => "Comp",
         }
     }
 }
@@ -36,6 +38,7 @@ pub struct GhostText {
     pub source: GhostTextSource,
     /// When this suggestion was received.
     pub received_at: Instant,
+    pub pinned_generation: u64,
 }
 
 impl GhostText {
@@ -47,6 +50,7 @@ impl GhostText {
             start_col,
             source,
             received_at: Instant::now(),
+            pinned_generation: 0,
         }
     }
 
@@ -54,7 +58,6 @@ impl GhostText {
     pub fn is_valid_at(&self, line: usize, col: usize) -> bool {
         self.line == line && col >= self.start_col
     }
-
     /// How many characters of the suggestion have already been typed.
     pub fn already_typed(&self, current_col: usize) -> usize {
         current_col.saturating_sub(self.start_col)
@@ -88,6 +91,7 @@ pub struct GhostTextManager {
     pub last_sent_at: Option<Instant>,
     /// Timeout after which a pending request is considered stale.
     pub pending_timeout_ms: u64,
+    pub generation: u64,
 }
 
 impl Default for GhostTextManager {
@@ -106,20 +110,22 @@ impl GhostTextManager {
             debounce_ms: 150,
             last_sent_at: None,
             pending_timeout_ms: 5_000,
+            generation: 0,
         }
     }
 
-    /// Set a new ghost text suggestion.
-    pub fn set(&mut self, ghost: GhostText) {
+    pub fn set(&mut self, mut ghost: GhostText) {
+        self.generation = self.generation.wrapping_add(1); // ← ADD (before storing)
+        ghost.pinned_generation = self.generation; // ← ADD
         self.pending = false;
         self.last_sent_at = None;
         self.current = Some(ghost);
     }
 
-    /// Clear any current ghost text.
     pub fn clear(&mut self) {
-        if self.current.is_none() {
-            self.pending;
+        if self.current.is_some() {
+            // ← FIX: was `self.current.is_none()`
+            self.generation = self.generation.wrapping_add(1); // ← ADD
         }
         self.current = None;
         self.pending = false;

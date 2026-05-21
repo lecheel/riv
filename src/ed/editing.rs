@@ -97,9 +97,16 @@ pub trait EditingExt {
     fn paste_named_register(&mut self, name: char) -> CommandResult;
     fn get_named_register(&self, name: char) -> Option<&str>;
     fn set_named_register(&mut self, name: char, content: String);
+    fn invalidate_ghost_text(&mut self);
 }
 
 impl EditingExt for Editor {
+    fn invalidate_ghost_text(&mut self) {
+        self.ghost_text.clear();
+        if !self.paste_in_progress && matches!(self.mode, Mode::Insert | Mode::Replace) {
+            self.maybe_update_completion();
+        }
+    }
     fn insert_char_at_cursor(&mut self, c: char) {
         if let Some(window) = self.windows.active_window_mut() {
             let buffer_id = window.buffer_id;
@@ -314,6 +321,7 @@ impl EditingExt for Editor {
             // NOTE: Removed self.invalidate_git_gutter() here —
             // process_event() already calls it centrally for ContentChanged.
         }
+        self.invalidate_ghost_text();
     }
 
     fn delete_current_line(&mut self) {

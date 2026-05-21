@@ -422,13 +422,13 @@ pub fn render_file_picker(
 
     let footer_text = if picker.flat {
         format!(
-            "[~] tree  [Enter] open  [Esc] close  {}/{}",
+            "[~] tree  [Enter] open  [Esc] close  {}/{}",
             picker.selected + 1,
             picker.filtered.len(),
         )
     } else {
         format!(
-            "[-] up  [~] flat  [Enter] open  [Esc] close  {}/{}",
+            "[-] up  [~] flat  [Enter] open  [Esc] close  {}/{}",
             picker.selected + 1,
             picker.filtered.len(),
         )
