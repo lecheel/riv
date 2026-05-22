@@ -1194,6 +1194,7 @@ pub fn parse_action_str(s: &str) -> Option<Action> {
         GitPrevHunk | "prev_hunk" | "[h",
         GitRevertHunk | "hunk_revert" | "ghr",
         GitGutterToggle | "ghg",
+        ShowHunkDiff | "show_hunk_diff",
 
         // ── Completion ─────────────────────────────────────
         TriggerCompletion | "ctrl-space",
@@ -1241,7 +1242,6 @@ pub fn parse_action_str(s: &str) -> Option<Action> {
         LlmQuickSummarize,
         LlmQuickPrompt | "'",
         LlmSessionNew,
-
         // ── Misc ───────────────────────────────────────────
         Quit | "q",
         ForceQuit | "q!",

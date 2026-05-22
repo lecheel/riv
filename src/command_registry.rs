@@ -239,6 +239,10 @@ fn help_handler(e: &mut Editor, _args: &str) -> CommandResult {
     CommandResult::NoOp
 }
 
+fn ghunk_diff_handler(e: &mut Editor, _args: &str) -> CommandResult {
+    e.git_show_hunk_diff()
+}
+
 fn hints_handler(e: &mut Editor, _args: &str) -> CommandResult {
     e.show_hints()
 }
@@ -1212,6 +1216,9 @@ pub fn build_command_registry() -> CommandRegistry {
 
     reg.register_handler("hlsearch", hlsearch_handler, "Re-enable search highlight");
     reg.alias("hls", "hlsearch");
+
+    reg.register_handler("GhunkDiff", ghunk_diff_handler, "Show diff popup for hunk under cursor");
+    reg.alias("ghd", "GhunkDiff");
 
     // In build_command_registry()
     reg.register_handler(

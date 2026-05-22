@@ -1096,8 +1096,28 @@ impl Editor {
                     return CommandResult::NoOp;
                 }
                 Key::Right => {
-                    let result = self.confirm_completion();
-                    return result;
+                    let is_mid_word = self
+                        .windows
+                        .active_window()
+                        .and_then(|w| {
+                            let col = w.cursor.position.col;
+                            let line = w.cursor.position.line;
+                            self.buffers.get(&w.buffer_id).and_then(|b| b.line_text(line)).map(|text| {
+                                use unicode_segmentation::UnicodeSegmentation;
+                                text.graphemes(true)
+                                    .nth(col)
+                                    .and_then(|g| g.chars().next())
+                                    .map_or(false, |c| c.is_alphanumeric() || c == '_' || c == '-')
+                            })
+                        })
+                        .unwrap_or(false);
+                    if is_mid_word {
+                        self.close_completion_popup();
+                        self.ghost_text.clear();
+                        // fall through to normal Right (MoveRight)
+                    } else {
+                        return self.confirm_completion();
+                    }
                 }
                 Key::Left => {
                     self.completion.cancel();
@@ -2248,6 +2268,7 @@ impl Editor {
                 // Note: We'll need a separate ripgrep input mode or reuse command mode
                 // For now, redirect to command mode with :rg prefix
             }
+            Action::ShowHunkDiff => self.git_show_hunk_diff(),
             Action::RipgrepGotoResult => self.ripgrep_goto_result(),
             Action::RipgrepClose => self.ripgrep_close_buffer(),
             Action::RipgrepLast => self.ripgrep_last(),

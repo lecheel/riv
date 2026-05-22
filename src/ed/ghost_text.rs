@@ -236,6 +236,27 @@ impl GhostTextExt for Editor {
             return CommandResult::NoOp;
         }
 
+        // ── Mid-word guard for Completion ghost text ──────────────────
+        if ghost.source == crate::ghost_text::GhostTextSource::Completion {
+            let is_mid_word = self
+                .windows
+                .active_window()
+                .and_then(|w| self.buffers.get(&w.buffer_id))
+                .and_then(|b| b.line_text(pos_line))
+                .map_or(false, |line| {
+                    use unicode_segmentation::UnicodeSegmentation;
+                    line.graphemes(true).nth(pos_col).map_or(false, |g| {
+                        g.chars().next().map_or(false, |c| c.is_alphanumeric() || c == '_' || c == '-')
+                    })
+                });
+
+            if is_mid_word {
+                // Close the completion popup — mid-word it's just noise.
+                self.close_completion_popup();
+                return CommandResult::NoOp;
+            }
+        }
+
         // Only insert the part of the suggestion not yet typed.
         let to_insert = ghost.remaining_text(pos_col).to_string();
         if to_insert.is_empty() {
@@ -284,7 +305,24 @@ impl GhostTextExt for Editor {
             // Conflict with any ghost text source other than Completion if the list is active
             let popup_conflict = self.completion.active && ghost.source != crate::ghost_text::GhostTextSource::Completion;
 
-            if invalid_position || popup_conflict {
+            // Completion ghost text should be hidden when the cursor is
+            // mid-word — the next character after the cursor is an identifier
+            // char, so the preview would overlap existing content.
+            let mid_word_conflict = if ghost.source == crate::ghost_text::GhostTextSource::Completion {
+                self.buffers
+                    .get(&window.buffer_id)
+                    .and_then(|b| b.line_text(pos.line))
+                    .map_or(false, |line| {
+                        line.chars()
+                            .skip(pos.col)
+                            .next()
+                            .map_or(false, |c| c.is_alphanumeric() || c == '_' || c == '-')
+                    })
+            } else {
+                false
+            };
+
+            if invalid_position || popup_conflict || mid_word_conflict {
                 self.ghost_text.clear();
                 self.codeium.cancel();
             }

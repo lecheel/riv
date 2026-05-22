@@ -504,6 +504,12 @@ impl TextObjectExt for Editor {
                     buf.reparse_tree();
                 }
 
+                if kind == TextObjectKind::Around {
+                    s.insert_text_at_cursor("\n");
+                    // insert_text_at_cursor advances the cursor to after the newline,
+                    // landing on the newly created blank line.
+                }
+
                 CommandResult::ContentChanged
             }),
 

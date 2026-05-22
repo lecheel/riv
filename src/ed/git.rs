@@ -66,6 +66,7 @@ pub trait GitExt {
     ///
     /// Do NOT call this on save-during-quit — the buffer is about to be
     /// destroyed, so recomputing gutter signs is wasted work.
+    fn git_show_hunk_diff(&mut self) -> CommandResult;
     fn sync_after_manual_save(&mut self);
 }
 
@@ -367,6 +368,42 @@ impl GitExt for Editor {
         CommandResult::ViewChanged
     }
 
+    fn git_show_hunk_diff(&mut self) -> CommandResult {
+        self.force_git_gutter_recompute();
+
+        if !self.ensure_git_gutter() {
+            return CommandResult::Message("No git diff available.".to_string());
+        }
+
+        let cursor_line = self.windows.active_window().map(|w| w.cursor.position.line).unwrap_or(usize::MAX);
+
+        let diff_hunk = self
+            .git
+            .cached_diff_hunks
+            .iter()
+            .find(|h| cursor_line >= h.start && cursor_line < h.end)
+            .map(|h| h.diff.clone());
+
+        match diff_hunk {
+            Some(hunk) => {
+                self.show_hunk_popup(&hunk);
+
+                // Also report which hunk in the status bar
+                let idx = self
+                    .git
+                    .cached_diff_hunks
+                    .iter()
+                    .position(|h| cursor_line >= h.start && cursor_line < h.end)
+                    .unwrap_or(0);
+                let total = self.git.cached_diff_hunks.len();
+                self.set_status(format!("Hunk {}/{} (diff popup — press any key to dismiss)", idx + 1, total));
+
+                CommandResult::ViewChanged
+            }
+            None => CommandResult::Message("No hunk under cursor.".to_string()),
+        }
+    }
+
     fn git_revert_hunk(&mut self) -> CommandResult {
         self.force_git_gutter_recompute();
 
@@ -488,11 +525,7 @@ impl GitExt for Editor {
         // Send the full buffer text and increment the doc version so the
         // LSP server stays in sync with the reverted buffer.
         {
-            let text = self
-                .buffers
-                .get(&buffer_id)
-                .map(|b| b.rope.to_string())
-                .unwrap_or_default();
+            let text = self.buffers.get(&buffer_id).map(|b| b.rope.to_string()).unwrap_or_default();
             self.increment_lsp_doc_version();
             self.lsp_did_change(&file_path, text, self.get_lsp_doc_version());
         }
@@ -742,10 +775,7 @@ fn apply_hunk_revert(buffer: &mut Buffer, hunk: &DiffHunk) {
         // old_start is 1-based; convert to 0-based.
         let insert_pos = hunk.old_start.saturating_sub(1);
         for (i, content) in original_lines.iter().enumerate() {
-            buffer.insert_at(
-                CursorPosition::new(insert_pos + i, 0),
-                &format!("{}\n", content),
-            );
+            buffer.insert_at(CursorPosition::new(insert_pos + i, 0), &format!("{}\n", content));
         }
         return;
     }
@@ -761,9 +791,6 @@ fn apply_hunk_revert(buffer: &mut Buffer, hunk: &DiffHunk) {
 
     // ── Phase 4: Insert the original lines ─────────────────────────
     for (i, content) in original_lines.iter().enumerate() {
-        buffer.insert_at(
-            CursorPosition::new(range_start + i, 0),
-            &format!("{}\n", content),
-        );
+        buffer.insert_at(CursorPosition::new(range_start + i, 0), &format!("{}\n", content));
     }
 }

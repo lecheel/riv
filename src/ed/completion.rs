@@ -94,6 +94,37 @@ impl CompletionExt for Editor {
             let pos = window.cursor.position;
             let prefix = &self.completion.prefix;
 
+            // ── Mid-word guard ──────────────────────────────────────────
+            // Don't show completion ghost text when the character immediately
+            // after the cursor is an identifier char — the cursor is mid-word
+            // and the preview would overlap existing content.
+            {
+                let buffer = match self.buffers.get(&window.buffer_id) {
+                    Some(b) => b,
+                    None => return,
+                };
+                if let Some(line_text) = buffer.line_text(pos.line) {
+                    let next_is_id = line_text.graphemes(true).nth(pos.col).map_or(false, |g| {
+                        g.chars().next().map_or(false, |c| c.is_alphanumeric() || c == '_' || c == '-')
+                    });
+                    if next_is_id {
+                        if self
+                            .ghost_text
+                            .current
+                            .as_ref()
+                            .map_or(false, |g| g.source == crate::ghost_text::GhostTextSource::Completion)
+                        {
+                            log::debug!(
+                                "[ed/completion] update_completion_ghost_text: \
+                                 Next char is an identifier char. Hiding ghost text."
+                            );
+                            self.ghost_text.clear();
+                        }
+                        return;
+                    }
+                }
+            }
+
             // Parse snippet syntax so ghost text shows clean display text,
             // e.g. "max(other)" instead of "max(${1:other})$0"
             let snippet_res = crate::snippet::parse_snippet_for_insert(&selected.text);
@@ -186,7 +217,7 @@ impl CompletionExt for Editor {
 
         let mode = if is_path {
             TriggerMode::Path
-        } else if after_dot {
+        } else if after_dot && self.config.enable_lsp {
             TriggerMode::MemberAccess
         } else {
             TriggerMode::Word
@@ -255,8 +286,11 @@ impl CompletionExt for Editor {
                     if session.trigger_line == cursor_pos.line && session.trigger_col == cursor_pos.col {
                         log::debug!(
                             "[ed/completion] maybe_update_completion (Case 1 Guard): \
-                         Already active in MemberAccess at this position."
+                 Backspaced to trigger position. Resetting prefix to empty."
                         );
+                        self.completion.set_prefix("");
+                        self.update_completion_ghost_text();
+                        self.dirty.completion = true;
                         return;
                     }
                 }
@@ -278,7 +312,7 @@ impl CompletionExt for Editor {
                 }
             };
 
-            if !is_real_member_dot {
+            if !is_real_member_dot || !self.config.enable_lsp {
                 // Trigger char is ":" (e.g. "::" path separator) or a stray ".".
                 // Let the normal word-completion path handle it or do nothing.
                 log::debug!(
@@ -287,10 +321,6 @@ impl CompletionExt for Editor {
                 );
                 // Fall through to Cases 2/3 for the word path.
             } else {
-                log::debug!(
-                    "[ed/completion] maybe_update_completion (Case 1): \
-                 Valid member dot. Initializing MemberAccess session."
-                );
                 self.completion.open(TriggerMode::MemberAccess, cursor_pos.col, cursor_pos.line);
                 self.flush_lsp_changes();
                 self.request_lsp_completions();
@@ -396,7 +426,7 @@ impl CompletionExt for Editor {
                 return;
             }
 
-            if self.completion.is_member_access() {
+            if self.completion.is_member_access() && self.config.enable_lsp {
                 let should = self
                     .completion_debounce_timer
                     .map(|t| t.elapsed().as_millis() >= 150)
@@ -427,9 +457,11 @@ impl CompletionExt for Editor {
             }
         };
 
+        // Case 3: opening new session
         let mode = if is_path {
             TriggerMode::Path
-        } else if after_dot {
+        } else if after_dot && self.config.enable_lsp {
+            // ← add guard
             TriggerMode::MemberAccess
         } else {
             TriggerMode::Word
@@ -497,8 +529,10 @@ impl CompletionExt for Editor {
             }
         }
 
-        self.flush_lsp_changes();
-        self.request_lsp_completions();
+        if self.config.enable_lsp {
+            self.flush_lsp_changes();
+            self.request_lsp_completions();
+        }
         self.update_completion_ghost_text();
         self.dirty.completion = true;
     }
@@ -684,10 +718,9 @@ impl CompletionExt for Editor {
     }
 
     fn request_completion_resolve(&mut self) {
-        if !self.lsp.connected {
+        if !self.lsp.connected || !self.config.enable_lsp {
             return;
         }
-
         let lsp_item = self.completion.selected_item().and_then(|item| {
             if item.source == crate::completion::CompletionSource::Lsp && item.documentation.is_none() && item.lsp_item.is_some() {
                 item.lsp_item.clone()
