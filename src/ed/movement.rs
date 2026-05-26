@@ -112,10 +112,9 @@ impl MovementExt for Editor {
 
             // ── Scroll offset: keep at least `scroll_offset` lines below cursor ──
             let scroll_offset = self.config.scroll_offset;
-            let edit_height = (window.height as usize).saturating_sub(1);
+            let edit_height = window.height as usize;
             if scroll_offset > 0 && edit_height > 2 * scroll_offset {
                 // lower_bound = minimum scroll_line so that
-                //   (scroll_line + edit_height - 1) - cursor_line >= scroll_offset
                 let lower_bound = (pos.line + scroll_offset + 1).saturating_sub(edit_height);
                 let max_scroll = max_line.saturating_sub(edit_height.min(max_line));
                 window.viewport.scroll_line = window.viewport.scroll_line.max(lower_bound).min(max_scroll);

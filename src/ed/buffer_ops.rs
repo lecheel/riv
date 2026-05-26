@@ -4,6 +4,7 @@
 use crate::buffer::BufferId;
 use crate::ed::file_ops::FileOpsExt;
 use crate::editor::Editor;
+use crate::misc::find_git_root;
 use crate::popup::MruPopup;
 use crate::CommandResult;
 
@@ -200,6 +201,7 @@ impl BufferOpsExt for Editor {
 
         CommandResult::Message(format!("Deleted buffer '{}'. Switched to: {}", buf_name, next_name))
     }
+
     /// Open the MRU (Most Recently Used) popup.
     fn open_mru(&mut self) -> CommandResult {
         let entries = self.mru.get_entries();
@@ -208,7 +210,13 @@ impl BufferOpsExt for Editor {
             return CommandResult::Message("No recent files".to_string());
         }
 
-        self.popup.mru = Some(MruPopup::new(entries));
+        let repo_root = self
+            .current_buffer()
+            .and_then(|b| b.file_path.clone())
+            .as_ref()
+            .and_then(|p| find_git_root(p));
+
+        self.popup.mru = Some(MruPopup::new(entries, repo_root));
         self.dirty.mark_all();
         CommandResult::ViewChanged
     }

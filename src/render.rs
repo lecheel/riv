@@ -2744,10 +2744,12 @@ fn render_infobar(
 
     if editor.completion.active {
         if editor.completion.items.is_empty() {
-            execute!(stdout, SetForegroundColor(overlay0), Print(" [LSP] Loading completions..."))?;
-            let pad = max_width.saturating_sub(" [LSP] Loading completions...".len());
-            if pad > 0 {
-                execute!(stdout, Print(&" ".repeat(pad)))?;
+            if editor.config.enable_lsp {
+                execute!(stdout, SetForegroundColor(overlay0), Print(" [LSP] Loading completions..."))?;
+                let pad = max_width.saturating_sub(" [LSP] Loading completions...".len());
+                if pad > 0 {
+                    execute!(stdout, Print(&" ".repeat(pad)))?;
+                }
             }
         } else {
             let total_count = editor.completion.items.len();

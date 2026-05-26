@@ -501,6 +501,39 @@ impl Buffer {
         }
     }
 
+    /// Replace `count` graphemes starting at `pos` with `new_text`.
+    /// Equivalent to `delete_at` + `insert_at` but with a single revision
+    /// bump, single `dirty` mark, and single `tree_dirty` flag.
+    /// Returns the new cursor position.
+    pub fn replace_at(&mut self, pos: CursorPosition, count: usize, new_text: &str) -> CursorPosition {
+        // ── Delete existing content ──
+        if count > 0 {
+            let line = pos.line.min(self.line_count().saturating_sub(1));
+            let line_str = self.rope.line(line).to_string();
+            let graphemes: Vec<_> = line_str.grapheme_indices(true).collect();
+            let end = (pos.col + count).min(graphemes.len());
+
+            if pos.col < graphemes.len() {
+                let start_byte = graphemes[pos.col].0;
+                let end_byte = if end < graphemes.len() { graphemes[end].0 } else { line_str.len() };
+
+                let char_start = match self.rope.try_line_to_char(line) {
+                    Ok(c) => c,
+                    Err(_) => return pos,
+                };
+
+                let chars_before = line_str[..start_byte].chars().count();
+                let chars_after_end = line_str[..end_byte].chars().count();
+
+                self.rope.remove(char_start + chars_before..char_start + chars_after_end);
+            }
+        }
+
+        // ── Insert new text ──
+        // (insert_at already sets dirty, revision, tree_dirty)
+        self.insert_at(pos, new_text)
+    }
+
     /// Delete `count` graphemes starting at a cursor position.
     /// Returns the new cursor position.
     pub fn delete_at(&mut self, pos: CursorPosition, count: usize) -> CursorPosition {

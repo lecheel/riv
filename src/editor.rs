@@ -319,6 +319,9 @@ pub struct Editor {
     pub completion_debounce_timer: Option<Instant>,
     pub completion_debounce_ms: u64,
 
+    pub word_index_dirty: bool,
+    pub word_index_deadline: Option<Instant>,
+
     // ==================== State & Quit ====================
     /// Status message (displayed in the status bar).
     pub status_message: Option<String>,
@@ -578,6 +581,8 @@ impl Editor {
             command_completion,
             completion_debounce_timer: None,
             completion_debounce_ms: 50,
+            word_index_dirty: false,
+            word_index_deadline: None,
             last_edit_time: Instant::now(),
             undo_break_timeout_ms: 2000,
             vocab: {
@@ -1096,7 +1101,10 @@ impl Editor {
                     return CommandResult::NoOp;
                 }
                 Key::Right => {
-                    let is_mid_word = self
+                    // Only confirm completion if the cursor is at a space or EOL.
+                    // Any other character (punctuation, letters, etc.) cancels
+                    // completion and falls through to a normal MoveRight.
+                    let should_confirm = self
                         .windows
                         .active_window()
                         .and_then(|w| {
@@ -1107,16 +1115,17 @@ impl Editor {
                                 text.graphemes(true)
                                     .nth(col)
                                     .and_then(|g| g.chars().next())
-                                    .map_or(false, |c| c.is_alphanumeric() || c == '_' || c == '-')
+                                    .map_or(true, |c| c == ' ' || c == '\n' || c == '\r')
                             })
                         })
-                        .unwrap_or(false);
-                    if is_mid_word {
+                        .unwrap_or(true);
+
+                    if should_confirm {
+                        return self.confirm_completion();
+                    } else {
                         self.close_completion_popup();
                         self.ghost_text.clear();
                         // fall through to normal Right (MoveRight)
-                    } else {
-                        return self.confirm_completion();
                     }
                 }
                 Key::Left => {
@@ -2388,6 +2397,22 @@ impl Editor {
             if let Some(deadline) = self.lsp.change_deadline {
                 if Instant::now() >= deadline {
                     self.flush_lsp_changes();
+                }
+            }
+        }
+
+        // ── Debounced word index rebuild ──
+        if self.word_index_dirty {
+            if let Some(deadline) = self.word_index_deadline {
+                if std::time::Instant::now() >= deadline {
+                    if let Some(window) = self.windows.active_window() {
+                        let buffer_id = window.buffer_id;
+                        if let Some(buffer) = self.buffers.get(&buffer_id) {
+                            self.completion.word_index.build_from_buffer(buffer);
+                        }
+                    }
+                    self.word_index_dirty = false;
+                    self.word_index_deadline = None;
                 }
             }
         }

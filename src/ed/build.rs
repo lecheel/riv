@@ -731,6 +731,7 @@ fn format_build_buffer(raw_output: &str, diagnostics: &[BuildDiagnostic]) -> Str
     buf.push_str(&format!("  {}\n\n", "─".repeat(40)));
 
     // ── Quickfix list with source context ──
+    /*
     if !diagnostics.is_empty() {
         for (idx, diag) in diagnostics.iter().enumerate() {
             let severity_str = match diag.severity {
@@ -782,7 +783,6 @@ fn format_build_buffer(raw_output: &str, diagnostics: &[BuildDiagnostic]) -> Str
                     }
                 }
             }
-
             // Separator between diagnostics
             if idx + 1 < diagnostics.len() {
                 buf.push_str(&format!("  {}\n", "─".repeat(40)));
@@ -790,6 +790,7 @@ fn format_build_buffer(raw_output: &str, diagnostics: &[BuildDiagnostic]) -> Str
         }
         buf.push('\n');
     }
+    */
 
     // ── Raw compiler output ──
     buf.push_str(&format!("  {} Raw Output {}\n", "─".repeat(14), "─".repeat(14)));

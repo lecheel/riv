@@ -465,6 +465,12 @@ impl Editor {
                 self.dirty.cursor = true;
                 Some(CommandResult::NoOp)
             }
+            Key::Tab => {
+                popup.toggle_repo_filter();
+                self.dirty.mru = true;
+                self.dirty.cursor = true;
+                Some(CommandResult::NoOp)
+            }
             Key::Enter => {
                 if let Some(entry) = popup.selected_entry().cloned() {
                     let old_rect = self.popup.overlay.mru;

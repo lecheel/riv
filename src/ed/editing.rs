@@ -128,8 +128,8 @@ impl EditingExt for Editor {
         }
 
         if let Some(id) = bid {
-            self.invalidate_git_gutter(); // Call outside the borrow
-            self.update_word_index_after_edit(id, start_line, old_line_count, new_line_count);
+            self.word_index_dirty = true;
+            self.word_index_deadline = Some(std::time::Instant::now() + std::time::Duration::from_millis(150));
         }
 
         if !self.paste_in_progress {
@@ -193,20 +193,16 @@ impl EditingExt for Editor {
             };
 
             if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
-                if after_len > 0 {
-                    buffer.delete_at(pos, after_len);
-                }
-                buffer.insert_at(pos, &insert_text);
+                let new_pos = buffer.replace_at(pos, after_len, &insert_text);
                 window.cursor.position = CursorPosition::new(pos.line + 1, cursor_col);
                 window.cursor.desired_col = None;
-                buffer.dirty = true;
-                new_line_count = buffer.line_count(); // Fetch count before dropping borrow
-            } // Buffer mutable borrow drops here
+                new_line_count = buffer.line_count();
+            }
         }
 
         if let Some(id) = bid {
-            self.invalidate_git_gutter(); // Call outside the borrow
-            self.update_word_index_after_edit(id, start_line, old_line_count, new_line_count);
+            self.word_index_dirty = true;
+            self.word_index_deadline = Some(std::time::Instant::now() + std::time::Duration::from_millis(150));
         }
     }
 
@@ -224,7 +220,6 @@ impl EditingExt for Editor {
                 let new_pos = buffer.insert_at(pos, &indent);
                 window.cursor.position = new_pos;
                 buffer.dirty = true;
-                self.invalidate_git_gutter();
             }
         }
     }
@@ -238,7 +233,6 @@ impl EditingExt for Editor {
                 let new_pos = buffer.insert_at(pos, text);
                 window.cursor.position = new_pos;
                 buffer.dirty = true;
-                self.invalidate_git_gutter();
             }
         }
     }
@@ -273,8 +267,8 @@ impl EditingExt for Editor {
         }
 
         if let Some(id) = bid {
-            self.invalidate_git_gutter(); // Call outside the borrow
-            self.update_word_index_after_edit(id, start_line, old_line_count, new_line_count);
+            self.word_index_dirty = true;
+            self.word_index_deadline = Some(std::time::Instant::now() + std::time::Duration::from_millis(150));
         }
     }
 
@@ -287,7 +281,6 @@ impl EditingExt for Editor {
                 if pos.col < line_len || pos.line + 1 < buffer.line_count() {
                     buffer.delete_at(pos, 1);
                     buffer.dirty = true;
-                    self.invalidate_git_gutter();
                 }
             }
         }
@@ -388,7 +381,6 @@ impl EditingExt for Editor {
                     buffer.delete_at(CursorPosition::new(pos.line, new_col), count);
                     window.cursor.position.col = new_col;
                     buffer.dirty = true;
-                    self.invalidate_git_gutter();
                 }
             }
         }
@@ -423,7 +415,6 @@ impl EditingExt for Editor {
                     if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
                         buffer.delete_at(pos, count);
                         buffer.dirty = true;
-                        self.invalidate_git_gutter();
                     }
                 }
             }
@@ -440,7 +431,6 @@ impl EditingExt for Editor {
                 if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
                     buffer.delete_at(pos, count);
                     buffer.dirty = true;
-                    self.invalidate_git_gutter();
                 }
             }
         }
@@ -493,7 +483,6 @@ impl EditingExt for Editor {
         }
 
         // 5. Side effects and cursor update (mutable borrow of self)
-        self.invalidate_git_gutter();
 
         let buffer = match self.buffers.get(&buffer_id) {
             Some(b) => b,
@@ -518,7 +507,6 @@ impl EditingExt for Editor {
                     buffer.delete_at(CursorPosition::new(pos.line, 0), pos.col);
                     window.cursor.position.col = 0;
                     buffer.dirty = true;
-                    self.invalidate_git_gutter();
                 }
             }
         }
@@ -549,7 +537,6 @@ impl EditingExt for Editor {
                     window.cursor.position.col = pos.col + actual_count - 1;
                     window.cursor.desired_col = None;
                     buffer.dirty = true;
-                    self.invalidate_git_gutter();
                 }
             }
         }
@@ -571,7 +558,6 @@ impl EditingExt for Editor {
                     window.cursor.position.col = 0;
                     window.cursor.desired_col = None;
                     buffer.dirty = true;
-                    self.invalidate_git_gutter();
                 }
             }
         }
@@ -598,7 +584,6 @@ impl EditingExt for Editor {
                     window.cursor.position = new_pos;
                 }
                 buffer.dirty = true;
-                self.invalidate_git_gutter();
             }
         }
     }
@@ -639,7 +624,6 @@ impl EditingExt for Editor {
                 window.cursor.position = CursorPosition::new(line + 1, cursor_col);
                 window.cursor.desired_col = None;
                 buffer.dirty = true;
-                self.invalidate_git_gutter();
             }
             self.mode = crate::editor::Mode::Insert;
             self.dirty.mark_all();
@@ -684,7 +668,6 @@ impl EditingExt for Editor {
                 window.cursor.position = CursorPosition::new(line + 1, cursor_col);
                 window.cursor.desired_col = None;
                 buffer.dirty = true;
-                self.invalidate_git_gutter();
             }
         }
     }
@@ -714,7 +697,6 @@ impl EditingExt for Editor {
                 window.cursor.position.col = cursor_col;
                 window.cursor.desired_col = None;
                 buffer.dirty = true;
-                self.invalidate_git_gutter();
             }
             self.mode = crate::editor::Mode::Insert;
             self.dirty.mark_all();
@@ -746,7 +728,6 @@ impl EditingExt for Editor {
                 window.cursor.position.col = cursor_col;
                 window.cursor.desired_col = None;
                 buffer.dirty = true;
-                self.invalidate_git_gutter();
             }
         }
     }
@@ -767,7 +748,6 @@ impl EditingExt for Editor {
                         }
                     }
                     buffer.dirty = true;
-                    self.invalidate_git_gutter();
                 }
             }
         }
@@ -791,7 +771,6 @@ impl EditingExt for Editor {
                 // Move cursor to the first non-blank char of the first indented line.
                 window.cursor.position.col += indent.graphemes(true).count();
                 buffer.dirty = true;
-                self.invalidate_git_gutter();
             }
         }
     }
@@ -814,7 +793,6 @@ impl EditingExt for Editor {
                 }
                 window.cursor.position.col = window.cursor.position.col.saturating_sub(remove_count);
                 buffer.dirty = true;
-                self.invalidate_git_gutter();
             }
         }
     }
@@ -911,7 +889,6 @@ impl EditingExt for Editor {
                 }
                 window.cursor.desired_col = None;
                 buffer.dirty = true;
-                self.invalidate_git_gutter();
             }
         }
     }
@@ -957,7 +934,6 @@ impl EditingExt for Editor {
                     }
                 }
                 buffer.dirty = true;
-                self.invalidate_git_gutter();
             }
 
             self.clamp_cursor_to_buffer(&buffer_id);
@@ -986,7 +962,6 @@ impl EditingExt for Editor {
                         window.cursor.desired_col = None;
                     }
                     buffer.dirty = true;
-                    self.invalidate_git_gutter();
                 }
             } else {
                 let last_line = pos.line;
@@ -1001,7 +976,6 @@ impl EditingExt for Editor {
                         window.cursor.desired_col = None;
                     }
                     buffer.dirty = true;
-                    self.invalidate_git_gutter();
                 }
             }
         } else {
@@ -1027,7 +1001,6 @@ impl EditingExt for Editor {
                     window.cursor.desired_col = None;
                 }
                 buffer.dirty = true;
-                self.invalidate_git_gutter();
             }
         }
 
@@ -1189,7 +1162,6 @@ impl EditingExt for Editor {
                     window.cursor.position = cursor;
                     window.cursor.desired_col = None;
                 }
-                self.invalidate_git_gutter();
                 self.dirty.mark_all();
                 self.set_status(format!("{} changes to undo", undo_count));
                 return CommandResult::ContentChanged;
@@ -1227,7 +1199,6 @@ impl EditingExt for Editor {
                     window.cursor.position = cursor;
                     window.cursor.desired_col = None;
                 }
-                self.invalidate_git_gutter();
                 self.dirty.mark_all();
                 self.set_status(format!("{} changes to redo", redo_count));
                 return CommandResult::ContentChanged;
@@ -1298,7 +1269,6 @@ impl EditingExt for Editor {
             buffer.insert_at(CursorPosition::new(line, indent_len), prefix);
         }
         buffer.dirty = true;
-        self.invalidate_git_gutter();
         CommandResult::ContentChanged
     }
 
@@ -1323,7 +1293,6 @@ impl EditingExt for Editor {
                         window.cursor.position = new_pos;
                         window.cursor.desired_col = None;
                         buffer.dirty = true;
-                        self.invalidate_git_gutter();
                     }
                 }
 

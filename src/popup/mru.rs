@@ -6,6 +6,7 @@ use crate::rounded_box::*;
 use crossterm::cursor::MoveTo;
 use crossterm::execute;
 use crossterm::style::{Print, ResetColor, SetBackgroundColor, SetForegroundColor};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub struct MruPopup {
@@ -16,10 +17,14 @@ pub struct MruPopup {
     pub filter: String,
     /// When true, entries are sorted by open_count descending instead of recency.
     pub sort_by_frequency: bool,
+    /// Git root of the active buffer (set at popup creation time).
+    pub repo_root: Option<PathBuf>,
+    /// When true, only show entries under `repo_root`.
+    pub repo_only: bool,
 }
 
 impl MruPopup {
-    pub fn new(entries: Vec<MruEntry>) -> Self {
+    pub fn new(entries: Vec<MruEntry>, repo_root: Option<PathBuf>) -> Self {
         let filtered: Vec<usize> = (0..entries.len()).collect();
         MruPopup {
             entries,
@@ -28,6 +33,8 @@ impl MruPopup {
             scroll: 0,
             filter: String::new(),
             sort_by_frequency: false,
+            repo_root,
+            repo_only: false,
         }
     }
 
@@ -39,6 +46,15 @@ impl MruPopup {
         self.filtered.clear();
         let query = self.filter.to_lowercase();
         for (i, entry) in self.entries.iter().enumerate() {
+            // ── repo-only gate ──
+            if self.repo_only {
+                if let Some(root) = &self.repo_root {
+                    if !entry.path.starts_with(root) {
+                        continue;
+                    }
+                }
+            }
+
             let file_name = entry.path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
             let dir_str = entry.path.parent().and_then(|p| p.to_str()).unwrap_or("").to_string();
 
@@ -87,6 +103,17 @@ impl MruPopup {
         self.apply_filter();
         self.sort_by_frequency
     }
+
+    /// Toggle repo-only filter. No-op if no repo root was detected.
+    pub fn toggle_repo_filter(&mut self) {
+        if self.repo_root.is_none() {
+            return;
+        }
+        self.repo_only = !self.repo_only;
+        self.selected = 0;
+        self.scroll = 0;
+        self.apply_filter();
+    }
 }
 
 impl Scrollable for MruPopup {
@@ -125,20 +152,18 @@ pub fn render_mru_popup(
     clear_rect(stdout, x, y, popup_width, popup_height, catppuccin::MANTLE)?;
 
     // ── Title bar ──────────────────────────────────────────────────────
-    let sort_label = if popup.sort_by_frequency {
-        "by freq"
-    } else {
-        "recent"
-    };
+    let sort_label = if popup.sort_by_frequency { "by freq" } else { "recent" };
+    let repo_label = if popup.repo_only { " [repo]" } else { "" };
     let title = format!(
-        " Recent Files ({}) {} ",
+        " Recent Files ({}){} {} ",
         sort_label,
+        repo_label,
         if popup.filtered.is_empty() {
             "(no match)".to_string()
         } else {
             format!("({}/{})", popup.filtered.len(), popup.entries.len())
         }
-    );
+    );    
     let title_style = BoxStyle::default()
         .with_title(title)
         .with_bg(catppuccin::MANTLE);
@@ -346,25 +371,15 @@ pub fn render_mru_popup(
 
     // ── Bottom border with status ──────────────────────────────────────
     let bottom_y = filter_y + 1 + content_rows as u16;
+    let repo_indicator = if popup.repo_only { " ✓" } else { "" };
     let footer = format!(
-        "[Home] {}  [Del] remove  [Enter] open  [Esc]{}close  {}/{}",
-        if popup.sort_by_frequency {
-            "recency"
-        } else {
-            "freq"
-        },
-        if popup.filter.is_empty() {
-            " "
-        } else {
-            " clear "
-        },
-        if popup.filtered.is_empty() {
-            0
-        } else {
-            popup.selected + 1
-        },
+        "[Home] {} \u{f444} [Tab] repo{} \u{f444} [Del] remove \u{f444} [Enter] open \u{f444} [Esc]{}close  {}/{}",
+        if popup.sort_by_frequency { "recency" } else { "freq" },
+        repo_indicator,
+        if popup.filter.is_empty() { " " } else { " clear " },
+        if popup.filtered.is_empty() { 0 } else { popup.selected + 1 },
         popup.filtered.len(),
-    );
+    );    
     let footer_style = BoxStyle::default()
         .with_footer(footer)
         .with_bg(catppuccin::MANTLE);

@@ -173,6 +173,17 @@ impl CompletionExt for Editor {
     }
 
     fn trigger_completion(&mut self) -> CommandResult {
+        // If the word index is stale, rebuild it right now so the popup is accurate
+        if self.word_index_dirty {
+            if let Some(window) = self.windows.active_window() {
+                let buffer_id = window.buffer_id;
+                if let Some(buffer) = self.buffers.get(&buffer_id) {
+                    self.completion.word_index.build_from_buffer(buffer);
+                }
+            }
+            self.word_index_dirty = false;
+            self.word_index_deadline = None;
+        }
         let is_insert_or_replace = self.mode == crate::editor::Mode::Insert || self.mode == crate::editor::Mode::Replace;
         if !is_insert_or_replace {
             return CommandResult::NoOp;
